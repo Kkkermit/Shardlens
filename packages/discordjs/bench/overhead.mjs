@@ -131,18 +131,28 @@ const rows = bench.tasks.map((t) => ({
 }));
 console.table(rows);
 
-// Event-loop CPU for a whole lifecycle, measured with process.cpuUsage (user + system).
+// CPU for a whole lifecycle, measured with process.cpuUsage (user + system, every thread). The first few rounds run
+// before V8 has optimised this loop and cost up to twice as much: that is a one-off at start-up, so they are run and
+// discarded. The figure is the median of the rounds after them, as one round still swings with garbage collection
+// and with other work on a shared CI runner.
 const N = 5_000;
-const before = process.cpuUsage();
-for (let k = 0; k < N; k++) {
-  const i = pool[next++ % pool.length];
-  client.emit(Events.InteractionCreate, i);
-  client.rest.emit(RESTEvents.Response, ...callbackResponse(i));
-  if (k % 100 === 0) await settle();
+const WARMUP_ROUNDS = 3;
+const ROUNDS = 7;
+const samples = [];
+for (let round = 0; round < WARMUP_ROUNDS + ROUNDS; round++) {
+  const before = process.cpuUsage();
+  for (let k = 0; k < N; k++) {
+    const i = pool[next++ % pool.length];
+    client.emit(Events.InteractionCreate, i);
+    client.rest.emit(RESTEvents.Response, ...callbackResponse(i));
+    if (k % 100 === 0) await settle();
+  }
+  await settle();
+  const cpu = process.cpuUsage(before);
+  if (round >= WARMUP_ROUNDS) samples.push((cpu.user + cpu.system) / N);
 }
-await settle();
-const cpu = process.cpuUsage(before);
-const cpuPerInteraction = (cpu.user + cpu.system) / N;
+samples.sort((a, b) => a - b);
+const cpuPerInteraction = samples[Math.floor(ROUNDS / 2)];
 await lens.shutdown({ timeoutMs: 10 });
 client.removeAllListeners();
 
@@ -163,9 +173,22 @@ const heapMb = (process.memoryUsage().heapUsed - heapBefore) / 1024 / 1024;
 const depth = mem.lens.stats().queueDepth;
 await mem.lens.shutdown({ timeoutMs: 10 });
 
-console.log(`CPU per interaction (whole lifecycle): ${cpuPerInteraction.toFixed(1)} µs (target < ${TARGET_CPU_US} µs)`);
-console.log(`Heap at a full buffer (${depth} events): ${heapMb.toFixed(1)} MB (target < ${TARGET_HEAP_MB} MB)`);
+const range = `${samples[0].toFixed(1)}–${samples.at(-1).toFixed(1)}`;
+const cpuLine = `CPU per interaction (whole lifecycle): ${cpuPerInteraction.toFixed(1)} µs, median of ${ROUNDS} (range ${range}) (target < ${TARGET_CPU_US} µs)`;
+const heapLine = `Heap at a full buffer (${depth} events): ${heapMb.toFixed(1)} MB (target < ${TARGET_HEAP_MB} MB)`;
+console.log(cpuLine);
+console.log(heapLine);
 if (!globalThis.gc) console.log('(run with --expose-gc for a precise heap figure)');
 
-const failed = cpuPerInteraction >= TARGET_CPU_US || heapMb >= TARGET_HEAP_MB || depth < QUEUE * 0.99;
-process.exit(failed ? 1 : 0);
+const missed = [
+  cpuPerInteraction >= TARGET_CPU_US && 'CPU',
+  heapMb >= TARGET_HEAP_MB && 'heap',
+  depth < QUEUE * 0.99 && `queue (${depth} of ${QUEUE} events)`,
+].filter(Boolean);
+// An annotation is readable on the run's page and through the API without signing in; the job log is not.
+if (process.env.GITHUB_ACTIONS === 'true') {
+  const level = missed.length > 0 ? 'error' : 'notice';
+  const verdict = missed.length > 0 ? `Missed: ${missed.join(', ')}. ` : '';
+  console.log(`::${level} title=SDK overhead::${verdict}${cpuLine}. ${heapLine}.`);
+}
+process.exit(missed.length > 0 ? 1 : 0);
