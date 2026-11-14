@@ -41,15 +41,13 @@ jobs:
       - id: changesets
         uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
         with:
-          publish: pnpm release
-          version: pnpm changeset version
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          publish-script: pnpm release
+          version-script: pnpm changeset version
       # The collector goes to npm too (embedded mode); its container image is published below.
       - id: collector
         if: steps.changesets.outputs.published == 'true'
         env:
-          PUBLISHED: ${{ steps.changesets.outputs.publishedPackages }}
+          PUBLISHED: ${{ steps.changesets.outputs.published-packages }}
         run: |
           version=$(node -e 'const p = JSON.parse(process.env.PUBLISHED).find((p) => p.name === "@shardlens/collector"); process.stdout.write(p ? p.version : "")')
           echo "version=$version" >> "$GITHUB_OUTPUT"
