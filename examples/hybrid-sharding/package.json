@@ -1,6 +1,6 @@
 {
   "name": "hybrid-sharding-example",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "private": true,
   "description": "discord-hybrid-sharding clusters with Shardlens running in each cluster.",
   "license": "MIT",

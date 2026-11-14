@@ -1,6 +1,6 @@
 {
   "name": "@shardlens/schema",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "description": "Shardlens wire format (zod schemas, JSON Schema and TypeScript types), metric registry and data-collected register.",
   "license": "MIT",
   "type": "module",

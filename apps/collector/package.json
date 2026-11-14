@@ -1,6 +1,6 @@
 {
   "name": "@shardlens/collector",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "description": "Shardlens collector: ingest, rollups, query API and dashboard. Run it with Docker, or in your bot process with embedded mode.",
   "license": "MIT",
   "type": "module",

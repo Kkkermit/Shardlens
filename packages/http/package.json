@@ -1,6 +1,6 @@
 {
   "name": "@shardlens/http",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "description": "Shardlens for HTTP-interaction Discord bots (Cloudflare Workers, Deno, Bun, @discordjs/core): privacy-first analytics with no gateway.",
   "license": "MIT",
   "type": "module",
