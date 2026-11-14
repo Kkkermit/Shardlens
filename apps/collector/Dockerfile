@@ -2,7 +2,7 @@
 # Shardlens collector (serves the API and the built dashboard). Build from the repository root:
 #   docker build -f apps/collector/Dockerfile -t shardlens-collector .
 
-FROM node:24-slim AS build
+FROM node:24-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54 AS build
 # No git hooks inside the image build.
 ENV HUSKY=0
 WORKDIR /repo
@@ -22,7 +22,7 @@ RUN pnpm turbo run build --filter=@shardlens/collector... --filter=@shardlens/da
 # A self-contained copy of the collector with production dependencies only.
 RUN pnpm --filter @shardlens/collector deploy --prod --legacy /out
 
-FROM node:24-slim
+FROM node:24-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54
 ENV NODE_ENV=production PORT=8080
 WORKDIR /app
 COPY --from=build --chown=10001:10001 /out ./

@@ -30,6 +30,9 @@ catalog:
 overrides:
   # GHSA-hmw2-7cc7-3qxx, reached through starlight-openapi > httpsnippet (docs build only)
   form-data@<4.0.6: ^4.0.6
+  # GHSA-3g3m-2fjr-6pw4 (fixed in glob 14.0.2), reached through testcontainers > archiver (tests only).
+  # archiver-utils only calls glob.sync, which glob 14 still has.
+  archiver-utils>glob: ^14.0.2
 
 # Exact versions released too recently to pass pnpm's minimum-release-age check. Remove an entry once it is old enough.
 minimumReleaseAgeExclude:

@@ -1,0 +1,10 @@
+# Known vulnerabilities assessed as not affecting Shardlens. OSV-Scanner, and the OpenSSF Scorecard check built on it,
+# read this file. Each entry expires, so it is looked at again rather than forgotten.
+
+[[IgnoredVulns]]
+id = "GHSA-g3hv-75wg-m249"
+ignoreUntil = 2027-02-14
+reason = """minimatch 10 can be made slow by an attacker-controlled glob pattern (fixed in 11.0.1). It is reached only
+through TypeDoc and API Extractor, which run at build time on patterns from this repository's own config files, and
+neither is published or run by users. Both are on their latest releases, which still require minimatch 10, and
+minimatch 11 breaks TypeDoc. Remove this entry once they move to minimatch 11."""

@@ -2,8 +2,9 @@
 
 ## Reporting a vulnerability
 
-Please **do not** open a public issue. Report privately through GitHub:
-**Security → Report a vulnerability** on this repository (private vulnerability reporting).
+Please **do not** open a public issue. Report privately through GitHub's private vulnerability reporting:
+<https://github.com/Kkkermit/Shardlens/security/advisories/new> (or **Security → Report a vulnerability** on this
+repository).
 
 Include what you found, how to reproduce it, and the impact you expect. You should get an acknowledgement within
 7 days. We will agree a disclosure date with you and credit you in the advisory unless you prefer otherwise.
