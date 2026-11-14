@@ -1,0 +1,66 @@
+---
+title: FAQ
+description: Common questions about Shardlens.
+sidebar:
+  order: 4
+---
+
+## Does Shardlens need privileged intents?
+
+No. Everything works with `GatewayIntentBits.Guilds`. Shardlens never reads message content, presences or member
+lists.
+
+## Will it slow my bot down?
+
+The SDK adds under 50 µs of CPU per interaction and stays under 15 MB of memory at the default 10,000-event buffer. A
+benchmark in CI fails the build if that regresses. Listeners never do I/O; sending happens in the background every 5
+seconds.
+
+## What happens when the collector is down?
+
+The SDK keeps events in its bounded queue and retries with backoff. For a bot that was already running, a five-minute
+outage loses nothing (this is tested). For longer outages, the least important events are dropped first and the drops
+are counted, unless you turn on the [disk spool](../../getting-started/configuration/#disk-spool), which keeps them on
+disk (100 MB by default) across outages and restarts and sends them once the collector is back.
+
+A bot that **starts** while the collector is down is different: it has not yet been given the salt it hashes user IDs
+with, and it will not send an ID unhashed. It holds up to 1,000 events for 60 seconds, then drops them and says so
+once in its log (`stats().dropped.salt_missing` counts them). Recording starts as soon as the collector answers.
+
+## Can I see who used a command?
+
+Not in privacy mode, by design: user IDs never leave your bot. If you need it for support or abuse handling, turn on
+[audit mode](../../guides/audit-mode/), which has to be switched on in both the SDK and the collector and comes with
+guardrails.
+
+## How are unique users counted without user IDs?
+
+Each user ID is replaced with a salted hash inside your bot. The same user has the same hash for the whole salt period
+(a month by default), so the collector can count distinct hashes. See the [privacy model](../../concepts/privacy-model/).
+
+## Does Shardlens send anything to you?
+
+No. Shardlens has no telemetry. Your bot talks to your collector and nothing else.
+
+## Does it work with sharding?
+
+Yes: internal sharding, `ShardingManager`, discord-hybrid-sharding and several machines. See
+[Sharding](../../guides/sharding/).
+
+## Does it work with discord.js 15?
+
+Yes. The adapter supports discord.js 14 and 15 through public APIs only, and a nightly CI job runs its tests against
+the latest discord.js release and the v15 development builds. discord.js 15 needs Node 24.17 or later.
+
+## Why is the server count different from Discord's?
+
+Discord's application count is approximate and can lag. Shardlens counts servers from gateway events and checks the
+difference; the Growth page shows the drift.
+
+## Is it free?
+
+Yes. Shardlens is MIT-licensed. You pay only for the server you run the collector on.
+
+## Is this affiliated with Discord?
+
+No. Shardlens is not affiliated with or endorsed by Discord.

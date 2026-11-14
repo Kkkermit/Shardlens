@@ -1,0 +1,47 @@
+---
+// Every exported instrument, generated from @shardlens/core's EXPORTER_METRICS (shared by both exporters).
+import { EXPORTER_METRICS, type ExporterMetricName } from '@shardlens/core';
+import { prometheusName } from '@shardlens/exporter-prometheus';
+
+const rows = (Object.keys(EXPORTER_METRICS) as ExporterMetricName[]).map((metric) => ({
+  metric,
+  ...EXPORTER_METRICS[metric],
+  prometheus: prometheusName(metric),
+}));
+---
+
+<table>
+  <thead>
+    <tr>
+      <th>Prometheus</th>
+      <th>OpenTelemetry</th>
+      <th>Type</th>
+      <th>Labels</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    {rows.map((r) => (
+      <tr>
+        <td>
+          <code>{r.prometheus}</code>
+        </td>
+        <td>
+          <code>shardlens.{r.metric}</code>
+        </td>
+        <td>{r.kind}</td>
+        <td>
+          {r.labels.length
+            ? r.labels.map((l, i) => (
+                <>
+                  {i > 0 ? ', ' : ''}
+                  <code>{l}</code>
+                </>
+              ))
+            : '—'}
+        </td>
+        <td>{r.description}</td>
+      </tr>
+    ))}
+  </tbody>
+</table>

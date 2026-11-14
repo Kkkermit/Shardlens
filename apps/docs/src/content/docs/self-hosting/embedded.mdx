@@ -1,0 +1,78 @@
+---
+title: Embedded mode
+description: The collector and dashboard inside your bot process, with no separate database server.
+sidebar:
+  order: 4
+---
+
+import { Aside, Code, FileTree, TabItem, Tabs } from '@astrojs/starlight/components';
+import embedded from '../../../../snippets/embedded.ts?raw';
+
+Embedded mode is for small bots on one host that don't want to run anything else. The collector, its background
+jobs and the dashboard run inside your bot process, on an in-process PostgreSQL ([PGlite](https://pglite.dev)) stored
+in one folder. It is the same code as the standalone collector, so the dashboard, privacy model and features are the
+same.
+
+<Tabs syncKey="pkg">
+  <TabItem label="pnpm">`pnpm add @shardlens/discordjs @shardlens/collector @electric-sql/pglite`</TabItem>
+  <TabItem label="npm">`npm install @shardlens/discordjs @shardlens/collector @electric-sql/pglite`</TabItem>
+</Tabs>
+
+<Code code={embedded} lang="ts" title="bot.ts" />
+
+Open `http://127.0.0.1:8080` and sign in with the read key from `secrets.json`, or set up
+[Discord sign-in](../docker-compose/#discord-sign-in) by passing `discord: { clientId, clientSecret }` and
+`publicUrl`.
+
+Three things to know before you paste it:
+
+- **Node.js 24.11 or newer.** That is the collector's requirement; the SDK on its own runs on 22.12.
+- **It uses top-level `await`**, which needs an ES module (`"type": "module"`, or a `.mjs` file). In CommonJS, put the
+  same lines inside the `async` function that starts your bot.
+- **Starting can fail.** The SDK never throws into your bot, but `startEmbeddedCollector` does when it can't do its
+  job: `appId` isn't an application ID, the port is already in use, or the data folder can't be written. Above, that
+  stops the bot. To start without analytics instead, add `.catch()` to the call and pass the (then missing) `url` and
+  `ingestKey` on: without them the SDK records nothing and says so once.
+
+On shutdown, call `lens.shutdown()` first, so queued events reach the collector, and `collector.close()` last.
+
+## What's in the data folder
+
+<FileTree>
+- shardlens-data/
+  - db/ the database (PGlite)
+  - secrets.json session secret, settings key, ingest and read keys; generated on first start
+</FileTree>
+
+Back the folder up while the bot is stopped, and keep it private: `secrets.json` holds your keys. On Linux and macOS
+the folder and the file are created readable by your bot's user only. Windows has no such file mode, so there the
+folder inherits the permissions of the folder it is in: put it somewhere other users can't read.
+
+## Options
+
+| Option             | Default                   | What it does                                                                    |
+| ------------------ | ------------------------- | ------------------------------------------------------------------------------- |
+| `dataDir`          | (required)                | Where the database and secrets live.                                            |
+| `appId`            | (required)                | Your Discord application ID.                                                    |
+| `port`             | `8080`                    | Dashboard and API port.                                                         |
+| `host`             | `127.0.0.1`               | Address to listen on. The default keeps the dashboard private to this machine.  |
+| `publicUrl`        | `http://localhost:<port>` | The URL people open the dashboard at (sign-in redirects, alert links).          |
+| `discord`          | none                      | `{ clientId, clientSecret }` for "Sign in with Discord".                        |
+| `discordPublicKey` | none                      | Receive [webhook events](../../guides/webhook-events/); needs a public HTTPS URL. |
+| `auditKey`         | none                      | Allows [audit mode](../../guides/audit-mode/). Keep it outside `dataDir`.        |
+| `logLevel`         | `warn`                    | Collector log level, kept quiet so your bot's logs stay readable.               |
+
+## When to use the standalone collector instead
+
+- **Bigger bots.** Embedded mode shares your bot's CPU, and the database has one connection. Beyond a few hundred
+  servers, or if the dashboard feels slow, use [Docker Compose](../docker-compose/).
+- **Several processes.** With `ShardingManager` or clusters, run one standalone collector and point every process at
+  it. An embedded collector belongs to one process.
+- **Public dashboards and webhook events** need HTTPS in front, which a reverse proxy gives you more easily with the
+  standalone setup.
+
+<Aside type="note">
+  Embedded mode uses PGlite rather than SQLite so it runs exactly the same SQL as the standalone collector. The
+  reasoning is in [ADR 0012](https://github.com/Kkkermit/Shardlens/blob/main/docs/adr/0012-embedded-mode-on-pglite.md).
+  Moving an embedded database to a standalone PostgreSQL isn't automated yet.
+</Aside>

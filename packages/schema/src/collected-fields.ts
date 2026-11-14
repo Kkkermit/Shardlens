@@ -1,0 +1,289 @@
+/**
+ * The "Data collected" register: every field the SDK can send, why, in which mode, and for how long it is kept.
+ *
+ * The docs site renders its Data collected page from this list, and a unit test fails when a wire-format field is
+ * missing from it. Changing a collected field means changing this file in the same pull request.
+ */
+
+/** `privacy`: sent in both modes. `audit`: sent only when the SDK and collector both run in audit mode. */
+export type FieldMode = 'privacy' | 'audit';
+
+/**
+ * `no`: not personal data. `pseudonymous`: a keyed hash that becomes unlinkable when its salt is destroyed.
+ * `yes`: identifies a person (audit-mode actor fields, or the app's own team for dashboard login).
+ */
+export type Personal = 'no' | 'pseudonymous' | 'yes';
+
+export const RETENTION = {
+  transient: 'Not stored; used while processing the batch only',
+  raw: 'Raw rows 35 days (configurable 7–90), then aggregate counts only',
+  audit: 'Encrypted; 30 days by default, 90 days maximum',
+  hash: 'Until the salt for its period is destroyed (period end + 7 days); raw rows expire after 35 days',
+  guild: 'While the bot is installed, plus 90 days after it leaves',
+  registry: 'While the command stays registered',
+  gauge: '30 days at 30-second resolution, then hourly aggregates',
+  latest: 'Latest value only',
+} as const;
+
+export type RetentionKey = keyof typeof RETENTION;
+
+/** Object a field belongs to: the batch envelope, a wire event type, or a nested object. */
+export type CollectedObject =
+  | 'envelope'
+  | 'event'
+  | 'actor'
+  | 'guild_info'
+  | 'interaction'
+  | 'guild_join'
+  | 'guild_update'
+  | 'guild_leave'
+  | 'guild_availability'
+  | 'guild_snapshot'
+  | 'command_registry'
+  | 'shard_state'
+  | 'rest_window'
+  | 'rate_limit'
+  | 'invalid_request_warning'
+  | 'gauge_window'
+  | 'entitlement'
+  | 'subscription'
+  | 'custom'
+  | 'app_info'
+  | 'sdk_health'
+  | 'interaction_error'
+  | 'command_permissions';
+
+export interface CollectedField {
+  readonly object: CollectedObject;
+  readonly field: string;
+  readonly description: string;
+  readonly mode: FieldMode;
+  readonly personal: Personal;
+  readonly retention: RetentionKey;
+}
+
+type Opts = Partial<Pick<CollectedField, 'mode' | 'personal' | 'retention'>>;
+
+function f(object: CollectedObject, field: string, description: string, opts: Opts = {}): CollectedField {
+  return {
+    object,
+    field,
+    description,
+    mode: opts.mode ?? 'privacy',
+    personal: opts.personal ?? 'no',
+    retention: opts.retention ?? 'raw',
+  };
+}
+
+export const COLLECTED_FIELDS: readonly CollectedField[] = [
+  // Batch envelope
+  f('envelope', 'v', 'Wire-format major version.', { retention: 'transient' }),
+  f('envelope', 'mode', 'Data mode the SDK runs in (privacy or audit).', { retention: 'transient' }),
+  f('envelope', 'sdk', 'SDK package name and version, kept with the SDK health of the sending process.', {
+    retention: 'latest',
+  }),
+  f('envelope', 'app', 'Discord application ID, environment name and bot release.'),
+  f(
+    'envelope',
+    'source',
+    'Shard IDs, cluster ID and an instance label (host name and process ID) for the sending process, kept with its SDK health and its gauges.',
+    { retention: 'gauge' },
+  ),
+  f('envelope', 'sentAt', 'When the batch was sent; used to correct clock skew.', { retention: 'transient' }),
+  f('envelope', 'events', 'The events in the batch.', { retention: 'transient' }),
+
+  // Every event
+  f('event', 'id', 'UUIDv7 event ID; makes retries idempotent.'),
+  f('event', 'ts', 'When the event happened (epoch milliseconds).'),
+  f('event', 'weight', 'Inverse sample rate, so sampled counts stay accurate.'),
+  f('event', 'type', 'Event type.'),
+
+  // Interaction
+  f('interaction', 'kind', 'Slash command, context menu, entry point, button, select, modal submit or autocomplete.'),
+  f('interaction', 'command', 'Command name.'),
+  f('interaction', 'group', 'Subcommand group name.'),
+  f('interaction', 'sub', 'Subcommand name.'),
+  f('interaction', 'commandId', 'Registered command ID.'),
+  f('interaction', 'commandScope', 'Whether the command is global or registered to one server.'),
+  f('interaction', 'options', 'Names of the options used. Values are not collected.'),
+  f('interaction', 'optionValues', 'Values of options the bot owner allow-listed with `captureOptionValues` only.'),
+  f('interaction', 'customId', 'Component or modal custom ID with numbers and IDs replaced by `*`.'),
+  f('interaction', 'componentType', 'Component type number.'),
+  f('interaction', 'sourceCommand', 'Command that created the message a component is on.'),
+  f('interaction', 'context', 'Where it ran: server, bot DM or private channel.'),
+  f('interaction', 'install', 'Whether the app was server-installed, user-installed or both.'),
+  f('interaction', 'guild', 'Server ID (not personal data).'),
+  f('interaction', 'channelType', 'Channel type number. Channel IDs and names are never collected.'),
+  f('interaction', 'locale', "The user's Discord app language (not their location)."),
+  f('interaction', 'guildLocale', "The server's preferred language."),
+  f('interaction', 'memberTier', 'Admin, manager, member or DM, derived from the member’s permissions.'),
+  f('interaction', 'user', 'Keyed hash of the user ID, computed inside the bot process.', {
+    personal: 'pseudonymous',
+    retention: 'hash',
+  }),
+  f('interaction', 'actor', 'Who ran it (raw user ID, optional names). Audit mode only; encrypted at rest.', {
+    mode: 'audit',
+    personal: 'yes',
+    retention: 'audit',
+  }),
+  f('interaction', 'premium', 'Whether the user or server has an active entitlement.'),
+  f('interaction', 'outcome', 'ok, error, timeout (missed 3-second deadline) or no response.'),
+  f('interaction', 'errorCode', 'Discord API error code, if the response failed.'),
+  f('interaction', 'errorClass', 'Error class name from a wrapped handler. Never messages or stack traces.'),
+  f('interaction', 'ackMs', 'Milliseconds from Discord creating the interaction to the first response.'),
+  f('interaction', 'responseType', 'Interaction callback type (for example deferred or modal).'),
+  f('interaction', 'deferred', 'Whether the first response was a deferral.'),
+  f('interaction', 'ephemeral', 'Whether the first response was ephemeral.'),
+  f('interaction', 'handlerMs', 'Handler duration, when the handler is wrapped with `lens.wrap()`.'),
+  f('interaction', 'shard', 'Shard that received the interaction.'),
+
+  // Interaction_error
+  f('interaction_error', 'interaction', 'ID of the interaction event the error belongs to.'),
+  f('interaction_error', 'command', 'Command name.'),
+  f('interaction_error', 'errorClass', 'Error class name from a wrapped handler. Never messages or stack traces.'),
+  f('interaction_error', 'errorCode', 'Discord API error code, if the error came from Discord.'),
+  f('interaction_error', 'handlerMs', 'Handler duration until it failed.'),
+
+  // Command_permissions
+  f('command_permissions', 'guild', 'Server that changed command permissions.'),
+  f('command_permissions', 'command', 'Command ID, or the application ID for app-wide changes.'),
+  f(
+    'command_permissions',
+    'overwrites',
+    'Number of permission overwrites now set. Role and user IDs are not collected.',
+  ),
+
+  // Actor (audit mode)
+  f('actor', 'userId', 'Discord user ID of the person who ran the interaction.', {
+    mode: 'audit',
+    personal: 'yes',
+    retention: 'audit',
+  }),
+  f('actor', 'username', 'Username. Left out with `auditIncludeProfile: false`.', {
+    mode: 'audit',
+    personal: 'yes',
+    retention: 'audit',
+  }),
+  f('actor', 'avatar', 'Avatar hash, to show the profile picture. Left out with `auditIncludeProfile: false`.', {
+    mode: 'audit',
+    personal: 'yes',
+    retention: 'audit',
+  }),
+
+  // Guild profile
+  f('guild_info', 'guild', 'Server ID.', { retention: 'guild' }),
+  f('guild_info', 'name', 'Server name (rendered as plain text).', { retention: 'guild' }),
+  f('guild_info', 'icon', 'Server icon hash.', { retention: 'guild' }),
+  f('guild_info', 'memberCount', 'Member count when the bot joined or restarted.', { retention: 'guild' }),
+  f('guild_info', 'large', "Discord's large-server flag.", { retention: 'guild' }),
+  f('guild_info', 'preferredLocale', "The server's preferred language.", { retention: 'guild' }),
+  f('guild_info', 'features', 'Server feature flags such as COMMUNITY or PARTNERED.', { retention: 'guild' }),
+  f('guild_info', 'premiumTier', 'Boost tier.', { retention: 'guild' }),
+  f('guild_info', 'boosts', 'Number of boosts.', { retention: 'guild' }),
+  f('guild_info', 'verificationLevel', 'Verification level.', { retention: 'guild' }),
+  f('guild_info', 'nsfwLevel', 'NSFW level.', { retention: 'guild' }),
+  f('guild_info', 'mfaLevel', 'Moderator MFA requirement.', { retention: 'guild' }),
+  f('guild_info', 'createdAt', 'When the server was created.', { retention: 'guild' }),
+  f('guild_info', 'joinedAt', 'When the bot joined.', { retention: 'guild' }),
+  f('guild_info', 'shard', 'Shard the server is on.', { retention: 'guild' }),
+  f('guild_info', 'channelCounts', 'Number of channels of each type. Never names.', { retention: 'guild' }),
+  f('guild_info', 'roleCount', 'Number of roles.', { retention: 'guild' }),
+  f('guild_info', 'emojiCount', 'Number of custom emojis.', { retention: 'guild' }),
+  f('guild_info', 'stickerCount', 'Number of stickers.', { retention: 'guild' }),
+  f('guild_info', 'botPermissions', "The bot's permission bitfield in the server.", { retention: 'guild' }),
+
+  // Server lifecycle
+  f('guild_join', 'info', 'Server profile at install.', { retention: 'guild' }),
+  f('guild_join', 'detectedAtStartup', 'True when the join happened while the bot was offline.', {
+    retention: 'guild',
+  }),
+  f('guild_update', 'info', 'Updated server profile.', { retention: 'guild' }),
+  f('guild_leave', 'guild', 'Server ID that removed the bot.', { retention: 'guild' }),
+  f('guild_leave', 'detectedAtStartup', 'True when the removal happened while the bot was offline.', {
+    retention: 'guild',
+  }),
+  f('guild_availability', 'guild', 'Server ID affected by a Discord outage.'),
+  f('guild_availability', 'available', 'Whether the server became available or unavailable.'),
+  f('guild_availability', 'shard', 'Shard the server is on.'),
+  f('guild_snapshot', 'shards', 'Shards reporting the snapshot.', { retention: 'transient' }),
+  f('guild_snapshot', 'shardCount', 'Total shard count, to detect resharding.', { retention: 'transient' }),
+  f('guild_snapshot', 'guilds', 'Server IDs on those shards, diffed to find joins and removals while offline.', {
+    retention: 'transient',
+  }),
+
+  // Commands
+  f('command_registry', 'commands', 'Registered commands (ID, name, type, scope, subcommands) to find unused ones.', {
+    retention: 'registry',
+  }),
+
+  // Gateway and REST health
+  f('shard_state', 'shard', 'Shard ID.'),
+  f('shard_state', 'state', 'Ready, resumed, reconnecting, disconnected, error or invalidated.'),
+  f('shard_state', 'closeCode', 'Gateway close code.'),
+  f('shard_state', 'replayed', 'Events replayed on resume.'),
+  f('shard_state', 'unavailableGuilds', 'Servers unavailable when the shard became ready.'),
+  f('rest_window', 'windowMs', 'Length of the aggregation window.'),
+  f('rest_window', 'rows', 'REST call counts, retries and latency histograms by method, bucketed route and status.'),
+  f('rest_window', 'invalid', '401, 403 and 429 counts toward the invalid-request ban threshold.'),
+  f('rate_limit', 'scope', '429 scope: user, global or shared.'),
+  f('rate_limit', 'global', 'Whether the limit was global.'),
+  f('rate_limit', 'route', 'Bucketed route (never the raw path, which can contain tokens).'),
+  f('rate_limit', 'method', 'HTTP method.'),
+  f('rate_limit', 'limit', 'Request limit for the bucket.'),
+  f('rate_limit', 'retryAfter', 'Milliseconds until the request may be retried.'),
+  f('rate_limit', 'sublimitTimeout', 'Sub-limit timeout, if any.'),
+  f('invalid_request_warning', 'count', 'Invalid requests counted by discord.js in the current window.'),
+  f('invalid_request_warning', 'remainingTime', 'Milliseconds left in the window.'),
+  f('gauge_window', 'gauges', 'Process and gateway gauges: shard ping and servers, event-loop delay, memory, caches.', {
+    retention: 'gauge',
+  }),
+
+  // Premium
+  f('entitlement', 'action', 'Created, updated or deleted.'),
+  f('entitlement', 'sku', 'SKU ID.'),
+  f('entitlement', 'entitlementType', 'Entitlement type (purchase, test, subscription and so on).'),
+  f('entitlement', 'owner', 'Whether a user or a server owns the entitlement.'),
+  f('entitlement', 'user', 'Keyed hash of the owning user.', { personal: 'pseudonymous', retention: 'hash' }),
+  f('entitlement', 'guild', 'Owning server ID.'),
+  f('entitlement', 'startsAt', 'Start time.'),
+  f('entitlement', 'endsAt', 'End time.'),
+  f('subscription', 'action', 'Created, updated or deleted.'),
+  f('subscription', 'status', 'Subscription status.'),
+  f('subscription', 'skus', 'SKU IDs.'),
+  f('subscription', 'user', 'Keyed hash of the subscriber.', { personal: 'pseudonymous', retention: 'hash' }),
+  f('subscription', 'periodStart', 'Current period start.'),
+  f('subscription', 'periodEnd', 'Current period end.'),
+
+  // Custom events
+  f('custom', 'name', 'Custom event name passed to `track()`.'),
+  f('custom', 'props', 'Properties passed to `track()` (bot owner chooses; 2 KB maximum).'),
+  f('custom', 'user', 'Keyed hash of the user, if the bot passes one.', {
+    personal: 'pseudonymous',
+    retention: 'hash',
+  }),
+  f('custom', 'guild', 'Server ID, if the bot passes one.'),
+
+  // Application
+  f('app_info', 'name', 'Application name.', { retention: 'latest' }),
+  f('app_info', 'approximateGuildCount', "Discord's approximate server count.", { retention: 'gauge' }),
+  f('app_info', 'approximateUserInstallCount', "Discord's approximate user-install count.", { retention: 'gauge' }),
+  f('app_info', 'approximateUserAuthorizationCount', "Discord's approximate user-authorisation count.", {
+    retention: 'gauge',
+  }),
+  f('app_info', 'dashboardUserIds', "The app owner's or accepted team members' user IDs, for dashboard login only.", {
+    personal: 'yes',
+    retention: 'latest',
+  }),
+  f('app_info', 'eventWebhooksStatus', 'Whether Discord webhook events are enabled.', { retention: 'latest' }),
+  f('app_info', 'skus', 'SKU IDs, names and types.', { retention: 'latest' }),
+  f('app_info', 'sessionStartRemaining', 'Identify calls left in the current 24-hour window.', { retention: 'gauge' }),
+  f('app_info', 'sessionStartTotal', 'Identify calls allowed per 24 hours.', { retention: 'gauge' }),
+  f('app_info', 'nodeVersion', 'Node.js version of the bot process.', { retention: 'latest' }),
+  f('app_info', 'libVersion', 'discord.js version of the bot process.', { retention: 'latest' }),
+
+  // SDK health
+  f('sdk_health', 'queueDepth', 'Events waiting to be sent.', { retention: 'latest' }),
+  f('sdk_health', 'dropped', 'Events dropped, by priority lane.', { retention: 'latest' }),
+  f('sdk_health', 'failedFlushes', 'Batches that failed to send.', { retention: 'latest' }),
+  f('sdk_health', 'internalErrors', 'Errors caught inside the SDK, by name.', { retention: 'latest' }),
+];

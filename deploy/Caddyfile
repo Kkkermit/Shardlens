@@ -1,0 +1,8 @@
+{$SHARDLENS_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy collector:8080 {
+		# Server-Sent Events (live tiles) must not be buffered.
+		flush_interval -1
+	}
+	header -Server
+}

@@ -1,0 +1,646 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { type ClientOptions, nextPeriodStart, ShardlensClient, uuidv7, type WireEvent } from '../src/index.js';
+
+const SALT_B64 = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8';
+const APP_ID = '1234567890123456789';
+
+interface Sent {
+  url: string;
+  headers: Record<string, string>;
+  body: Record<string, unknown> & { events: (WireEvent & Record<string, unknown>)[] };
+}
+
+type Reply = { status: number; body?: unknown; headers?: Record<string, string> } | Error;
+
+/** A fake collector: `/v1/config` returns `config`, `/v1/ingest` replies from the queue (default 202). */
+function fakeCollector(opts: { config?: Record<string, unknown> | Reply; ingest?: Reply[] } = {}) {
+  const sent: Sent[] = [];
+  const ingestReplies = [...(opts.ingest ?? [])];
+  const config = opts.config ?? {
+    v: 1,
+    appId: APP_ID,
+    mode: 'privacy',
+    saltPeriod: 'month',
+    salts: [{ period: currentMonth(), salt: SALT_B64 }],
+    sampling: {},
+    serverTime: new Date().toISOString(),
+  };
+  const toResponse = (reply: Reply): Response => {
+    if (reply instanceof Error) throw reply;
+    return new Response(reply.body === undefined ? null : JSON.stringify(reply.body), {
+      status: reply.status,
+      headers: reply.headers ?? {},
+    });
+  };
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith('/v1/config')) {
+      return 'status' in config || config instanceof Error
+        ? toResponse(config as Reply)
+        : toResponse({ status: 200, body: config });
+    }
+    const headers = Object.fromEntries(new Headers(init?.headers).entries());
+    const text = await new Response(
+      new Blob([init?.body as BlobPart]).stream().pipeThrough(new DecompressionStream('gzip')),
+    ).text();
+    sent.push({ url, headers, body: JSON.parse(text) });
+    return toResponse(ingestReplies.shift() ?? { status: 202, body: { accepted: 1, duplicates: 0, rejected: [] } });
+  }) as typeof fetch;
+  return { fetch: fetchImpl, sent };
+}
+
+function currentMonth(): string {
+  const d = new Date();
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+async function settle(rounds = 8): Promise<void> {
+  for (let i = 0; i < rounds; i++) await new Promise((r) => setTimeout(r, 0));
+}
+
+const clients: ShardlensClient[] = [];
+function makeClient(options: Partial<ClientOptions> & Pick<ClientOptions, 'fetch'>) {
+  const warnings: string[] = [];
+  const client = new ShardlensClient({
+    endpoint: 'https://collector.test',
+    apiKey: 'slk_ingest_test',
+    sdk: { name: '@shardlens/test', version: '0.0.0' },
+    flushIntervalMs: 60_000,
+    logger: { warn: (m) => warnings.push(m), info: () => undefined },
+    source: () => ({ shards: [0], instance: 'test:1' }),
+    ...options,
+  });
+  clients.push(client);
+  return { client, warnings };
+}
+
+function custom(name = 'ticket_opened'): WireEvent {
+  return { id: uuidv7(), ts: Date.now(), type: 'custom', name, props: {} } as WireEvent;
+}
+
+afterEach(async () => {
+  vi.useRealTimers();
+  await Promise.all(clients.splice(0).map((c) => c.shutdown({ timeoutMs: 10 })));
+});
+
+describe('ShardlensClient', () => {
+  it('loads salts and settings from /v1/config, then sends a gzipped, authenticated batch', async () => {
+    const collector = fakeCollector();
+    const { client } = makeClient({ fetch: collector.fetch, release: '2.4.1' });
+    await settle();
+    expect(client.ready).toBe(true);
+    expect(client.mode).toBe('privacy');
+
+    client.enqueue(custom(), 2);
+    await client.flush();
+
+    expect(collector.sent).toHaveLength(1);
+    const [req] = collector.sent;
+    expect(req?.url).toBe('https://collector.test/v1/ingest');
+    expect(req?.headers.authorization).toBe('Bearer slk_ingest_test');
+    expect(req?.headers['content-encoding']).toBe('gzip');
+    expect(req?.body).toMatchObject({
+      v: 1,
+      mode: 'privacy',
+      app: { id: APP_ID, env: 'production', release: '2.4.1' },
+      source: { shards: [0], instance: 'test:1' },
+    });
+    expect(req?.body.events.map((e) => e.type)).toEqual(['custom', 'sdk_health']);
+    expect(client.stats().queueDepth).toBe(0);
+  });
+
+  it('hashes user IDs in-process and never sends the raw ID', async () => {
+    const collector = fakeCollector();
+    const { client } = makeClient({ fetch: collector.fetch });
+    await settle();
+    client.enqueueWithUser('112233445566778899', Date.now(), 3, (user) => ({ ...custom(), user }) as WireEvent);
+    await settle();
+    await client.flush();
+    const body = JSON.stringify(collector.sent[0]?.body);
+    expect(body).toMatch(new RegExp(`"user":"h1:${currentMonth()}:[0-9a-f]{32}"`));
+    expect(body).not.toContain('112233445566778899');
+  });
+
+  it('holds user events until the salt arrives, then sends them', async () => {
+    const collector = fakeCollector({ config: new Error('collector down') });
+    const { client } = makeClient({ fetch: collector.fetch });
+    client.enqueueWithUser('112233445566778899', Date.now(), 3, (user) => ({ ...custom(), user }) as WireEvent);
+    await settle();
+    expect(client.ready).toBe(false);
+    expect(client.stats().pendingSalt).toBe(1);
+    expect(client.stats().internalErrors.config).toBeGreaterThan(0);
+  });
+
+  it('drops user events that wait more than 60 seconds for a salt', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const collector = fakeCollector({ config: new Error('collector down') });
+    const { client } = makeClient({ fetch: collector.fetch });
+    client.enqueueWithUser('112233445566778899', Date.now(), 3, (user) => ({ ...custom(), user }) as WireEvent);
+    await client.flush();
+    expect(client.stats().pendingSalt).toBe(1);
+    vi.setSystemTime(Date.now() + 61_000);
+    await client.flush();
+    expect(client.stats().pendingSalt).toBe(0);
+    expect(client.stats().dropped.salt_missing).toBe(1);
+  });
+
+  it('says once that events were dropped waiting for the collector', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const collector = fakeCollector({ config: new Error('collector down') });
+    const { client, warnings } = makeClient({ fetch: collector.fetch });
+    for (let i = 0; i < 3; i++) {
+      client.enqueueWithUser('112233445566778899', Date.now(), 3, (user) => ({ ...custom(), user }) as WireEvent);
+    }
+    vi.setSystemTime(Date.now() + 61_000);
+    await client.flush();
+    expect(client.stats().dropped.salt_missing).toBe(3);
+    expect(warnings.filter((w) => w.includes('dropped after 60 seconds'))).toHaveLength(1);
+  });
+
+  it('caps the salt-wait buffer at 1,000 events', async () => {
+    const collector = fakeCollector({ config: new Error('collector down') });
+    const { client } = makeClient({ fetch: collector.fetch });
+    for (let i = 0; i < 1_005; i++) {
+      client.enqueueWithUser('112233445566778899', Date.now(), 3, (user) => ({ ...custom(), user }) as WireEvent);
+    }
+    expect(client.stats().pendingSalt).toBe(1_000);
+    expect(client.stats().dropped.salt_missing).toBe(5);
+  });
+
+  it('keeps a failed batch and resends the same event IDs after backoff (no double counting)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const collector = fakeCollector({ ingest: [{ status: 500 }] });
+    const { client } = makeClient({ fetch: collector.fetch, random: () => 0 });
+    await settle();
+    const event = custom();
+    client.enqueue(event, 2);
+    await client.flush();
+    expect(client.stats()).toMatchObject({ queueDepth: 1, failedFlushes: 1 });
+
+    await client.flush(); // still backing off: nothing sent
+    expect(collector.sent).toHaveLength(1);
+
+    vi.setSystemTime(Date.now() + 1_000);
+    await client.flush();
+    expect(collector.sent).toHaveLength(2);
+    expect(collector.sent[1]?.body.events[0]?.id).toBe(event.id);
+    expect(client.stats().queueDepth).toBe(0);
+  });
+
+  it('waits as told by Retry-After on 429 and 503', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const collector = fakeCollector({ ingest: [{ status: 503, headers: { 'retry-after': '30' } }] });
+    const { client } = makeClient({ fetch: collector.fetch });
+    await settle();
+    client.enqueue(custom(), 2);
+    await client.flush();
+    vi.setSystemTime(Date.now() + 29_000);
+    await client.flush();
+    expect(collector.sent).toHaveLength(1);
+    vi.setSystemTime(Date.now() + 2_000);
+    await client.flush();
+    expect(collector.sent).toHaveLength(2);
+  });
+
+  it('says once when the collector is unreachable, and once when it is back', async () => {
+    let down = true;
+    const collector = fakeCollector();
+    const lines: string[] = [];
+    const { client } = makeClient({
+      fetch: ((input, init) =>
+        down ? Promise.reject(new TypeError('fetch failed')) : collector.fetch(input, init)) as typeof fetch,
+      logger: { warn: (m) => lines.push(`warn ${m}`), info: (m) => lines.push(`info ${m}`) },
+      random: () => 0,
+    });
+    vi.useFakeTimers();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(client.ready).toBe(false);
+    expect(lines).toEqual([
+      "warn Shardlens: can't reach the collector at https://collector.test (fetch failed). Retrying; events wait in memory.",
+    ]);
+
+    down = false;
+    await vi.advanceTimersByTimeAsync(120_000);
+    vi.useRealTimers();
+    expect(client.ready).toBe(true);
+    expect(lines.at(-1)).toBe('info Shardlens: connected to the collector at https://collector.test.');
+    expect(lines).toHaveLength(2);
+    expect(lines.join(' ')).not.toContain('slk_ingest_test');
+  });
+
+  it('carries on in privacy mode, losing nothing, when the collector leaves audit mode', async () => {
+    let mode = 'audit';
+    const collector = fakeCollector({ ingest: [{ status: 400, body: { error: 'audit_mode_disabled' } }] });
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (!String(input).endsWith('/v1/config')) return collector.fetch(input, init);
+      return Response.json({
+        v: 1,
+        appId: APP_ID,
+        mode,
+        saltPeriod: 'month',
+        salts: [{ period: currentMonth(), salt: SALT_B64 }],
+        sampling: {},
+        serverTime: new Date().toISOString(),
+      });
+    }) as typeof fetch;
+    const { client, warnings } = makeClient({ fetch: fetchImpl, mode: 'audit' });
+    await settle();
+    expect(client.mode).toBe('audit');
+
+    mode = 'privacy';
+    client.enqueue({ ...custom(), actor: { userId: '112233445566778899' } } as WireEvent, 3);
+    await client.flush();
+    await settle();
+
+    expect(client.mode).toBe('privacy');
+    expect(collector.sent).toHaveLength(2);
+    expect(collector.sent[1]?.body.mode).toBe('privacy');
+    expect(collector.sent[1]?.body.events[0]).not.toHaveProperty('actor');
+    expect(client.stats()).toMatchObject({ queueDepth: 0, dropped: { invalid: 0 } });
+    expect(warnings.some((w) => w.includes('no longer in audit mode'))).toBe(true);
+  });
+
+  it('sends what is queued before asking for an erasure, so nothing is stored after it', async () => {
+    const order: string[] = [];
+    const collector = fakeCollector();
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/v1/privacy/erase')) {
+        order.push('erase');
+        return Response.json({ erased: 1 });
+      }
+      if (url.endsWith('/v1/ingest')) order.push('ingest');
+      return collector.fetch(input, init);
+    }) as typeof fetch;
+    const { client } = makeClient({ fetch: fetchImpl });
+    await settle();
+    client.enqueueWithUser('112233445566778899', Date.now(), 3, (user) => ({ ...custom(), user }) as WireEvent);
+    await expect(client.forgetUser('112233445566778899')).resolves.toEqual({ erased: 1 });
+    expect(order).toEqual(['ingest', 'erase']);
+  });
+
+  it('pauses and warns once when the key is rejected', async () => {
+    const collector = fakeCollector({ ingest: [{ status: 401 }, { status: 401 }] });
+    const { client, warnings } = makeClient({ fetch: collector.fetch });
+    await settle();
+    client.enqueue(custom(), 2);
+    await client.flush();
+    await client.flush();
+    expect(collector.sent).toHaveLength(1);
+    expect(warnings.filter((w) => w.includes('API key'))).toHaveLength(1);
+    expect(client.stats().queueDepth).toBe(1);
+  });
+
+  it('halves the batch on 413 and drops a single oversized event', async () => {
+    const collector = fakeCollector({ ingest: [{ status: 413 }, { status: 413 }] });
+    const { client } = makeClient({ fetch: collector.fetch });
+    await settle();
+    for (let i = 0; i < 4; i++) client.enqueue(custom(), 2);
+    await client.flush();
+    expect(collector.sent.map((s) => s.body.events.length - 1)).toEqual([4, 2, 1, 2, 1]);
+    expect(client.stats().queueDepth).toBe(0);
+
+    const single = fakeCollector({ ingest: [{ status: 413 }] });
+    const { client: c2 } = makeClient({ fetch: single.fetch });
+    await settle();
+    c2.enqueue(custom(), 2);
+    await c2.flush();
+    expect(c2.stats().dropped.invalid).toBe(1);
+    expect(c2.stats().queueDepth).toBe(0);
+  });
+
+  it('drops only the events a 400 reply lists and resends the rest', async () => {
+    const collector = fakeCollector({
+      ingest: [{ status: 400, body: { error: 'invalid', rejected: [{ index: 1 }] } }],
+    });
+    const { client } = makeClient({ fetch: collector.fetch });
+    await settle();
+    const events = [custom('a'), custom('b'), custom('c')];
+    for (const e of events) client.enqueue(e, 2);
+    await client.flush();
+    expect(collector.sent).toHaveLength(2);
+    expect(collector.sent[1]?.body.events.slice(0, -1).map((e) => e.id)).toEqual([events[0]?.id, events[2]?.id]);
+    expect(client.stats().dropped.invalid).toBe(1);
+  });
+
+  it('splits batches larger than 1 MB before sending', async () => {
+    const collector = fakeCollector();
+    const { client } = makeClient({ fetch: collector.fetch });
+    await settle();
+    for (let i = 0; i < 400; i++) client.enqueue({ ...custom(), props: { blob: 'x'.repeat(4_000) } } as WireEvent, 2);
+    await client.flush();
+    expect(collector.sent.length).toBeGreaterThan(1);
+    for (const s of collector.sent) expect(JSON.stringify(s.body).length).toBeLessThanOrEqual(1024 * 1024);
+    expect(collector.sent.reduce((n, s) => n + s.body.events.length - 1, 0)).toBe(400);
+  });
+
+  it('strips actor data unless both the SDK and the collector are in audit mode', async () => {
+    const withActor = () => ({ ...custom(), actor: { userId: '112233445566778899' } }) as WireEvent;
+
+    const privacyCollector = fakeCollector();
+    const { client, warnings } = makeClient({ fetch: privacyCollector.fetch, mode: 'audit' });
+    await settle();
+    expect(client.mode).toBe('privacy');
+    expect(warnings.some((w) => w.includes('privacy mode'))).toBe(true);
+    client.enqueue(withActor(), 3);
+    await client.flush();
+    const sent = privacyCollector.sent[0]?.body.events[0];
+    expect(sent).not.toHaveProperty('actor');
+
+    const auditCollector = fakeCollector({
+      config: {
+        v: 1,
+        appId: APP_ID,
+        mode: 'audit',
+        saltPeriod: 'month',
+        salts: [{ period: currentMonth(), salt: SALT_B64 }],
+        serverTime: new Date().toISOString(),
+      },
+    });
+    const { client: audit } = makeClient({ fetch: auditCollector.fetch, mode: 'audit' });
+    await settle();
+    expect(audit.mode).toBe('audit');
+    audit.enqueue(withActor(), 3);
+    await audit.flush();
+    expect(auditCollector.sent[0]?.body.mode).toBe('audit');
+    expect(auditCollector.sent[0]?.body.events[0]).toHaveProperty('actor');
+  });
+
+  it('samples by event type and re-weights kept events', async () => {
+    const collector = fakeCollector();
+    const rolls = [0.1, 0.9];
+    const { client } = makeClient({
+      fetch: collector.fetch,
+      sampleRate: { custom: 0.5 },
+      random: () => rolls.shift() ?? 0,
+    });
+    await settle();
+    client.enqueue(custom(), 2); // kept (0.1 < 0.5)
+    client.enqueue(custom(), 2); // dropped by sampling (0.9 >= 0.5)
+    await client.flush();
+    const events = collector.sent[0]?.body.events.filter((e) => e.type === 'custom');
+    expect(events).toHaveLength(1);
+    expect(events?.[0]?.weight).toBe(2);
+  });
+
+  it('refuses plain-HTTP endpoints other than localhost and never calls fetch', async () => {
+    const fetchSpy = vi.fn();
+    const { client, warnings } = makeClient({
+      fetch: fetchSpy as unknown as typeof fetch,
+      endpoint: 'http://collector.example',
+    });
+    client.enqueue(custom(), 2);
+    await client.flush();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(warnings[0]).toContain('https://');
+  });
+
+  it('never throws when fetch itself throws', async () => {
+    const throwing = (() => {
+      throw new TypeError('boom');
+    }) as unknown as typeof fetch;
+    const { client } = makeClient({ fetch: throwing });
+    await settle();
+    expect(() => client.enqueue(custom(), 2)).not.toThrow();
+    await expect(client.flush()).resolves.toBeUndefined();
+    await expect(client.shutdown({ timeoutMs: 50 })).resolves.toBeUndefined();
+    expect(client.stats().internalErrors.config).toBeGreaterThan(0);
+  });
+
+  it('flushes on shutdown and gives up at the deadline when the collector hangs', async () => {
+    const collector = fakeCollector();
+    const { client } = makeClient({ fetch: collector.fetch });
+    await settle();
+    client.enqueue(custom(), 2);
+    await client.shutdown({ timeoutMs: 1_000 });
+    expect(collector.sent).toHaveLength(1);
+    client.enqueue(custom(), 2);
+    expect(client.stats().dropped.closed).toBe(1);
+
+    const hanging = (async (input: string | URL | Request) => {
+      if (String(input).endsWith('/v1/config')) return fakeCollector().fetch(input);
+      return new Promise<Response>(() => undefined);
+    }) as typeof fetch;
+    const { client: slow } = makeClient({ fetch: hanging });
+    await settle();
+    slow.enqueue(custom(), 2);
+    const started = Date.now();
+    await slow.shutdown({ timeoutMs: 100 });
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('prints events in dry-run mode without contacting a collector', async () => {
+    const lines: string[] = [];
+    const fetchSpy = vi.fn();
+    const client = new ShardlensClient({
+      endpoint: '',
+      apiKey: '',
+      dryRun: true,
+      sdk: { name: '@shardlens/test', version: '0.0.0' },
+      fetch: fetchSpy as unknown as typeof fetch,
+      logger: { warn: () => undefined, info: (m) => lines.push(m) },
+    });
+    clients.push(client);
+    await settle();
+    client.enqueueWithUser('112233445566778899', Date.now(), 3, (user) => ({ ...custom(), user }) as WireEvent);
+    await settle();
+    await client.flush();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(lines.some((l) => l.includes('"type":"custom"') && l.includes('"user":"h1:'))).toBe(true);
+  });
+});
+
+describe('spool', () => {
+  /** An in-memory EventSpool (the file implementation lives in @shardlens/discordjs). */
+  function memorySpool(capacity = Number.POSITIVE_INFINITY) {
+    const batches = new Map<string, WireEvent[]>();
+    let seq = 0;
+    return {
+      batches,
+      size: () => [...batches.values()].reduce((n, b) => n + b.length, 0),
+      all: () => [...batches.values()].flat() as (WireEvent & Record<string, unknown>)[],
+      async write(events: readonly WireEvent[]) {
+        if ([...batches.values()].reduce((n, b) => n + b.length, 0) + events.length > capacity) return false;
+        batches.set(String(seq++).padStart(6, '0'), [...events]);
+        return true;
+      },
+      async next() {
+        const [id] = [...batches.keys()].sort();
+        return id ? { id, events: batches.get(id) as WireEvent[] } : undefined;
+      },
+      async ack(id: string) {
+        batches.delete(id);
+      },
+    };
+  }
+  const down = Array.from({ length: 50 }, () => ({ status: 503, headers: { 'retry-after': '60' } }));
+
+  it('moves events to the spool during an outage and on shutdown, and never writes identities to disk', async () => {
+    const spool = memorySpool();
+    const collector = fakeCollector({
+      config: {
+        v: 1,
+        appId: APP_ID,
+        mode: 'audit',
+        saltPeriod: 'month',
+        salts: [{ period: currentMonth(), salt: SALT_B64 }],
+        sampling: {},
+        serverTime: new Date().toISOString(),
+      },
+      ingest: down,
+    });
+    const { client } = makeClient({ fetch: collector.fetch, spool, maxQueueSize: 10, mode: 'audit' });
+    await settle();
+    for (let i = 0; i < 10; i++)
+      client.enqueue({ ...custom(), actor: { userId: '112233445566778899' } } as WireEvent, 2);
+    await client.flush(); // 503: the batch goes back to memory, and everything above half the queue to the spool
+    expect(client.stats().queueDepth).toBe(5);
+    expect(spool.size()).toBe(5);
+
+    await client.shutdown({ timeoutMs: 200 });
+    expect(spool.size()).toBe(10);
+    expect(client.stats().spooled).toBe(10);
+    expect(spool.all().some((e) => 'actor' in e)).toBe(false);
+  });
+
+  it('replays spooled batches first when the collector is back, and deletes them only once accepted', async () => {
+    const spool = memorySpool();
+    const old = Array.from({ length: 3 }, () => custom('from_before_restart'));
+    await spool.write(old);
+    const collector = fakeCollector();
+    const { client } = makeClient({ fetch: collector.fetch, spool });
+    await settle();
+    client.enqueue(custom('fresh'), 2);
+    await client.flush();
+    expect(collector.sent.map((s) => s.body.events.filter((e) => e.type === 'custom').map((e) => e.name))).toEqual([
+      ['from_before_restart', 'from_before_restart', 'from_before_restart'],
+      ['fresh'],
+    ]);
+    expect(spool.size()).toBe(0);
+    expect(client.stats().replayed).toBe(3);
+  });
+
+  it('keeps spooled batches while the collector is still down', async () => {
+    const spool = memorySpool();
+    await spool.write([custom()]);
+    const collector = fakeCollector({ ingest: down });
+    const { client } = makeClient({ fetch: collector.fetch, spool });
+    await settle();
+    await client.flush();
+    expect(spool.size()).toBe(1);
+    expect(client.stats().replayed).toBe(0);
+  });
+
+  it('counts events it could not store when the spool is full', async () => {
+    const spool = memorySpool(3);
+    const collector = fakeCollector({ ingest: down });
+    const { client } = makeClient({ fetch: collector.fetch, spool, maxBatchSize: 2 });
+    await settle();
+    for (let i = 0; i < 6; i++) client.enqueue(custom(), 2);
+    await client.flush();
+    await client.shutdown({ timeoutMs: 200 });
+    expect(spool.size()).toBeLessThanOrEqual(3);
+    expect(client.stats().dropped.spool_full).toBe(6 - spool.size());
+  });
+});
+
+describe('exporters', () => {
+  const recorder = (name = 'test') => {
+    const seen: (WireEvent & Record<string, unknown>)[] = [];
+    let closed = 0;
+    return {
+      seen,
+      closed: () => closed,
+      exporter: {
+        name,
+        observe: (e: WireEvent) => void seen.push(e as WireEvent & Record<string, unknown>),
+        shutdown: () => void closed++,
+      },
+    };
+  };
+
+  it('runs without a collector: exporters see every event, nothing is fetched or queued', async () => {
+    const rec = recorder();
+    const fetchSpy = vi.fn();
+    const warnings: string[] = [];
+    const client = new ShardlensClient({
+      sdk: { name: '@shardlens/test', version: '0.0.0' },
+      exporters: [rec.exporter],
+      fetch: fetchSpy as unknown as typeof fetch,
+      logger: { warn: (m) => warnings.push(m) },
+    });
+    clients.push(client);
+    client.enqueue(custom(), 2);
+    client.enqueueWithUser(
+      '112233445566778899',
+      Date.now(),
+      3,
+      (user) => ({ ...custom('signed_up'), user }) as WireEvent,
+    );
+    await settle();
+    await client.flush();
+    expect(rec.seen.map((e) => e.name)).toEqual(['ticket_opened', 'signed_up']);
+    expect(rec.seen[1]?.user).toBe('');
+    expect(client.stats().queueDepth).toBe(0);
+    expect(client.stats().pendingSalt).toBe(0);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(warnings).toEqual([]);
+    await client.shutdown({ timeoutMs: 50 });
+    expect(rec.closed()).toBe(1);
+  });
+
+  it('sees events before sampling and never sees users or audit identities, alongside a collector', async () => {
+    const rec = recorder();
+    const collector = fakeCollector();
+    const { client } = makeClient({
+      fetch: collector.fetch,
+      exporters: [rec.exporter],
+      sampleRate: { custom: 0.5 },
+      random: () => 0.9, // every sampled event is dropped from the batch
+    });
+    await settle();
+    client.enqueueWithUser(
+      '112233445566778899',
+      Date.now(),
+      3,
+      (user) => ({ ...custom(), user, actor: { id: '112233445566778899' } }) as WireEvent,
+    );
+    await settle();
+    await client.flush();
+    expect(rec.seen).toHaveLength(1);
+    expect(rec.seen[0]?.user).toBe('');
+    expect(rec.seen[0]).not.toHaveProperty('actor');
+    expect(collector.sent).toHaveLength(0); // sampled out of the batch, but the exporter counted it
+  });
+
+  it('catches and counts exporter failures without affecting the batch', async () => {
+    const collector = fakeCollector();
+    const broken = {
+      name: 'broken',
+      observe: () => {
+        throw new Error('boom');
+      },
+    };
+    const { client } = makeClient({ fetch: collector.fetch, exporters: [broken] });
+    await settle();
+    client.enqueue(custom(), 2);
+    await client.flush();
+    expect(collector.sent).toHaveLength(1);
+    expect(client.stats().internalErrors['exporter:broken']).toBe(1);
+  });
+});
+
+describe('nextPeriodStart', () => {
+  const at = new Date('2026-11-13T16:42:01Z'); // a Friday
+  it('finds the next UTC day, ISO week (Monday) and month', () => {
+    expect(new Date(nextPeriodStart('day', at)).toISOString()).toBe('2026-11-14T00:00:00.000Z');
+    expect(new Date(nextPeriodStart('week', at)).toISOString()).toBe('2026-11-16T00:00:00.000Z');
+    expect(new Date(nextPeriodStart('month', at)).toISOString()).toBe('2026-12-01T00:00:00.000Z');
+    expect(new Date(nextPeriodStart('week', new Date('2026-11-16T00:00:00Z'))).toISOString()).toBe(
+      '2026-11-23T00:00:00.000Z',
+    );
+    expect(new Date(nextPeriodStart('month', new Date('2026-12-31T23:59:59Z'))).toISOString()).toBe(
+      '2027-01-01T00:00:00.000Z',
+    );
+  });
+});

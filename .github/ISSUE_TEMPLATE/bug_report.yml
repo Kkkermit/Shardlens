@@ -1,0 +1,53 @@
+name: Bug report
+description: Something in the SDK, collector, dashboard or docs doesn't work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please **never paste tokens, API keys, `.env` files or user IDs**.
+        Security problems go to [private vulnerability reporting](https://github.com/Kkkermit/Shardlens/security/advisories/new), not here.
+  - type: dropdown
+    id: part
+    attributes:
+      label: Which part?
+      options:
+        - '@shardlens/discordjs (SDK)'
+        - '@shardlens/http'
+        - '@shardlens/core'
+        - Exporters (Prometheus / OpenTelemetry)
+        - Collector
+        - Dashboard
+        - CLI (shardlens)
+        - Embedded mode
+        - Docs
+        - Deployment (Docker Compose, Railway, Render)
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to reproduce
+      description: The smallest setup that shows it. Code samples welcome (without secrets).
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: '`npx shardlens doctor` output'
+      description: Run it from your bot's folder. It prints versions and checks; it never prints your key.
+      render: text
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Shardlens packages, discord.js, Node.js, and the collector image tag.
+      placeholder: '@shardlens/discordjs 1.0.0, discord.js 14.28.1, Node 24.11, collector 1.0.0'
+    validations:
+      required: true

@@ -1,0 +1,45 @@
+# Render Blueprint: the collector (with the dashboard) as a Docker web service, plus Render PostgreSQL.
+# New → Blueprint, pick your fork, and set "Blueprint path" to deploy/render.yaml. Render asks for the values marked
+# sync: false; see https://kkkermit.github.io/Shardlens/self-hosting/render/
+services:
+  - type: web
+    name: shardlens
+    runtime: docker
+    dockerContext: .
+    dockerfilePath: ./apps/collector/Dockerfile
+    plan: starter
+    healthCheckPath: /readyz
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: shardlens-db
+          property: connectionString
+      # 32 random bytes, base64: what the collector needs for both.
+      - key: SHARDLENS_SESSION_SECRET
+        generateValue: true
+      - key: SHARDLENS_SETTINGS_KEY
+        generateValue: true
+      - key: SHARDLENS_TRUST_PROXY
+        value: 'true'
+      - key: SHARDLENS_PUBLIC_URL
+        sync: false
+      - key: SHARDLENS_APP_ID
+        sync: false
+      - key: SHARDLENS_INGEST_KEY
+        sync: false
+      - key: SHARDLENS_READ_KEY
+        sync: false
+      # Optional: leave empty to skip.
+      - key: DISCORD_CLIENT_ID
+        sync: false
+      - key: DISCORD_CLIENT_SECRET
+        sync: false
+      - key: DISCORD_PUBLIC_KEY
+        sync: false
+
+databases:
+  - name: shardlens-db
+    databaseName: shardlens
+    user: shardlens
+    plan: basic-256mb
+    postgresMajorVersion: '17'

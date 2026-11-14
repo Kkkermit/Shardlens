@@ -1,0 +1,65 @@
+---
+title: Wrapping handlers
+description: Measure handler time and record failures with lens.wrap().
+sidebar:
+  order: 2
+---
+
+import { Aside, Code } from '@astrojs/starlight/components';
+import wrap from '../../../../snippets/wrap.ts?raw';
+
+Without any extra code, Shardlens measures how long each interaction took to get its **first response** (reply, defer,
+update, modal or autocomplete result), and whether Discord's 3-second deadline was missed. That covers what users feel.
+
+Wrapping your handler adds two things:
+
+- **Handler duration**: how long your code ran, including work after the first response.
+- **Failures**: when the handler throws, the error class and Discord error code are recorded against the command. The
+  error **message is never sent**, because it can contain user input or tokens.
+
+<Code code={wrap} lang="ts" title="bot.ts" />
+
+## How it behaves
+
+- Errors are **re-thrown unchanged** after they are recorded, so your own error handling and logging still run.
+- The wrapper is async: it returns a promise that settles when your handler does.
+- If the SDK itself fails while recording, the failure is counted in SDK health and your handler is unaffected.
+
+## If your handler already catches errors
+
+`wrap` only sees an error that leaves the function it wraps. Many bots catch command errors themselves, to reply
+"something went wrong":
+
+```ts
+client.on(Events.InteractionCreate, async (interaction) => {
+  try {
+    await runCommand(interaction);
+  } catch (error) {
+    await replyWithError(interaction, error);
+  }
+});
+```
+
+Wrapping that whole listener would record every command as successful, because nothing is thrown out of it. Wrap the
+function inside the `try` instead, and leave your `catch` as it is:
+
+```ts
+const runCommand = lens.wrap(async (interaction) => {
+  await commands.get(interaction.commandName)?.execute(interaction);
+});
+```
+
+The error passes through `wrap`, which records it and throws it on to your `catch`.
+
+## With a command handler framework
+
+Wrap the function that receives the interaction, wherever your framework calls it:
+
+```ts
+client.on(Events.InteractionCreate, lens.wrap((interaction) => router.handle(interaction)));
+```
+
+<Aside type="tip">
+  Wrap one top-level handler rather than every command. The command name, type and outcome are read from the
+  interaction itself.
+</Aside>

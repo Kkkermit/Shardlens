@@ -1,0 +1,74 @@
+{
+  "name": "@shardlens/exporter-prometheus",
+  "version": "0.0.0",
+  "description": "Prometheus exporter for Shardlens: bot health metrics for Grafana, with no user or server labels.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kkkermit/Shardlens.git",
+    "directory": "packages/exporter-prometheus"
+  },
+  "homepage": "https://kkkermit.github.io/Shardlens/guides/grafana/",
+  "bugs": "https://github.com/Kkkermit/Shardlens/issues",
+  "keywords": [
+    "shardlens",
+    "discord",
+    "discord.js",
+    "prometheus",
+    "metrics",
+    "grafana"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.12"
+  },
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.cts",
+  "files": [
+    "dist",
+    "!dist/**/*.map"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "lint:package": "publint --strict && attw --pack . --profile node16",
+    "api-report": "api-extractor run",
+    "api-report:update": "api-extractor run --local"
+  },
+  "dependencies": {
+    "@shardlens/core": "workspace:^"
+  },
+  "peerDependencies": {
+    "prom-client": "^15.0.0"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "catalog:",
+    "@microsoft/api-extractor": "catalog:",
+    "@types/node": "catalog:",
+    "prom-client": "^15.1.3",
+    "publint": "catalog:",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

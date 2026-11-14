@@ -1,0 +1,73 @@
+{
+  "name": "@shardlens/schema",
+  "version": "0.0.0",
+  "description": "Shardlens wire format (zod schemas, JSON Schema and TypeScript types), metric registry and data-collected register.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kkkermit/Shardlens.git",
+    "directory": "packages/schema"
+  },
+  "homepage": "https://github.com/Kkkermit/Shardlens#readme",
+  "bugs": "https://github.com/Kkkermit/Shardlens/issues",
+  "keywords": [
+    "shardlens",
+    "discord",
+    "discord.js",
+    "analytics",
+    "schema",
+    "zod"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.12"
+  },
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./batch.schema.json": "./dist/batch.schema.json",
+    "./metrics.json": "./dist/metrics.json",
+    "./collected-fields.json": "./dist/collected-fields.json",
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.cts",
+  "files": [
+    "dist",
+    "!dist/**/*.map"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsdown && node scripts/emit-json.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "lint:package": "publint --strict && attw --pack . --profile node16 --exclude-entrypoints batch.schema.json metrics.json collected-fields.json",
+    "api-report": "api-extractor run",
+    "api-report:update": "api-extractor run --local"
+  },
+  "dependencies": {
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "catalog:",
+    "@microsoft/api-extractor": "catalog:",
+    "discord-api-types": "catalog:",
+    "publint": "catalog:",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

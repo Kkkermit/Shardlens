@@ -1,0 +1,25 @@
+# Optional ClickHouse analytics store (preview) for very large bots. Use it on top of the main file:
+#   docker compose -f docker-compose.yml -f docker-compose.clickhouse.yml up -d
+# Set CLICKHOUSE_PASSWORD in .env first (letters and digits only, for example: openssl rand -hex 24).
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.8-alpine
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_USER: shardlens
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DB: shardlens
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: '0'
+    volumes: [chdata:/var/lib/clickhouse]
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    # No "ports": only the collector reaches ClickHouse.
+
+  collector:
+    environment:
+      CLICKHOUSE_URL: http://shardlens:${CLICKHOUSE_PASSWORD}@clickhouse:8123/shardlens
+    depends_on:
+      clickhouse: { condition: service_started }
+
+volumes:
+  chdata: {}

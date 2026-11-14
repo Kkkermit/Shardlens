@@ -1,0 +1,56 @@
+---
+title: Custom events
+description: Record your own product events with track(), with type-checked names and properties.
+sidebar:
+  order: 1
+---
+
+import { Aside, Code } from '@astrojs/starlight/components';
+import customEvents from '../../../../snippets/custom-events.ts?raw';
+
+Interactions, servers and bot health are recorded automatically. For anything else, such as a ticket opened, a game
+finished or a purchase flow started, call `track()`.
+
+<Code code={customEvents} lang="ts" title="tickets.ts" />
+
+## Rules
+
+- **Names** are lower snake case, start with a letter and are up to 64 characters: `ticket_opened`.
+- **Properties** are strings (up to 256 characters), finite numbers, booleans or `null`, up to 2 KB in total. Keys
+  are up to 64 characters.
+- **String values pass through secret redaction**, so a token pasted into a property is replaced before it leaves your
+  bot. Even so, never put message content, usernames or other personal data in properties.
+- **The user ID is optional** and is hashed in your bot, exactly like interaction users, so custom events count towards
+  unique users without the ID leaving the process.
+- **Invalid events are dropped and counted** in SDK health. `track()` never throws.
+
+## Typed events
+
+Without the `declare module` block, `track()` accepts any valid name and any properties. Once you register events,
+TypeScript checks every call: unknown names and wrong property types are compile errors.
+
+## The Events page
+
+The dashboard's **Events** page lists every custom event with its count and the number of people, breaks each event
+down by property, and has two builders:
+
+- **Funnels**: pick 2 to 5 steps (custom events or commands) and a window. Shardlens counts the people who did each
+  step in order, within the window of their first step, with the conversion between steps, the median time to each
+  step, and a breakdown by the day people entered.
+- **Cohorts**: pick what people started with and what counts as coming back (a specific event or command, or any
+  activity). Shardlens groups people by the day or week they started and shows how many came back 1, 2, … periods
+  later.
+
+## How funnels stay private
+
+Steps are linked by each person's salted hash, inside the collector. Only counts leave it: there is no per-person view
+and the query API can't return a hash. Two consequences of the privacy model:
+
+- A journey that crosses into a new [salt period](../../concepts/privacy-model/) counts as a new person, because the
+  hash changes. With the default monthly period this only affects journeys that span the turn of a month.
+- Funnels and cohorts read raw events, so they cover the raw-retention window (35 days by default).
+
+<Aside type="tip">
+  For funnels to work, pass `userId` in the `track()` context, as in the example above. Events without a user still
+  count towards totals and properties.
+</Aside>

@@ -1,0 +1,49 @@
+---
+title: Webhook events
+description: Track user installs and entitlements with Discord's webhook events.
+sidebar:
+  order: 5
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+The gateway tells your bot when it joins a server, but not when someone installs it to their **account** (user
+installs). Discord reports those, and entitlement changes, through webhook events sent to a URL you choose. Shardlens
+receives them on the collector, not in your bot.
+
+## Set it up
+
+<Steps>
+
+1. **Give the collector your public key**
+
+   Copy **General Information → Public Key** from the [Developer Portal](https://discord.com/developers/applications)
+   into `.env` as `DISCORD_PUBLIC_KEY`, then restart the collector.
+
+2. **Point Discord at the collector**
+
+   Under **Webhooks**, set the endpoint URL to `https://stats.example.com/v1/discord/events` and save. Discord sends a
+   signed test request; the collector verifies it and answers.
+
+3. **Turn on events** and subscribe to:
+   - `APPLICATION_AUTHORIZED` and `APPLICATION_DEAUTHORIZED` (installs and removals, for servers and users)
+   - `ENTITLEMENT_CREATE`, `ENTITLEMENT_UPDATE` and `ENTITLEMENT_DELETE` (premium)
+
+</Steps>
+
+User installs then appear on the Growth page, and entitlement changes on the Premium page.
+
+## How it is protected
+
+- Every request is checked against your public key (Ed25519). Bad signatures and timestamps older than 5 minutes get
+  `401`.
+- The collector answers `204` before doing any work, so Discord's response deadline is never at risk. Retried
+  deliveries are stored once.
+- The installing user's ID is hashed with the current salt, exactly like the SDK does, so the same person has the same
+  hash in both places within a salt period. The raw ID is not stored (in audit mode it is stored encrypted).
+
+<Aside type="caution">
+  Discord turns webhook events off for an application whose endpoint keeps failing. If installs stop appearing, check
+  the collector is reachable and that `DISCORD_PUBLIC_KEY` matches the application. See
+  [Troubleshooting](../../operations/troubleshooting/).
+</Aside>

@@ -1,0 +1,63 @@
+---
+title: Install with an AI agent
+description: Paste one prompt into Claude Code, Cursor, Copilot or Codex and let it add Shardlens to your bot.
+sidebar:
+  order: 2
+---
+
+import { Aside, Code } from '@astrojs/starlight/components';
+import prompt from '../../../../prompts/install.md?raw';
+
+Open your bot's repository in a coding agent (Claude Code, Cursor, GitHub Copilot, Codex, Windsurf or similar), paste
+the prompt below and let it work. It installs `@shardlens/discordjs`, creates Shardlens next to your client, wraps
+your interaction handler, flushes on shutdown and documents the two settings. It covers single-process bots,
+`ShardingManager`, internal sharding and discord-hybrid-sharding.
+
+<Code code={prompt} lang="md" title="Paste this to your agent" wrap />
+
+## Point your agent at a URL instead
+
+The same prompt is served as plain Markdown, so you can skip the copying:
+
+```text
+Add Shardlens to this bot by following https://kkkermit.github.io/Shardlens/install.md
+```
+
+The prompt is self-contained: it explains what Shardlens is, how to find your client and handler, what to do for each
+sharding mode, which settings to document, what the agent must not change, and how to check its work. Its TypeScript
+samples are type-checked against the real packages on every build of these docs.
+
+<Aside type="caution" title="Review what it did">
+  Read the diff before you commit, as with any generated change. The prompt tells the agent not to touch intents, not
+  to turn on audit mode and never to write a key into a tracked file. Check that it listened.
+</Aside>
+
+## What the agent doesn't do
+
+The prompt only changes your bot. You still need somewhere for the events to go:
+
+1. Start a collector: follow step 1 of the [quick start](../quick-start/), or use
+   [embedded mode](../../self-hosting/embedded/) for a small bot on one host.
+2. Set `SHARDLENS_URL` and `SHARDLENS_INGEST_KEY` wherever your bot runs.
+3. Run `npx shardlens doctor` from your bot's folder to check the connection.
+
+## These docs, for agents
+
+The whole documentation is also published as plain text, following the [llms.txt](https://llmstxt.org/) convention:
+
+| File                                                              | What it holds                                         |
+| ----------------------------------------------------------------- | ----------------------------------------------------- |
+| [`/llms.txt`](https://kkkermit.github.io/Shardlens/llms.txt)           | A short description of Shardlens and an index of the docs |
+| [`/llms-small.txt`](https://kkkermit.github.io/Shardlens/llms-small.txt) | Guides and concepts, trimmed for small context windows |
+| [`/llms-full.txt`](https://kkkermit.github.io/Shardlens/llms-full.txt)   | Every page in one file, including the SDK reference    |
+| [`/openapi.json`](https://kkkermit.github.io/Shardlens/openapi.json)    | The collector's HTTP API as an OpenAPI 3.1 document    |
+| [`/install.md`](https://kkkermit.github.io/Shardlens/install.md)        | The install prompt on this page                        |
+
+Nothing on this site blocks crawlers, and a [sitemap](https://kkkermit.github.io/Shardlens/sitemap-index.xml) lists
+every page.
+
+## Doing it by hand
+
+Every step in the prompt is covered in these docs: [installation](../installation/),
+[configuration](../configuration/), [wrapping handlers](../../guides/wrapping-handlers/) and
+[sharding](../../guides/sharding/).

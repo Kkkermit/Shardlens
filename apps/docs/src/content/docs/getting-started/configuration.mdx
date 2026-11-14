@@ -1,0 +1,91 @@
+---
+title: Configuration
+description: Every option createShardlens accepts.
+sidebar:
+  order: 4
+---
+
+import { Aside, Code } from '@astrojs/starlight/components';
+import ConfigOption from '../../../components/ConfigOption.astro';
+import OptionsTable from '../../../components/OptionsTable.astro';
+import configuration from '../../../../snippets/configuration.ts?raw';
+import shutdown from '../../../../snippets/shutdown.ts?raw';
+
+`createShardlens(client, options)` attaches Shardlens to a discord.js client. Call it before `client.login()`. Only
+`endpoint` and `apiKey` are required.
+
+<Code code={configuration} lang="ts" title="bot.ts" />
+
+## All options
+
+This table is generated from the SDK's source, so it always matches the version these docs were built from.
+
+<OptionsTable />
+
+## Options worth knowing
+
+### Hashed or identified users
+
+<ConfigOption name="mode" />
+
+Audit mode has to be switched on in the collector as well, and it changes what you have to tell your users. Read the
+[audit mode guide](../../guides/audit-mode/) first.
+
+### Option values
+
+<ConfigOption name="captureOptionValues" />
+
+By default Shardlens records which options were used, never what was typed. Allow-list options whose values are safe
+and useful (a language, a difficulty) and never free-text options. Values are passed through secret redaction before
+they are sent.
+
+### Custom IDs
+
+<ConfigOption name="normaliseCustomId" />
+
+Buttons, select menus and modals are grouped by custom ID. The default normaliser turns IDs and numbers into `*`, so
+`ticket:close:112233445566778899` becomes `ticket:close:*`. Secrets are redacted before normalising, and the result is
+cut to 100 characters.
+
+### Sampling
+
+<ConfigOption name="sampleRate" />
+
+Only very large bots need this. A sampled event carries its weight, so totals on the dashboard stay correct.
+
+### Opt-outs
+
+<ConfigOption name="optedOut" />
+<ConfigOption name="onOptOutChange" />
+
+See [the `/privacy` command](../../guides/privacy-command/) for a complete example.
+
+### Disk spool
+
+<ConfigOption name="spool" />
+
+Without a spool, events wait in memory (10,000 by default) while the collector is unreachable, and the least important
+are dropped first once that fills up. With `spool: { dir: './shardlens-spool' }`, they move to disk instead:
+
+- During an outage, as soon as memory is half full, and on `shutdown()` for anything still unsent, so events also
+  survive a restart.
+- When the collector answers again, spooled batches are sent first, oldest first, and deleted only once accepted.
+  The collector ignores events it already has, so a replay never counts anything twice.
+- Spool files hold hashed events only. User IDs, and audit-mode identities, are never written to disk.
+
+### Member counts
+
+<ConfigOption name="refreshGuildCounts" />
+
+Without the `GuildMembers` intent, discord.js only learns a server's member count when the bot starts or joins it.
+This refresh keeps the counts current at a gentle, fixed pace.
+
+## Shutting down
+
+The SDK never installs signal handlers. Call `shutdown()` on your own shutdown path to send what is queued:
+
+<Code code={shutdown} lang="ts" />
+
+<Aside type="tip">
+  Use `dryRun: true` while developing to print events to the console instead of sending them.
+</Aside>

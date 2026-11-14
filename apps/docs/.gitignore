@@ -1,0 +1,4 @@
+src/generated/
+.astro/
+dist/
+src/content/docs/reference/sdk/

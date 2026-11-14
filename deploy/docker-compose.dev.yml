@@ -1,0 +1,17 @@
+# Local development only: PostgreSQL on 127.0.0.1:5432 (never exposed beyond this machine).
+#   docker compose -f deploy/docker-compose.dev.yml up -d
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: shardlens
+      POSTGRES_PASSWORD: shardlens-dev
+      POSTGRES_DB: shardlens
+    ports: ['127.0.0.1:5432:5432']
+    volumes: [pgdata-dev:/var/lib/postgresql/data]
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U shardlens']
+      interval: 5s
+volumes:
+  pgdata-dev: {}

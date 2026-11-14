@@ -1,0 +1,76 @@
+---
+title: CLI
+description: The shardlens command-line tool — init, keys, privacy and doctor.
+---
+
+The `shardlens` package is a small CLI for setting up and checking an install. Run it with `npx`, no installation
+needed:
+
+```sh
+npx shardlens <command> [options]
+```
+
+## `init`
+
+Writes `docker-compose.yml`, a `Caddyfile` and a `.env` with generated secrets and keys.
+
+```sh
+npx shardlens init --domain stats.example.com --app-id 123456789012345678
+```
+
+| Option            | Meaning                                                      |
+| ----------------- | ------------------------------------------------------------ |
+| `--domain <host>` | The domain Caddy gets a certificate for. Required.            |
+| `--app-id <id>`   | Your Discord application ID. Required.                        |
+| `--dir <path>`    | Where to write the files. Default `./shardlens`.               |
+| `--force`         | Overwrite an existing `.env`. Without it, `init` refuses.     |
+| `--identify-users` | Also create `SHARDLENS_AUDIT_KEY`, so you can switch from hashed to [identified users](../../guides/audit-mode/) in Settings. Without it the key is written commented out. |
+
+The ingest and read keys are written to `.env` as `SHARDLENS_INGEST_KEY` and `SHARDLENS_READ_KEY`.
+
+## `keys`
+
+Prints a new API key.
+
+```sh
+npx shardlens keys --scope read
+```
+
+| Option                   | Meaning                      |
+| ------------------------ | ---------------------------- |
+| `--scope ingest \| read` | Key type. Default `ingest`.  |
+
+Put it in the collector's `.env` (the collector stores only a hash), or create keys in the dashboard under
+**Settings → API keys** instead.
+
+## `privacy`
+
+Prints a privacy-policy paragraph that matches your configuration.
+
+```sh
+npx shardlens privacy --option-values language --webhook-events
+```
+
+| Option                   | Meaning                                                   |
+| ------------------------ | --------------------------------------------------------- |
+| `--audit`                | You use audit mode.                                       |
+| `--ids-only`             | Audit mode without usernames and avatars (`auditIncludeProfile: false`). |
+| `--option-values <a,b>`  | Option names in `captureOptionValues`.                    |
+| `--webhook-events`       | You receive Discord webhook events (user installs).       |
+| `--retention <days>`     | Your raw-data retention, if not the default 35 days.      |
+
+## `doctor`
+
+Checks your Node and discord.js versions, that the collector is reachable over HTTPS and that it accepts your ingest
+key. A project that uses `@shardlens/http` instead of discord.js passes the discord.js check.
+
+```sh
+npx shardlens doctor --url https://stats.example.com --key slk_ingest_…
+```
+
+| Option          | Meaning                                                |
+| --------------- | ------------------------------------------------------ |
+| `--url <url>`   | The collector. Or set `SHARDLENS_URL`.                  |
+| `--key <key>`   | An ingest key. Or set `SHARDLENS_INGEST_KEY`.           |
+
+It exits with a non-zero code when a check fails, so you can use it in a deploy script.

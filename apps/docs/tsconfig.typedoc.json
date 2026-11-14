@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["es2023", "dom"],
+    "types": ["node"],
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": [
+    "../../packages/discordjs/src",
+    "../../packages/http/src",
+    "../../packages/exporter-prometheus/src",
+    "../../packages/exporter-otel/src",
+    "../../packages/core/src"
+  ]
+}

@@ -1,0 +1,72 @@
+---
+title: Security
+description: The threat model in brief, and how to report a vulnerability.
+sidebar:
+  order: 1
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## Reporting a vulnerability
+
+Please **don't** open a public issue. Report it privately on GitHub: **Security → Report a vulnerability** on the
+[Shardlens repository](https://github.com/Kkkermit/Shardlens/security). You should get an acknowledgement within 7
+days. The full policy is in
+[`SECURITY.md`](https://github.com/Kkkermit/Shardlens/blob/main/SECURITY.md).
+
+## Threat model
+
+| Threat                                  | Controls                                                                                                           |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Bot token leaks through the SDK         | REST options and headers are never serialised; only bucketed routes are stored; secret redaction on all error text; fuzz-tested with 10,000 token-shaped strings |
+| Interaction or webhook tokens leak      | Paths are read in memory only to find the interaction ID; stored routes contain `:token`, never the token        |
+| Forged ingest traffic                   | 32-byte bearer keys stored only as SHA-256 hashes, scoped (ingest or read), checked before the request body is read, HTTPS only |
+| Request floods and scanning             | Every route is rate limited per client address, unknown paths included; sign-in, key and export routes have tighter limits |
+| Forged Discord webhook events           | Ed25519 verification, 5-minute timestamp window, `401` on failure                                                  |
+| Hostile payloads                        | zod validation on every route, 1 MB compressed and 5 MB decompressed limits, field length caps; NUL characters, IDs beyond 64 bits and anything else the database would refuse are answered with 400, never 500 |
+| Slow or stalled requests                | A client has 30 seconds to send a request (60 for its headers); a client that disconnects early costs nothing |
+| SQL injection                           | Parameterised queries only; queries use enums, never identifiers from input                                        |
+| XSS from server names or usernames      | Rendered as text only, and a strict Content Security Policy                                                        |
+| CSV formula injection                   | Exported cells starting with `= + - @`, tab or carriage return are neutralised                                     |
+| Cross-site requests                     | `SameSite=Lax` cookies and a required CSRF header on every change                                                  |
+| Session theft                           | `HttpOnly` and `Secure` cookies, hashed session IDs, 7-day expiry, rotation on sign-in, server-side sign-out      |
+| Unauthorised dashboard access           | Full access only for the application owner, team and listed extras; OAuth state and PKCE                         |
+| SSRF through alert and report webhooks  | Only Discord webhook URLs are accepted, redirects are refused, and the URLs are stored encrypted |
+| Re-identification of hashes             | HMAC with secret salts that are destroyed after their period                                                       |
+| Audit data exposure                     | AES-256-GCM with a key outside the database, 90-day maximum retention, access log, exact lookups only             |
+| Database exposure                       | PostgreSQL is not published by Docker Compose                                                                      |
+| The SDK harming the bot                 | Bounded queue, priority dropping, no I/O in listeners, timers that don't keep the process alive, chaos tests       |
+| Supply chain                            | Zero-dependency core, lockfile, Renovate, npm provenance, CodeQL, dependency review, OpenSSF Scorecard              |
+| Container escape                        | Non-root user, read-only root filesystem, no Linux capabilities                                                    |
+
+## Rate limits
+
+Limits are per client address, per minute. Past a limit the collector answers `429` with a `Retry-After` header,
+which the SDK honours.
+
+| Route                                       | Limit |
+| ------------------------------------------- | ----- |
+| `POST /v1/ingest`                           | 3,000 |
+| `POST /v1/query`, `POST /v1/discord/events` | 600   |
+| `GET /v1/config`, `GET /v1/badge/*`         | 120   |
+| `POST /v1/privacy/erase`                    | 60    |
+| `/auth/discord`, `/auth/read-key`           | 20    |
+| `GET /v1/audit/export.csv`, `POST /v1/alerts/:id/test` | 10 |
+| Everything else, including unknown paths    | 1,200 |
+
+<Aside type="caution" title="Behind a reverse proxy">
+  Set `SHARDLENS_TRUST_PROXY=true` when Caddy, a load balancer or a platform router sits in front of the collector (the
+  bundled Docker Compose file does). Otherwise every visitor appears to come from the proxy's address and shares one
+  limit.
+</Aside>
+
+## If you are breached
+
+Discord's Developer Policy requires you to notify Discord and affected users of unauthorised access to API data. The
+[incident checklist in `SECURITY.md`](https://github.com/Kkkermit/Shardlens/blob/main/SECURITY.md#incident-checklist-for-maintainers-and-self-hosters)
+lists what to rotate and who to tell.
+
+<Aside type="tip">
+  Rotate keys from the dashboard (**Settings → API keys**): create the new key, deploy it to your bot, then revoke the
+  old one.
+</Aside>

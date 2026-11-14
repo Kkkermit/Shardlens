@@ -1,0 +1,65 @@
+---
+title: Quick start
+description: Self-host Shardlens and send your bot's first events in under 10 minutes.
+sidebar:
+  order: 1
+---
+
+import { Aside, Code, Steps, TabItem, Tabs } from '@astrojs/starlight/components';
+import quickStart from '../../../../snippets/quick-start.ts?raw';
+
+You need a server with Docker and a domain name pointing at it (for HTTPS), and a discord.js 14 or 15 bot.
+
+<Aside type="caution" title="Before 1.0">
+  The packages and the collector image aren't published yet. Until they are, clone the repository and run
+  `docker compose up -d --build` in its `deploy/` folder after filling in `.env` (see the
+  [README](https://github.com/Kkkermit/Shardlens#quick-start)).
+</Aside>
+
+<Steps>
+
+1. **Start the collector**
+
+   `shardlens init` writes `docker-compose.yml`, a `Caddyfile` and a `.env` with generated secrets and keys.
+
+   ```sh
+   npx shardlens init --domain stats.example.com --app-id 123456789012345678
+   cd shardlens && docker compose up -d
+   ```
+
+   Caddy gets a certificate for your domain, the collector creates its tables, and the dashboard is served at
+   `https://stats.example.com`. Your ingest key is in `.env` as `SHARDLENS_INGEST_KEY`.
+
+2. **Install the SDK in your bot**
+
+   <Tabs syncKey="pkg">
+     <TabItem label="pnpm">`pnpm add @shardlens/discordjs`</TabItem>
+     <TabItem label="npm">`npm install @shardlens/discordjs`</TabItem>
+     <TabItem label="yarn">`yarn add @shardlens/discordjs`</TabItem>
+     <TabItem label="bun">`bun add @shardlens/discordjs`</TabItem>
+   </Tabs>
+
+3. **Add three lines to your bot**
+
+   <Code code={quickStart} lang="ts" title="bot.ts" />
+
+   Set `SHARDLENS_URL` to your collector's URL and `SHARDLENS_INGEST_KEY` to the key from step 1.
+
+4. **Open the dashboard**
+
+   Go to your domain and sign in with your read key (`SHARDLENS_READ_KEY` in `.env`), or with Discord once you have
+   [set up Discord sign-in](../../self-hosting/docker-compose/#discord-sign-in). Run a command in your bot and it
+   appears on the Overview page within seconds.
+
+</Steps>
+
+<Aside type="tip">
+  Only the `Guilds` intent is needed. Shardlens never reads message content and user IDs never leave your bot.
+</Aside>
+
+## Next steps
+
+- [Configuration](../configuration/): every SDK option.
+- [Wrapping handlers](../../guides/wrapping-handlers/): record handler time and errors.
+- [The `/privacy` command](../../guides/privacy-command/): let users opt out or ask for erasure.
+- [What is collected](../../concepts/data-collected/): every field, generated from the wire format.

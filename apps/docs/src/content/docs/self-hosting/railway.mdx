@@ -1,0 +1,47 @@
+---
+title: Railway
+description: Run the collector on Railway with a managed PostgreSQL database.
+sidebar:
+  order: 2
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Railway builds the collector from the repository using `deploy/railway.json` and gives you HTTPS on a
+`*.up.railway.app` domain or your own.
+
+<Steps>
+
+1. **Create a project from the repository**
+
+   In Railway, choose **New project → Deploy from GitHub repo** and pick your fork of Shardlens. In the service's
+   **Settings → Config-as-code**, set the config file to `/deploy/railway.json`. Railway then builds
+   `apps/collector/Dockerfile` and checks `/readyz` before switching traffic.
+
+2. **Add PostgreSQL**
+
+   **New → Database → PostgreSQL** in the same project.
+
+3. **Set the variables** on the collector service
+
+   | Variable                   | Value                                                   |
+   | -------------------------- | ------------------------------------------------------- |
+   | `DATABASE_URL`             | `${{Postgres.DATABASE_URL}}`                            |
+   | `SHARDLENS_PUBLIC_URL`     | Your service URL, for example `https://stats.up.railway.app` |
+   | `SHARDLENS_APP_ID`         | Your Discord application ID                            |
+   | `SHARDLENS_SESSION_SECRET` | `openssl rand -base64 32`                               |
+   | `SHARDLENS_SETTINGS_KEY`   | `openssl rand -base64 32`                               |
+   | `SHARDLENS_INGEST_KEY`     | `npx shardlens keys --scope ingest`                     |
+   | `SHARDLENS_READ_KEY`       | `npx shardlens keys --scope read`                       |
+   | `SHARDLENS_TRUST_PROXY`    | `true`                                                  |
+
+   Railway sets `PORT`, and the collector listens on it. The optional variables are in the
+   [environment reference](../../reference/environment/).
+
+4. **Generate a domain** under the service's **Settings → Networking**, then open it.
+
+</Steps>
+
+<Aside type="tip">
+  Point your bot's `SHARDLENS_URL` at the Railway URL and use the ingest key you set above.
+</Aside>

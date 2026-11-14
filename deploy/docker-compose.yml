@@ -1,0 +1,55 @@
+# Standard deployment: Caddy (HTTPS) → collector (API + dashboard) → PostgreSQL.
+#   cp .env.example .env   # then fill it in
+#   docker compose up -d
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ['80:80', '443:443']
+    environment:
+      SHARDLENS_DOMAIN: ${SHARDLENS_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on: [collector]
+
+  collector:
+    image: ${SHARDLENS_IMAGE:-ghcr.io/kkkermit/shardlens-collector:1}
+    # Until images are published, `docker compose up --build` builds it from this repository.
+    build:
+      context: ..
+      dockerfile: apps/collector/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://shardlens:${POSTGRES_PASSWORD}@postgres:5432/shardlens
+      SHARDLENS_TRUST_PROXY: 'true'
+      HOST: 0.0.0.0
+      PORT: '8080'
+    read_only: true
+    tmpfs: ['/tmp']
+    user: '10001:10001'
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ['CMD', 'node', 'dist/healthcheck.js']
+      interval: 30s
+
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: shardlens
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: shardlens
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U shardlens']
+      interval: 10s
+    # No "ports": PostgreSQL is never published to the host.
+
+volumes:
+  caddy_data: {}
+  pgdata: {}

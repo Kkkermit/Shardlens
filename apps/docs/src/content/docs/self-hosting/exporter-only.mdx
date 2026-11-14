@@ -1,0 +1,61 @@
+---
+title: Exporter only
+description: Bot-health metrics in Prometheus or OpenTelemetry, with or without a collector.
+sidebar:
+  order: 5
+---
+
+import { Aside, Code, TabItem, Tabs } from '@astrojs/starlight/components';
+import ExporterMetricsTable from '../../../components/ExporterMetricsTable.astro';
+import otel from '../../../../snippets/exporter-otel.ts?raw';
+import prometheus from '../../../../snippets/exporter-prometheus.ts?raw';
+import registry from '../../../../snippets/exporter-prometheus-registry.ts?raw';
+
+If you already run Prometheus or an OpenTelemetry pipeline, Shardlens can send its bot-health metrics there. You can
+use an exporter **instead of** a collector (leave out `endpoint` and `apiKey`) or **as well as** one.
+
+<Tabs syncKey="exporter">
+  <TabItem label="Prometheus">
+    <Tabs syncKey="pkg">
+      <TabItem label="pnpm">`pnpm add @shardlens/discordjs @shardlens/exporter-prometheus prom-client`</TabItem>
+      <TabItem label="npm">`npm install @shardlens/discordjs @shardlens/exporter-prometheus prom-client`</TabItem>
+    </Tabs>
+    <Code code={prometheus} lang="ts" title="bot.ts" />
+    Then add `127.0.0.1:9464` as a scrape target. If your bot already serves `/metrics`, register Shardlens's
+    metrics on your own registry instead:
+    <Code code={registry} lang="ts" title="metrics.ts" />
+  </TabItem>
+  <TabItem label="OpenTelemetry">
+    <Tabs syncKey="pkg">
+      <TabItem label="pnpm">`pnpm add @shardlens/discordjs @shardlens/exporter-otel @opentelemetry/api`</TabItem>
+      <TabItem label="npm">`npm install @shardlens/discordjs @shardlens/exporter-otel @opentelemetry/api`</TabItem>
+    </Tabs>
+    <Code code={otel} lang="ts" title="bot.ts" />
+    The exporter only uses the OpenTelemetry API. Set up the SDK (a `MeterProvider` and a metric reader) the way
+    you already do; pass `meter` to use a specific meter instead of the global one.
+  </TabItem>
+</Tabs>
+
+## What is exported
+
+Both exporters register the same instruments, from one shared definition in `@shardlens/core`:
+
+<ExporterMetricsTable />
+
+## Privacy and cardinality
+
+- **No user or server labels.** Exporters see events before hashing, with user fields blanked and audit-mode
+  identities removed, and no metric is labelled by user or server ID. That keeps your metrics anonymous and their
+  cardinality bounded.
+- Labels are command names, bucketed REST routes (`/channels/:id/messages`), statuses, shard numbers and the custom
+  event names you chose.
+- Counts are exact: exporters see every event before any `sampleRate` sampling.
+
+## What you don't get without a collector
+
+Exporters cover bot health. Product analytics (unique users, retention, servers, growth, audience) need the
+collector, because they depend on salted user hashes and long-term storage.
+
+<Aside type="tip">
+  Import the ready-made [Grafana dashboard](../../guides/grafana/) to get started.
+</Aside>

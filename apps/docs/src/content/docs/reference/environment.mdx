@@ -1,0 +1,78 @@
+---
+title: Collector environment
+description: Every environment variable the collector reads.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The collector reads its configuration from environment variables (with Docker Compose, from `.env`). It refuses to
+start when a required variable is missing or invalid, and the error names the variable without printing its value.
+Empty values count as unset.
+
+## Required
+
+| Variable                   | What it is                                                                                   |
+| -------------------------- | -------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`             | PostgreSQL connection string. Docker Compose builds it from `POSTGRES_PASSWORD`.              |
+| `SHARDLENS_PUBLIC_URL`     | The URL people and bots use, for example `https://stats.example.com`. Used for sign-in redirects and links in alerts. |
+| `SHARDLENS_APP_ID`         | Your Discord application ID. The collector serves one application.                            |
+| `SHARDLENS_SESSION_SECRET` | At least 32 characters. Signs dashboard session cookies. `openssl rand -base64 32`            |
+| `SHARDLENS_SETTINGS_KEY`   | 32 random bytes, base64. Encrypts stored secrets such as alert webhook URLs. `openssl rand -base64 32` |
+
+## Keys
+
+| Variable               | What it is                                                                                         |
+| ---------------------- | -------------------------------------------------------------------------------------------------- |
+| `SHARDLENS_INGEST_KEY` | An ingest key (`slk_ingest_` and 43 characters) for your bot. Registered when the collector starts. |
+| `SHARDLENS_READ_KEY`   | A read key (`slk_read_` and 43 characters) for read-only dashboard access and scripts.             |
+
+Both are optional: you can also create and revoke keys in the dashboard (**Settings → API keys**). Generate them with
+[`npx shardlens keys`](../cli/#keys).
+
+## Discord
+
+| Variable                | What it is                                                                                     |
+| ----------------------- | ---------------------------------------------------------------------------------------------- |
+| `DISCORD_CLIENT_ID`     | OAuth2 client ID, for "Sign in with Discord". Set it together with `DISCORD_CLIENT_SECRET`.     |
+| `DISCORD_CLIENT_SECRET` | OAuth2 client secret.                                                                          |
+| `DISCORD_PUBLIC_KEY`    | The application's public key (64 hex characters), to receive [webhook events](../../guides/webhook-events/). |
+| `SHARDLENS_EXTRA_ADMINS` | Comma-separated Discord user IDs allowed full dashboard access besides the application owner and team. |
+
+## Audit mode
+
+| Variable              | What it is                                                                                         |
+| --------------------- | -------------------------------------------------------------------------------------------------- |
+| `SHARDLENS_AUDIT_KEY` | 32 random bytes, base64. Encrypts audit-mode identities. Without it, audit mode can't be turned on. |
+
+<Aside type="caution">
+  Keep `SHARDLENS_SETTINGS_KEY` and `SHARDLENS_AUDIT_KEY` somewhere safe outside the server. Data encrypted with them
+  can't be read without them, including from backups.
+</Aside>
+
+## Server
+
+| Variable                  | Default   | What it is                                                                          |
+| ------------------------- | --------- | ----------------------------------------------------------------------------------- |
+| `PORT`                    | `8080`    | Port to listen on. Railway and Render set it for you.                                |
+| `HOST`                    | `0.0.0.0` | Address to listen on.                                                               |
+| `SHARDLENS_TRUST_PROXY`   | `false`   | `true` behind a reverse proxy or load balancer, so client addresses and HTTPS are seen correctly. Docker Compose sets it. |
+| `SHARDLENS_DEMO`          | `false`   | `true` lets anyone view the dashboard without signing in, read-only. For a public demo with seeded data only; never with real data. Settings, keys, alerts, audit data and ingest stay locked. |
+| `SHARDLENS_DASHBOARD_DIR` | (bundled) | Serve the dashboard from another folder. Mainly for development.                    |
+| `LOG_LEVEL`               | `info`    | `fatal`, `error`, `warn`, `info`, `debug`, `trace` or `silent`. Per-request logs, which contain URLs, are written at `debug` and `trace` only.                     |
+
+## ClickHouse (preview)
+
+| Variable         | What it is                                                                                                  |
+| ---------------- | ----------------------------------------------------------------------------------------------------------- |
+| `CLICKHOUSE_URL` | Optional. `http://user:password@host:8123/database` of a ClickHouse server to use as an [analytics store](../../self-hosting/scaling/#clickhouse-preview). The database is created if missing. Never logged. |
+
+## Docker Compose only
+
+These are read by `docker-compose.yml`, not by the collector itself.
+
+| Variable            | What it is                                                                         |
+| ------------------- | ---------------------------------------------------------------------------------- |
+| `SHARDLENS_DOMAIN`  | The domain Caddy gets a certificate for.                                            |
+| `POSTGRES_PASSWORD` | Password for the bundled PostgreSQL.                                                |
+| `SHARDLENS_IMAGE`   | Collector image to run. Defaults to the published image for the current major version. |
+| `CLICKHOUSE_PASSWORD` | Password for the bundled ClickHouse in `docker-compose.clickhouse.yml`. Letters and digits only.     |

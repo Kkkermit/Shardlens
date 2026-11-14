@@ -1,0 +1,14 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "build": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/deploy/docker-compose.yml",
+        "$TURBO_ROOT$/deploy/Caddyfile",
+        "$TURBO_ROOT$/apps/collector/package.json"
+      ]
+    }
+  }
+}

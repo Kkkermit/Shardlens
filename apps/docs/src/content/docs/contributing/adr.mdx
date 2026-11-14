@@ -1,0 +1,30 @@
+---
+title: Decision records
+description: Architecture decision records — why Shardlens is built the way it is.
+sidebar:
+  order: 4
+---
+
+Significant decisions are recorded as short architecture decision records (ADRs) in
+[`docs/adr`](https://github.com/Kkkermit/Shardlens/tree/main/docs/adr). Each one states the context, the decision and
+its consequences. A new decision that changes an old one gets a new record, and the old one is marked as superseded.
+
+| ADR | Decision |
+| --- | --- |
+| [0001](https://github.com/Kkkermit/Shardlens/blob/main/docs/adr/0001-salted-user-hashing.md) | Pseudonymise user IDs in-process with rotating, destroyed salts |
+| [0002](https://github.com/Kkkermit/Shardlens/blob/main/docs/adr/0002-audit-mode.md) | Audit mode is a two-sided, encrypted, time-limited opt-in |
+| [0003](https://github.com/Kkkermit/Shardlens/blob/main/docs/adr/0003-storage.md) | PostgreSQL by default, partitioned, no extensions |
+| [0004](https://github.com/Kkkermit/Shardlens/blob/main/docs/adr/0004-schema-versioning.md) | Wire-format versioning: additive within a major |
+| [0005](https://github.com/Kkkermit/Shardlens/blob/main/docs/adr/0005-typescript-6-pin.md) | Pin TypeScript to 6.0.x |
+| [0006](https://github.com/Kkkermit/Shardlens/blob/main/docs/adr/0006-intents-reverification.md) | Gateway intents re-verified against Discord's docs |
+| [0007](https://github.com/Kkkermit/Shardlens/blob/main/docs/adr/0007-m0-reference-code-changes.md) | Changes to the spec's reference code during M0 |
+| [0008](https://github.com/Kkkermit/Shardlens/blob/main/docs/adr/0008-release-gating.md) | npm releases stay switched off until trusted publishing is proven |
+| [0009](https://github.com/Kkkermit/Shardlens/blob/main/docs/adr/0009-rest-response-safety.md) | Never read or cancel shared REST response bodies |
+| [0010](https://github.com/Kkkermit/Shardlens/blob/main/docs/adr/0010-m1-collector-decisions.md) | Collector and dashboard choices made during M1 |
+| [0011](https://github.com/Kkkermit/Shardlens/blob/main/docs/adr/0011-m2-privacy-admin-decisions.md) | Privacy, audit and admin choices made during M2 |
+| [0012](https://github.com/Kkkermit/Shardlens/blob/main/docs/adr/0012-embedded-mode-on-pglite.md) | Run embedded mode on PGlite, not SQLite |
+| [0013](https://github.com/Kkkermit/Shardlens/blob/main/docs/adr/0013-m3-m4-decisions.md) | Choices made during M3 and M4 |
+
+To propose a decision, copy
+[`0000-template.md`](https://github.com/Kkkermit/Shardlens/blob/main/docs/adr/0000-template.md) to the next number and
+open a pull request.

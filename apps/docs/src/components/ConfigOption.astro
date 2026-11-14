@@ -1,0 +1,40 @@
+---
+// One SDK option, pulled from the generated options list (scripts/sdk-options.mjs reads the adapter's source).
+import options from '../generated/sdk-options.json';
+import InlineMarkdown from './InlineMarkdown.astro';
+
+interface Props {
+  name: string;
+}
+const option = options.find((o) => o.name === Astro.props.name);
+if (!option) throw new Error(`Unknown SDK option "${Astro.props.name}"`);
+---
+
+<div class="config-option">
+  <p class="config-option__head">
+    <code>
+      {option.name}
+      {option.required ? '' : '?'}: {option.type}
+    </code>
+    {option.required ? <span class="config-option__required">required</span> : null}
+  </p>
+  <p>
+    <InlineMarkdown text={option.description} />
+  </p>
+</div>
+<style>
+  .config-option {
+    border-inline-start: 3px solid var(--sl-color-accent);
+    padding-inline-start: 1rem;
+  }
+  .config-option__head {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .config-option__required {
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-2);
+  }
+</style>

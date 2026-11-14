@@ -1,0 +1,86 @@
+---
+title: Hashed or identified users
+description: Choose whether user IDs are hashed or recorded. Audit mode records who ran a command; here is when that is appropriate, how to turn it on, and the guardrails around it.
+sidebar:
+  order: 6
+---
+
+import { Aside, Code, Steps } from '@astrojs/starlight/components';
+import PolicyRule from '../../../components/PolicyRule.astro';
+import audit from '../../../../snippets/audit-mode.ts?raw';
+
+You choose whether Shardlens hashes user IDs or records them.
+
+|                       | Hashed (privacy mode, the default)              | Identified (audit mode)                                 |
+| --------------------- | ----------------------------------------------- | ------------------------------------------------------- |
+| What leaves your bot  | A salted hash that can't be turned back into an ID | The user ID, username and avatar, and nothing else   |
+| What you can see      | How many people, never which people             | Who ran each interaction, in the **Activity** log       |
+| How long it is kept   | Hashes become unlinkable when their salt is destroyed | 30 days by default, 90 at most, encrypted          |
+
+Identified mode exists so moderators and support staff can answer "who used `/ban` in this server yesterday?" or
+investigate abuse. Everything else in Shardlens (command usage, servers, growth, response times) works the same in
+both modes, and is always counts.
+
+## What "identified" collects
+
+Exactly three things about the person who ran an interaction: their **user ID**, their **username** and their
+**avatar** (so the Activity log can show a profile picture). No email address, display name, roles, connections or
+message content, in any mode. Set `auditIncludeProfile: false` in the SDK to record the ID alone.
+
+## When it is appropriate
+
+Use audit mode when you have a support or abuse-handling need that counts can't meet, and you can explain it to your
+users. Don't turn it on for curiosity or marketing.
+
+<PolicyRule n={15} />
+
+Turning it on changes what you collect, so update your privacy policy first. `npx shardlens privacy --audit` prints a
+paragraph that matches.
+
+## Turn it on
+
+Audit mode has to be switched on in **both** places. One side alone does nothing.
+
+<Steps>
+
+1. **Give the collector an audit key**
+
+   Setting up from scratch? `npx shardlens init --identify-users …` creates it for you. Otherwise:
+
+   ```sh
+   openssl rand -base64 32
+   ```
+
+   Put the result in `.env` as `SHARDLENS_AUDIT_KEY` and restart the collector. Keep a copy somewhere safe: audit data
+   can't be read without it.
+
+2. **Choose "Identified" on the collector**
+
+   In the dashboard, **Settings → User identity → Mode: Identified**. Only a Discord sign-in (owner or team) can
+   change it.
+
+3. **Switch the SDK to audit mode**
+
+   <Code code={audit} lang="ts" title="bot.ts" />
+
+</Steps>
+
+## Guardrails
+
+- **Encrypted at rest** with AES-256-GCM, using a key that lives outside the database.
+- **Kept for 30 days** by default. You can choose up to 90; longer is rejected.
+- **Every access is logged**: viewing the activity log, looking up a user, viewing top users and exporting. The log is
+  visible under **Settings → Privacy**.
+- **Exact lookups only**: you can search for a known user ID, but there is no browsing of user profiles and the query
+  API can't group by user.
+- **Exports need confirmation**, and spreadsheet formulas in the CSV are neutralised.
+- **Three fields, no more**: user ID, username and avatar. `auditIncludeProfile: false` keeps the ID only.
+
+<PolicyRule n={16} />
+
+A complete bot is in [`examples/audit-mode`](https://github.com/Kkkermit/Shardlens/tree/main/examples/audit-mode).
+
+## Turning it off
+
+Switch the collector back to **Hashed** in Settings. New interactions are stored without identities straight away;
+existing audit rows expire on their normal schedule, or you can erase individual users.

@@ -1,0 +1,53 @@
+name: integration
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  postgres:
+    name: collector on PostgreSQL ${{ matrix.postgres }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: [16, 17]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo run build --filter=@shardlens/collector...
+      # Testcontainers starts PostgreSQL in Docker; also runs the SDK → collector end-to-end test.
+      - run: pnpm --filter @shardlens/collector test:int
+        env:
+          SHARDLENS_TEST_PG_IMAGE: postgres:${{ matrix.postgres }}-alpine
+
+  image:
+    name: collector image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: docker build -f apps/collector/Dockerfile -t shardlens-collector:ci .
+      - name: image runs as non-root
+        run: test "$(docker inspect -f '{{.Config.User}}' shardlens-collector:ci)" = "10001:10001"
+      - name: compose publishes no database port
+        run: |
+          if grep -A12 '^  postgres:' deploy/docker-compose.yml | grep -q '^    ports:'; then
+            echo "PostgreSQL must not be published"; exit 1
+          fi

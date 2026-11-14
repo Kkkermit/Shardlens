@@ -1,0 +1,82 @@
+---
+title: Architecture
+description: How the SDK, the collector, PostgreSQL and the dashboard fit together.
+sidebar:
+  order: 1
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+```text
+ ┌──────────────────────────────── Discord ────────────────────────────────┐
+ │   Gateway (WebSocket)          REST API                Webhook events   │
+ └───────┬──────────────────────────▲─────────────────────────────┬────────┘
+         │ events                   │ calls                       │ HTTPS, Ed25519-signed
+ ┌───────▼──────────────────────────┴───────────┐                 │
+ │ Your bot process                             │                 │
+ │   discord.js Client ──► Shardlens SDK        │                 │
+ │                         • client + REST hooks│                 │
+ │                         • HMAC user hashing  │                 │
+ │                         • bounded queue, gzip│── hashed ──┐    │
+ └──────────────────────────────────────────────┘  batches   ▼    ▼
+                                    ┌──────────────── Collector (Docker) ────────────────┐
+                                    │  Ingest API · Webhook receiver · Background jobs   │
+                                    │  Query + live API · Dashboard (React)              │
+                                    └──────────────────────────┬─────────────────────────┘
+                                                               │ SQL
+                                                        ┌──────▼──────┐
+                                                        │ PostgreSQL  │
+                                                        └─────────────┘
+```
+
+## In your bot
+
+The SDK listens to public discord.js events and REST hooks. A listener copies the fields it needs into a plain object
+and pushes it onto a bounded queue: no I/O and no waiting on the hot path. Every 5 seconds (or sooner when the queue
+fills) the SDK:
+
+1. Hashes user IDs with the current salt (HMAC-SHA-256), so raw IDs never leave the process in privacy mode.
+2. Packs up to 500 events into a batch, gzips it with `CompressionStream` and sends it with the ingest key.
+3. Keeps the batch on failure and retries with jittered backoff (1 to 60 seconds).
+
+When the queue is full, the least important events are dropped first: gauges, then REST windows, then custom events,
+and interactions and server changes last. Every drop is counted and reported in SDK health.
+
+<Aside type="note">
+  The SDK never throws into your bot, never blocks it and never installs signal handlers. Each listener is wrapped,
+  and every failure is caught and counted.
+</Aside>
+
+## In the collector
+
+- **Ingest** checks the key, decompresses with a size cap (1 MB compressed, 5 MB decompressed), validates each event
+  with zod and stores it. Retried batches are recognised by event ID and stored once.
+- **Webhook receiver** verifies Discord's Ed25519 signature, answers `204` immediately and processes afterwards.
+- **Background jobs** run on one collector at a time (an advisory lock elects the leader): minute, hour and day
+  rollups, unique users per salt period, salt creation and destruction, partition creation and retention, and alerts.
+- **Query API** answers typed queries. Each query kind maps to a fixed, parameterised SQL template; there is no
+  free-form SQL and no grouping by user.
+- **Live API** streams live tiles over Server-Sent Events, fed by `LISTEN/NOTIFY` so it works across collectors.
+- **Dashboard** is a static React app served by the collector with a strict Content Security Policy.
+
+## In PostgreSQL
+
+Raw events go into daily partitions that are dropped whole when they expire. Charts read from rollups:
+
+| Range          | Source       | Freshness   |
+| -------------- | ------------ | ----------- |
+| Live tiles     | Memory       | 1–5 seconds |
+| Up to 14 days  | Minute rollup | About 1 minute |
+| Up to 13 months | Hour rollup | About 1 hour |
+| All time       | Day rollup   | About 1 day |
+
+## Deployment modes
+
+| Mode              | What runs                                                         | Status    |
+| ----------------- | ----------------------------------------------------------------- | --------- |
+| Standard          | Caddy → collector (API and dashboard) → PostgreSQL               | Available |
+| Scaled            | Several collectors behind a load balancer, one PostgreSQL        | Available |
+| Embedded          | Collector inside the bot process on in-process PostgreSQL (PGlite) | Available |
+| Exporter only     | SDK with a Prometheus or OpenTelemetry exporter, no collector     | Available |
+
+The decisions behind this design are recorded as [architecture decision records](../../contributing/adr/).

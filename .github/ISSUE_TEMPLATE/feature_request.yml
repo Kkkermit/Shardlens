@@ -1,0 +1,33 @@
+name: Feature request
+description: A metric, chart, integration or option you'd like.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Shardlens is privacy-first by design: requests for per-user views, profiles, message content or anything that
+        needs a privileged intent can't be accepted (see the [privacy model](https://kkkermit.github.io/Shardlens/concepts/privacy-model/)).
+        Aggregate questions ("how many", "how fast", "which commands") are very welcome.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What do you want to find out or do?
+      description: The question about your bot you can't answer today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How could Shardlens help?
+      description: A chart, a metric, an option, an integration… Rough ideas are fine.
+  - type: textarea
+    id: data
+    attributes:
+      label: What data would it need?
+      description: Which Discord event or field it would come from, if you know.
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Contributing
+      options:
+        - label: I'd like to help build this

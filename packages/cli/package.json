@@ -1,0 +1,46 @@
+{
+  "name": "shardlens",
+  "version": "0.0.0",
+  "description": "Shardlens CLI: set up a self-hosted collector, generate keys, print a privacy-policy paragraph, check your setup.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kkkermit/Shardlens.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/Kkkermit/Shardlens#readme",
+  "bugs": "https://github.com/Kkkermit/Shardlens/issues",
+  "keywords": [
+    "shardlens",
+    "discord",
+    "discord.js",
+    "analytics",
+    "cli",
+    "self-hosted"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
+  "bin": {
+    "shardlens": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsdown && node scripts/copy-templates.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

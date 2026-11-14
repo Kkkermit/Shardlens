@@ -1,0 +1,12 @@
+[
+  {
+    "name": "@shardlens/core (ESM, minified + gzip)",
+    "path": "packages/core/dist/index.js",
+    "limit": "10 kB"
+  },
+  {
+    "name": "@shardlens/http (ESM, minified + gzip, with core)",
+    "path": "packages/http/dist/index.js",
+    "limit": "12 kB"
+  }
+]

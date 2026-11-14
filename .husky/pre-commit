@@ -1,0 +1,3 @@
+# lint-staged passes every staged file to one command unless given a limit, and Windows refuses a command line
+# longer than about 8,000 characters. With the limit, a large commit is formatted in several smaller runs.
+pnpm exec lint-staged --max-arg-length 4000

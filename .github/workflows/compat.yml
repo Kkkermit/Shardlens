@@ -1,0 +1,40 @@
+# Nightly: the discord.js adapter's tests against the newest discord.js releases, so a breaking change (including
+# v15 on its release day) is caught before users hit it. Also runs by hand and when the adapter changes.
+name: compat
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - packages/discordjs/**
+      - packages/core/**
+
+permissions:
+  contents: read
+
+jobs:
+  discordjs:
+    name: discord.js@${{ matrix.tag }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: [latest, dev]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          # discord.js 15 needs Node 24.17 or later.
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo run build --filter=@shardlens/discordjs^...
+      # Swap in the discord.js under test (this lockfile change is never committed).
+      - run: pnpm --filter @shardlens/discordjs add --save-dev discord.js@${{ matrix.tag }}
+      - run: pnpm --filter @shardlens/discordjs list discord.js
+      - run: pnpm --filter @shardlens/discordjs test

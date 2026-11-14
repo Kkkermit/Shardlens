@@ -1,0 +1,112 @@
+---
+title: Troubleshooting
+description: Fixes for no data, missing salts, 401s from the collector and webhook events being turned off.
+sidebar:
+  order: 3
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Start with `doctor` from your bot's folder. It checks the things below in order:
+
+```sh
+npx shardlens doctor --url https://stats.example.com --key slk_ingest_…
+```
+
+## No data on the dashboard
+
+1. **Is the SDK attached before login?** Call `createShardlens(client, …)` before `client.login()`.
+2. **Is it sending?** Read the bot's own log first: the SDK prints one line starting with `Shardlens:` per problem
+   (it can't reach the collector, the key was rejected, the URL isn't HTTPS). Then check `lens.stats()`: `ready`
+   should be `true`. If it stays `false`, the SDK never got its settings from the collector, which means a wrong URL
+   or a wrong key; `failedFlushes` does not move in that case, because nothing was ever sent. Once `ready` is `true`,
+   `failedFlushes` should not keep growing and `queueDepth` should stay low.
+3. **Is it a dry run?** `dryRun: true` prints events instead of sending them.
+4. **Has anything happened yet?** The Overview shows interactions. Run a command in a server with the bot.
+5. **Is the time range right?** Charts use the time zone in **Settings → General**.
+
+## `401` from the collector
+
+The key was not accepted.
+
+- Use the **ingest** key (`slk_ingest_…`) in your bot. Read keys can't send events.
+- Check for a revoked key under **Settings → API keys**.
+- Check the bot's environment has the full key, with no quotes or whitespace around it.
+
+## `403` from the collector
+
+The batch is for a different application. `SHARDLENS_APP_ID` on the collector has to match the bot's application ID.
+
+## "Salt missing" or events waiting
+
+The SDK hashes user IDs with a salt from the collector's `/v1/config`. Until it has a salt, it holds events for up to 60
+seconds (1,000 events at most) and then drops them, counting the drops. If this keeps happening:
+
+- Check the bot can reach the collector (`doctor` reports **Salt available**).
+- Check the collector's logs for database errors: salts are created by the collector.
+
+## `413` or `503` from the collector
+
+- `413`: a batch was too large. The SDK splits batches automatically; if you see this, lower `maxBatchSize`.
+- `503`: the collector is busy. The SDK waits for `Retry-After` and retries, so no events are lost while the queue has
+  room.
+
+## Webhook events stopped
+
+Discord turns webhook events off when the endpoint keeps failing.
+
+1. Check `DISCORD_PUBLIC_KEY` matches **General Information → Public Key**.
+2. Check `https://stats.example.com/v1/discord/events` is reachable from the internet.
+3. In the Developer Portal, save the endpoint URL again and turn events back on.
+
+## Can't sign in with Discord
+
+- The redirect in the Developer Portal must be exactly `https://stats.example.com/auth/discord/callback`, matching
+  `SHARDLENS_PUBLIC_URL`.
+- Only the application owner, team members and IDs in `SHARDLENS_EXTRA_ADMINS` get in. Others can use the read key.
+
+## Collector won't start
+
+The log names each invalid variable. The usual causes are a short `SHARDLENS_SESSION_SECRET` (32 characters minimum),
+a `SHARDLENS_SETTINGS_KEY` that isn't 32 base64 bytes, or only one of `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET`.
+
+<Aside type="tip">
+  Still stuck? Open a [GitHub discussion](https://github.com/Kkkermit/Shardlens/discussions) with the `doctor` output.
+  Never paste keys, tokens or `.env`.
+</Aside>
+
+## Reading the collector's logs
+
+The collector writes one JSON object per line (`docker compose logs collector`). Every line has a `level` (30 info,
+40 warning, 50 error), a `time` and a `msg`. For a readable view, pipe them through
+[`pino-pretty`](https://github.com/pinojs/pino-pretty): `docker compose logs -f --no-log-prefix collector | npx pino-pretty`.
+
+| Message                               | Level   | What it means                                                                                                             |
+| ------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `Shardlens collector started`         | info    | Startup finished. Lists the database migrations this start applied (`migrationsApplied`, empty when the database was up to date) and which optional features are switched on (Discord sign-in, webhook events, audit key, ClickHouse). |
+| `Server listening at …`               | info    | The address the collector accepts connections on.                                                                         |
+| `shutting down`                       | info    | The collector received `SIGTERM` or `SIGINT` and is finishing what it was doing.                                          |
+| `Demo mode: …`                        | warning | `SHARDLENS_DEMO` is on: the dashboard is open to anyone. For demo data only.                                              |
+| `Live tiles are not shared …`         | warning | PostgreSQL refused `LISTEN`, so with several collectors each one's live tiles show only its own traffic.                   |
+| `this collector is now the job leader` | info   | This instance runs the background jobs (rollups, alerts, retention). Exactly one instance does.                           |
+| `events rejected`                     | warning | A batch was accepted but some events were dropped. `reasons` counts them: `too_old` (older than your raw-data retention, 35 days by default), `in_future` (more than a day ahead), `unknown_salt_period`, `invalid_event`. |
+| `input refused by the database`       | warning | A request carried a value PostgreSQL would not store. It was answered with `400`; nothing was saved from it.              |
+| `clock skew corrected for batch`      | warning | The bot's clock is more than 5 minutes off. Timestamps were corrected; fix the clock (NTP).                               |
+| `Discord sign-in failed`              | warning | The OAuth exchange failed. `reason` names the error, usually a wrong client secret or redirect URL.                       |
+| `Discord sign-in refused: …`          | warning | Someone who is not the application owner, a team member or an extra admin tried to sign in.                               |
+| `live update failed`                  | warning | The live tiles could not read the database. Logged once per open dashboard.                                               |
+| `slow job`                            | info    | A background job took more than 10 seconds. Frequent on a healthy database means it needs more resources.                 |
+| `request failed`                      | error   | A request hit an unexpected error. `reqId` matches the `requestId` in the `500` response the caller received.             |
+| `job failed`                          | error   | A background job threw. `job` names it; it runs again on its next schedule.                                               |
+| `webhook event processing failed`     | error   | A Discord webhook event was acknowledged but could not be stored.                                                         |
+| `leader election failed`              | error   | This instance could not check the job lock. It retries every 30 seconds.                                                  |
+
+Logs never contain keys, tokens, cookies, request bodies or user IDs. Per-request lines ("incoming request") contain
+URLs, so they are only written when `LOG_LEVEL` is `debug` or `trace`. That includes requests the collector turned
+away: a `401` for a wrong key, a `403`, a `429` for a caller over its limit. At the default level those are not logged
+at all, so a bot with a wrong key shows up in the bot's log (`Shardlens: the collector rejected the API key`), not in
+the collector's.
+
+In your bot, the SDK logs through `console` (or the `logger` you pass) with a `Shardlens:` prefix, once per problem
+rather than once per event, and `lens.on('error', …)` and `lens.stats()` expose everything it counted.
+

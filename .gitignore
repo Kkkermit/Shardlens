@@ -1,0 +1,37 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+.turbo/
+*.tsbuildinfo
+*.tgz
+# API Extractor working files (the reports in etc/ are committed)
+temp/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+.dev.vars
+.wrangler/
+
+# Local data from embedded mode and the disk spool
+shardlens-data/
+shardlens-spool/
+
+# Tests
+test-results/
+playwright-report/
+
+# Logs, editors, operating systems, agent tooling
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.claude/
+
+# The private build specification the project was first written from
+SHARDLENS_BUILD_SPEC.md

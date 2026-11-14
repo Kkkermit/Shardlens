@@ -1,0 +1,41 @@
+---
+title: Render
+description: Deploy the collector and PostgreSQL on Render with the Blueprint in the repository.
+sidebar:
+  order: 3
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+The repository has a Render Blueprint (`deploy/render.yaml`) that creates the collector as a Docker web service and a
+Render PostgreSQL 17 database, wires `DATABASE_URL`, and generates the session secret and settings key.
+
+<Steps>
+
+1. **Create the Blueprint**
+
+   In Render, choose **New → Blueprint**, connect your fork of Shardlens and set **Blueprint path** to
+   `deploy/render.yaml`. Render shows the `shardlens` service and the `shardlens-db` database.
+
+2. **Fill in the variables Render asks for**
+
+   | Variable                 | Value                                                  |
+   | ------------------------ | ------------------------------------------------------ |
+   | `SHARDLENS_PUBLIC_URL`   | Your service URL, for example `https://shardlens.onrender.com` |
+   | `SHARDLENS_APP_ID`       | Your Discord application ID                           |
+   | `SHARDLENS_INGEST_KEY`   | `npx shardlens keys --scope ingest`                    |
+   | `SHARDLENS_READ_KEY`     | `npx shardlens keys --scope read`                      |
+
+   Leave `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET` and `DISCORD_PUBLIC_KEY` empty unless you want Discord sign-in
+   or [webhook events](../../guides/webhook-events/). `SHARDLENS_SESSION_SECRET` and `SHARDLENS_SETTINGS_KEY` are
+   generated for you; copy the settings key somewhere safe, because encrypted settings can't be read without it.
+
+3. **Apply**. Render builds the image, the collector applies its migrations, and the health check on `/readyz` turns
+   green.
+
+</Steps>
+
+<Aside type="caution">
+  Free Render services sleep when idle, and the SDK then buffers events until the collector wakes. Use a paid instance
+  for a bot in production.
+</Aside>

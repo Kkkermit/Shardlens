@@ -1,0 +1,52 @@
+---
+title: HTTP bots
+description: Record interactions in bots that use an Interactions Endpoint URL, on Cloudflare Workers, Deno, Bun or Node.
+sidebar:
+  order: 4
+---
+
+import { Aside, Code, TabItem, Tabs } from '@astrojs/starlight/components';
+import worker from '../../../../snippets/http-worker.ts?raw';
+
+Bots that receive interactions over HTTP (an **Interactions Endpoint URL**) instead of the gateway use
+`@shardlens/http`. It runs on Cloudflare Workers, Deno, Bun and Node (for example with `@discordjs/core`), using
+Web-standard APIs only.
+
+<Tabs syncKey="pkg">
+  <TabItem label="pnpm">`pnpm add @shardlens/http`</TabItem>
+  <TabItem label="npm">`npm install @shardlens/http`</TabItem>
+</Tabs>
+
+Wrap the function that answers an interaction:
+
+<Code code={worker} lang="ts" title="worker.ts" />
+
+## What it records
+
+For every interaction except PING, exactly the same fields as the [discord.js adapter](../../concepts/data-collected/):
+command, subcommand, options used, context, channel type, install type, locale, member tier, premium, the response type, and how long
+your answer took against Discord's 3-second deadline. The user ID is hashed before anything is sent. Buttons and
+selects are attributed to the command that created their message.
+
+- **Errors** thrown by your handler are recorded by class (never the message) and re-thrown unchanged.
+- **Slow answers**: a response returned more than 3 seconds after the interaction was created is recorded as a
+  timeout, because Discord will already have shown "The application did not respond".
+- **Custom events**: `lens.track(name, props, { userId, guildId }, ctx)` works as in the discord.js adapter.
+
+## Sending events on serverless runtimes
+
+Serverless runtimes can stop as soon as the response is sent. If any argument you pass to the wrapped handler has a
+`waitUntil` method (a Workers `ExecutionContext`, for example), Shardlens hashes and sends that request's events
+through it, after your response. Without `waitUntil` (on a long-running Node server), events are batched and sent in
+the background, as in the discord.js adapter.
+
+Creating the Shardlens instance is free: nothing runs (no timers, no network) until the first interaction, so it is safe
+on runtimes that forbid I/O at startup.
+
+<Aside type="note">
+  HTTP bots have no gateway, so there are no shard, server-lifecycle or gateway metrics. Server and user installs can
+  come from [webhook events](../webhook-events/) instead.
+</Aside>
+
+A complete Worker, with signature verification, is in
+[`examples/cloudflare-worker`](https://github.com/Kkkermit/Shardlens/tree/main/examples/cloudflare-worker).

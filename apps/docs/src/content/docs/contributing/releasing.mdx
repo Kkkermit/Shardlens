@@ -1,0 +1,31 @@
+---
+title: Releasing
+description: Changesets, versioning, npm provenance and container images.
+sidebar:
+  order: 3
+---
+
+## Changesets
+
+Every change to a published package needs a changeset describing it for the changelog:
+
+```sh
+pnpm changeset
+```
+
+Pick the packages, the kind of bump (patch, minor or major) and write one or two sentences for users. Commit messages
+follow [Conventional Commits](https://www.conventionalcommits.org).
+
+## How a release happens
+
+1. Merged changesets collect in a **Version Packages** pull request opened by the release workflow.
+2. Merging that pull request publishes the packages to npm with
+   [provenance](https://docs.npmjs.com/generating-provenance-statements), using npm trusted publishing (no npm token
+   is stored in the repository).
+3. The collector image is built, signed and pushed to the GitHub Container Registry with full, minor and major version
+   tags.
+
+## Before 1.0
+
+Until 1.0, minor versions may contain breaking changes, which the changelog calls out. The wire format already follows
+its own versioning rule: additive changes only within a major version.

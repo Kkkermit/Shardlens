@@ -1,0 +1,18 @@
+---
+// A Discord Developer Policy rule and how Shardlens complies with it.
+import { Aside } from '@astrojs/starlight/components';
+import { POLICY_RULES } from '../data/policy';
+
+interface Props {
+  n: number;
+}
+const rule = POLICY_RULES[Astro.props.n];
+if (!rule) throw new Error(`No policy rule ${Astro.props.n} in src/data/policy.ts`);
+---
+
+<Aside type="note" title={`Developer Policy, rule ${Astro.props.n}`}>
+  <p>{rule.requirement}</p>
+  <p>
+    <strong>Shardlens:</strong> {rule.compliance}
+  </p>
+</Aside>

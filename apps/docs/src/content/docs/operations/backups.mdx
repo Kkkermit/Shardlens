@@ -1,0 +1,69 @@
+---
+title: Backups
+description: Backing up and restoring the collector's PostgreSQL database.
+sidebar:
+  order: 2
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Everything Shardlens stores is in PostgreSQL. Back it up with `pg_dump`, keep `.env` safe separately, and test a
+restore now and then.
+
+## Daily backup
+
+From the folder with `docker-compose.yml`:
+
+```sh
+docker compose exec -T postgres pg_dump -U shardlens -Fc shardlens > "shardlens-$(date +%F).dump"
+```
+
+Run it from cron, for example every night at 03:00:
+
+```sh
+0 3 * * * cd /opt/shardlens && docker compose exec -T postgres pg_dump -U shardlens -Fc shardlens > backups/shardlens-$(date +\%F).dump
+```
+
+Copy the dumps off the server and encrypt them; a backup holds hashed user IDs and, in audit mode, encrypted
+identities.
+
+<Aside type="caution">
+  A backup without `.env` is only half a backup. Alert webhooks need `SHARDLENS_SETTINGS_KEY` and audit-mode data needs
+  `SHARDLENS_AUDIT_KEY` to be readable after a restore.
+</Aside>
+
+## Restore
+
+<Steps>
+
+1. Stop the collector so nothing writes during the restore:
+
+   ```sh
+   docker compose stop collector
+   ```
+
+2. Restore into a clean database:
+
+   ```sh
+   docker compose exec -T postgres dropdb -U shardlens shardlens
+   docker compose exec -T postgres createdb -U shardlens shardlens
+   docker compose exec -T postgres pg_restore -U shardlens -d shardlens < shardlens-2026-11-13.dump
+   ```
+
+3. Start the collector with the same `.env`:
+
+   ```sh
+   docker compose start collector
+   ```
+
+</Steps>
+
+## Test your restores
+
+Once a month, restore the latest dump into a scratch PostgreSQL container and open the dashboard against it. A backup
+you have never restored is a hope, not a backup.
+
+## Privacy and backups
+
+Erasure and salt destruction delete data from the live database, not from old backups. Keep backups only as long as
+you need them (for example 30 days), so erased data and destroyed salts age out of them too.

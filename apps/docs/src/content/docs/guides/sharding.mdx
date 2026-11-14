@@ -1,0 +1,58 @@
+---
+title: Sharding
+description: Internal sharding, ShardingManager and discord-hybrid-sharding.
+sidebar:
+  order: 3
+---
+
+import { Aside, Code } from '@astrojs/starlight/components';
+import internal from '../../../../snippets/sharding-internal.ts?raw';
+import hybrid from '../../../../snippets/sharding-hybrid.ts?raw';
+import manager from '../../../../snippets/sharding-manager.ts?raw';
+
+Shardlens works with every common sharding setup without extra configuration. Create one Shardlens instance per
+discord.js `Client`, in the process where that client runs.
+
+| Setup                   | Where `createShardlens` goes                     | How events are tagged                         |
+| ----------------------- | ------------------------------------------------ | --------------------------------------------- |
+| Internal sharding       | Your bot file, once                              | Each event carries its guild's shard          |
+| `ShardingManager`       | The shard file (not the manager), once per shard | `client.shard.ids`                            |
+| discord-hybrid-sharding | The cluster file, once per cluster               | Cluster ID and its shard list                 |
+| Several machines        | Each process                                     | `source.instance` tells hosts apart           |
+
+## Internal sharding
+
+<Code code={internal} lang="ts" title="bot.ts" />
+
+## ShardingManager
+
+The manager only spawns processes. Put Shardlens in the file each shard runs, exactly as in the
+[quick start](../../getting-started/quick-start/):
+
+<Code code={manager} lang="ts" title="manager.ts" />
+
+A complete example is in [`examples/sharded-bot`](https://github.com/Kkkermit/Shardlens/tree/main/examples/sharded-bot).
+
+## discord-hybrid-sharding
+
+Each cluster runs a `Client` with several shards. Attach Shardlens in the cluster file, after setting
+`client.cluster`: Shardlens reads the cluster ID and its shard list from it.
+
+<Code code={hybrid} lang="ts" title="bot.ts" />
+
+The complete example, with the cluster manager, is in
+[`examples/hybrid-sharding`](https://github.com/Kkkermit/Shardlens/tree/main/examples/hybrid-sharding).
+
+## What happens across shards
+
+- **Totals** (servers, members) add up the latest value from every shard. A shard that hasn't reported for 2 minutes
+  is shown as stale, not as zero.
+- **App-wide work** (application info, the registered command list, the gateway session budget) runs only in the
+  process that owns shard 0, so it isn't repeated per shard.
+- **No `broadcastEval`**: Shardlens never sends code between shards.
+- **Guild snapshots** at startup are taken per shard, so joins and removals while the bot was offline are found on
+  every shard.
+
+<Aside type="note">
+  Use the same ingest key in every process. The collector tells processes apart by host and shard.
+</Aside>

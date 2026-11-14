@@ -1,0 +1,25 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": ["tests/load/*.js"],
+      "ignoreDependencies": ["k6"]
+    },
+    "packages/*": {
+      "entry": ["scripts/*.mjs", "bench/*.mjs"]
+    },
+    "apps/collector": {
+      "entry": ["src/cli/*.ts", "scripts/*.mjs"],
+      "ignoreDependencies": ["@shardlens/dashboard"]
+    },
+    "apps/dashboard": {
+      "entry": ["e2e/**/*.ts"]
+    },
+    "apps/docs": {
+      "entry": ["scripts/*.mjs", "snippets/*.ts", "src/content/**/*.mdx"]
+    },
+    "examples/*": {
+      "entry": ["src/*.ts"]
+    }
+  }
+}

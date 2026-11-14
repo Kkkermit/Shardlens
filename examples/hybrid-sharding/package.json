@@ -1,0 +1,21 @@
+{
+  "name": "hybrid-sharding-example",
+  "version": "0.0.0",
+  "private": true,
+  "description": "discord-hybrid-sharding clusters with Shardlens running in each cluster.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/manager.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@shardlens/discordjs": "workspace:*",
+    "discord-hybrid-sharding": "^3.0.1",
+    "discord.js": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:"
+  }
+}

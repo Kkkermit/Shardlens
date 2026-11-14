@@ -1,0 +1,78 @@
+---
+title: Privacy model
+description: Salted hashing, salt destruction, the two data modes and how Shardlens maps to Discord's Developer Policy.
+sidebar:
+  order: 4
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import PolicyRule from '../../../components/PolicyRule.astro';
+
+Shardlens counts **how many** people use your bot, not **who**. In privacy mode (the default), user IDs never leave
+your bot process.
+
+## Hashing in your bot
+
+When an interaction arrives, the SDK replaces the user ID with:
+
+```text
+h1:2026-11:3f9a1c…   (version, salt period, 16 bytes of HMAC-SHA-256 as hex)
+```
+
+- **Keyed**: the hash is an HMAC with a secret salt from the collector. Without the salt, nobody can check whether a
+  hash belongs to a given user ID, which a plain hash of a Discord ID would allow.
+- **Per period**: each salt period (month by default; week or day are stricter) has its own salt, so the same user has
+  unrelated hashes in different periods.
+- **Truncated** to 16 bytes, enough to count without collisions.
+
+## Salts are destroyed
+
+The collector creates a salt for each period and serves it to the SDK. **Seven days after a period ends, its salt is
+destroyed**: the secret is deleted and that period's unique-user table is dropped. From then on, nobody (including you)
+can link those hashes back to a user, or link two periods together.
+
+| Salt period | Unique users you can count             | Strictness |
+| ----------- | -------------------------------------- | ---------- |
+| Month       | Daily, weekly and monthly               | Default    |
+| Week        | Daily and weekly                        | Stricter   |
+| Day         | Daily only                              | Strictest  |
+
+Change the period in **Settings → User identity**.
+
+## What else stays out
+
+- Message content is never collected, and no privileged intents are needed.
+- Usernames, avatars and display names are never collected in privacy mode.
+- Option values are recorded only for options you allow-list, and secrets are redacted before anything is sent.
+- Bot tokens, interaction tokens, REST paths and request headers are never sent or logged. REST calls are recorded by
+  bucketed route only (`/channels/:id/messages`).
+
+## Audit mode
+
+[Audit mode](../../guides/audit-mode/) adds who ran each interaction, for support and abuse handling. It has to be
+switched on in both the SDK and the collector, is encrypted at rest, kept for at most 90 days, and every access is
+logged.
+
+## Opt-out and erasure
+
+Users can opt out or ask for erasure with the [`/privacy` command](../../guides/privacy-command/). Opted-out users'
+events are dropped inside your bot. Erasure deletes their raw rows by hash across every live salt period.
+
+## Discord Developer Policy
+
+<PolicyRule n={15} />
+<PolicyRule n={16} />
+<PolicyRule n={19} />
+<PolicyRule n={21} />
+
+Rules 17 and 18 (no data brokers, no selling) hold because Shardlens is self-hosted and sends nothing to anyone but
+your collector. Shardlens has no telemetry of its own.
+
+## UK and EU GDPR
+
+Discord user IDs are personal data, and pseudonymised data such as salted hashes is still personal data while the salt
+exists. As the bot owner you are the controller: publish a privacy policy (`npx shardlens privacy` prints a paragraph
+matching your setup) and record your lawful basis, usually legitimate interests for usage analytics. Shardlens helps
+with data minimisation, retention limits, opt-out and erasure.
+
+<Aside type="caution">This is not legal advice.</Aside>

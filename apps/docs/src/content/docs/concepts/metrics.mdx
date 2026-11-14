@@ -1,0 +1,21 @@
+---
+title: Metrics
+description: Every metric Shardlens computes, generated from the metric registry.
+sidebar:
+  order: 3
+---
+
+import MetricsTable from '../../../components/MetricsTable.astro';
+
+This page is **generated from the metric registry** in `@shardlens/schema`, the same list the collector's rollups use.
+
+- **Counters** are summed into minute, hour and day rollups.
+- **Histograms** use 40 fixed buckets on a logarithmic scale from 1 ms to 60 s, so percentiles can be merged across
+  shards and time ranges. A percentile is reported as the upper edge of the bucket it falls in: up to a third above
+  the true value, never below it. Anything slower than 60 s lands in the last bucket and reads as about 80 s.
+- **Gauges** are reported by every shard and process. Totals (`shard.guilds`, `memory.*`, `cache.*`) are added up
+  across them; latencies (`shard.ping_ms`, `eventloop.p99_ms`) are averaged, with the worst kept as the maximum.
+
+<MetricsTable />
+
+Custom events from `track()` are counted as `custom.<name>`, and Discord webhook events as `webhook.<type>`.

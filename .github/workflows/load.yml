@@ -1,0 +1,49 @@
+# Collector ingest load test (target: 5,000 events/s per instance on 1 vCPU). Builds the collector image, runs
+# it limited to one CPU next to PostgreSQL, and drives it with k6 (tests/load/ingest.js). The k6 thresholds fail the
+# job if batches are refused, slow (p95 over 1 s) or can't be sent at the target rate.
+name: load
+
+on:
+  workflow_dispatch:
+    inputs:
+      rate:
+        description: Batches of 500 events per second
+        default: '10'
+  schedule:
+    - cron: '41 4 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: docker build -f apps/collector/Dockerfile -t shardlens-collector:load .
+      - name: start PostgreSQL and the collector (1 vCPU)
+        run: |
+          docker network create load
+          docker run -d --name pg --network load -e POSTGRES_USER=shardlens -e POSTGRES_PASSWORD=load \
+            -e POSTGRES_DB=shardlens postgres:17-alpine
+          until docker exec pg pg_isready -U shardlens; do sleep 1; done
+          key="slk_ingest_$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')"
+          echo "KEY=$key" >> "$GITHUB_ENV"
+          docker run -d --name collector --network load --cpus=1 -p 8080:8080 \
+            -e DATABASE_URL=postgres://shardlens:load@pg:5432/shardlens \
+            -e SHARDLENS_PUBLIC_URL=http://localhost:8080 \
+            -e SHARDLENS_APP_ID=1234567890123456789 \
+            -e SHARDLENS_SESSION_SECRET="$(openssl rand -base64 48)" \
+            -e SHARDLENS_SETTINGS_KEY="$(openssl rand -base64 32)" \
+            -e SHARDLENS_INGEST_KEY="$key" \
+            -e LOG_LEVEL=warn \
+            shardlens-collector:load
+          until curl -fs http://localhost:8080/readyz; do sleep 1; done
+      - name: k6
+        run: |
+          docker run --rm --network load -v "$PWD/tests/load:/scripts:ro" grafana/k6:1.8.3 run \
+            -e URL=http://collector:8080 -e KEY="$KEY" -e RATE="${{ inputs.rate || '10' }}" /scripts/ingest.js
+      - if: always()
+        run: docker stats --no-stream collector pg; docker logs collector | tail -50

@@ -1,0 +1,69 @@
+---
+title: Installation
+description: Requirements and installing the Shardlens SDK.
+sidebar:
+  order: 3
+---
+
+import { Aside, TabItem, Tabs } from '@astrojs/starlight/components';
+
+## Requirements
+
+| What       | Version                                                           |
+| ---------- | ----------------------------------------------------------------- |
+| Node.js    | 22.12 or later (24 LTS recommended)                               |
+| discord.js | 14 and 15                                                         |
+| Intents    | `Guilds` only. No privileged intents.                             |
+| Collector  | Any server with Docker, or Railway or Render. PostgreSQL 16 or 17 |
+
+The SDK ships ESM and CommonJS builds with type definitions, so it works with `import` and `require`, TypeScript and
+plain JavaScript.
+
+## Install
+
+<Tabs syncKey="pkg">
+  <TabItem label="pnpm">
+    ```sh
+    pnpm add @shardlens/discordjs
+    ```
+  </TabItem>
+  <TabItem label="npm">
+    ```sh
+    npm install @shardlens/discordjs
+    ```
+  </TabItem>
+  <TabItem label="yarn">
+    ```sh
+    yarn add @shardlens/discordjs
+    ```
+  </TabItem>
+  <TabItem label="bun">
+    ```sh
+    bun add @shardlens/discordjs
+    ```
+  </TabItem>
+</Tabs>
+
+`discord.js` is a peer dependency: the SDK uses the copy your bot already has.
+
+## Packages
+
+| Package                | What it is                                                                                    |
+| ---------------------- | --------------------------------------------------------------------------------------------- |
+| `@shardlens/discordjs` | The discord.js adapter. This is the one you install.                                          |
+| `@shardlens/core`      | Zero-dependency core used by the adapter: queue, salts, hashing, batching, retries, redaction. |
+| `@shardlens/schema`    | The wire format (zod), JSON Schema, and the metric and data-collected registers.             |
+| `shardlens`            | The [CLI](../../reference/cli/): `init`, `keys`, `privacy`, `doctor`.                          |
+
+## Check your setup
+
+```sh
+npx shardlens doctor --url https://stats.example.com --key slk_ingest_…
+```
+
+`doctor` checks your Node and discord.js versions, that the collector is reachable over HTTPS and that it accepts your
+key. Run it from your bot's folder so it finds the right discord.js.
+
+<Aside type="note">
+  Shardlens uses public discord.js APIs only (no monkey-patching), so discord.js updates don't break it.
+</Aside>

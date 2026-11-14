@@ -1,0 +1,53 @@
+---
+title: Discord limits
+description: The deadlines and rate limits Shardlens measures, and why they matter.
+sidebar:
+  order: 5
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Most bot outages users notice come from a few Discord limits. Shardlens measures each one.
+
+| Limit                         | Value                                                         | Where to see it                 |
+| ----------------------------- | ------------------------------------------------------------- | ------------------------------- |
+| First interaction response    | 3 seconds                                                     | Reliability → response time     |
+| Interaction token lifetime    | 15 minutes for follow-ups                                     | Response timing stops at 15 min |
+| Global REST limit             | 50 requests per second per bot (interaction endpoints exempt) | Reliability → REST              |
+| Invalid requests              | 10,000 per 10 minutes per IP                                   | Reliability → invalid-request budget |
+| Gateway sessions              | A daily budget of identifies, shown by `GET /gateway/bot`      | Reliability → identify budget   |
+| Webhook events                | `204` within 3 seconds; retried for up to 10 minutes          | Growth → user installs          |
+
+## The 3-second deadline
+
+Discord shows "The application did not respond" if an interaction gets no first response (reply, defer, update, modal
+or autocomplete result) within 3 seconds. Shardlens times each interaction from Discord's timestamp to the first
+response and reports p50, p95 and p99 per command, and the share that missed the deadline.
+
+If a command is slow, defer first (`interaction.deferReply()`) and do the work afterwards. The deadline only applies to
+the first response.
+
+## The invalid-request budget
+
+Every `401`, `403` and `429` response counts towards a limit of 10,000 per 10 minutes per IP address. Going over it gets
+the IP temporarily banned by Cloudflare, and then **every** request fails, not just the bad ones. `429`s with
+`X-RateLimit-Scope: shared` don't count.
+
+Shardlens shows how much of the budget the last 10 minutes used. An [alert](../../guides/alerts/) on
+`invalid_requests_pct` above 50% gives you time to react.
+
+<Aside type="tip">
+  The usual causes are retrying after `403 Missing Permissions` and editing messages in deleted channels. The REST
+  table on the Reliability page shows which route the errors come from.
+</Aside>
+
+## Rate limits
+
+discord.js queues requests to respect rate limits, so `429`s are rare unless several processes share a token or a
+shared resource is busy. Shardlens records each rate limit by scope (`user`, `global` or `shared`) and route.
+
+## What Discord doesn't tell bots
+
+Some numbers aren't available to any bot: message views, why a server removed the bot, live member counts without
+privileged intents, and the country a user is in (`locale` is their app language). Shardlens shows what is knowable
+and labels approximations.

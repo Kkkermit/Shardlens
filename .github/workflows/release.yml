@@ -1,0 +1,63 @@
+# Changesets version PR + npm trusted publishing (OIDC, provenance). No npm token is ever stored.
+# Switched off until the repository variable RELEASE_ENABLED is "true" (docs/adr/0008-release-gating.md).
+name: release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: vars.RELEASE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      collector: ${{ steps.collector.outputs.version }}
+    environment: npm
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write # npm trusted publishing (OIDC)
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          # No registry-url: it would inject NODE_AUTH_TOKEN, which overrides the OIDC exchange.
+      - run: npm install -g npm@latest # trusted publishing needs npm >= 11.5.1
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - id: changesets
+        uses: changesets/action@v2.1.2
+        with:
+          publish: pnpm release
+          version: pnpm changeset version
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # The collector goes to npm too (embedded mode); its container image is published below.
+      - id: collector
+        if: steps.changesets.outputs.published == 'true'
+        env:
+          PUBLISHED: ${{ steps.changesets.outputs.publishedPackages }}
+        run: |
+          version=$(node -e 'const p = JSON.parse(process.env.PUBLISHED).find((p) => p.name === "@shardlens/collector"); process.stdout.write(p ? p.version : "")')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  image:
+    needs: release
+    if: needs.release.outputs.collector != ''
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    uses: ./.github/workflows/image.yml
+    with:
+      version: ${{ needs.release.outputs.collector }}

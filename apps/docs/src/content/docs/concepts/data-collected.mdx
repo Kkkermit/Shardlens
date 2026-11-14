@@ -1,0 +1,31 @@
+---
+title: Data collected
+description: Every field Shardlens collects, what it is for, which mode it belongs to and how long it is kept.
+sidebar:
+  order: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import DataCollectedTable from '../../../components/DataCollectedTable.astro';
+
+This page is **generated from the wire format** in `@shardlens/schema`. A test fails the build if a field can be sent
+without being listed here, so the list is complete for the version these docs were built from.
+
+- **Mode**: "Both" fields are collected in privacy mode and audit mode. "Audit only" fields are sent only when both the
+  SDK and the collector are in [audit mode](../../guides/audit-mode/).
+- **Personal data**: "Pseudonymous" means a salted hash that can't be reversed once its salt is destroyed. It is still
+  personal data under UK and EU GDPR while the salt exists.
+- **Kept**: how long the collector stores it. Raw retention is configurable from 7 to 90 days; aggregate counts are
+  kept after raw rows expire.
+
+<Aside type="tip">
+  Shardlens never collects message content, presence, member lists or anything that needs a privileged intent.
+</Aside>
+
+## Privacy mode
+
+<DataCollectedTable mode="privacy" />
+
+## Audit mode only
+
+<DataCollectedTable mode="audit" />

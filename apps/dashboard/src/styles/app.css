@@ -1,0 +1,573 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--text-primary);
+  font: 14px / 1.5 var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--link);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  line-height: 1.25;
+}
+h1 {
+  font-size: 22px;
+  font-weight: 650;
+}
+h2 {
+  font-size: 15px;
+  font-weight: 600;
+}
+h3 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Layout */
+.shell {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  min-height: 100vh;
+}
+.nav {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  padding: 20px 12px;
+  border-right: 1px solid var(--border);
+  background: var(--surface-1);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 10px 18px;
+  font-weight: 650;
+  font-size: 16px;
+  color: var(--text-primary);
+}
+.brand img {
+  width: 26px;
+  height: 26px;
+}
+.nav a {
+  display: block;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.nav a:hover {
+  background: var(--surface-2);
+  text-decoration: none;
+}
+.nav a[data-status='active'] {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+.nav .spacer {
+  flex: 1;
+}
+.nav button {
+  justify-content: flex-start;
+}
+.main {
+  padding: 24px 28px 48px;
+  max-width: 1400px;
+  width: 100%;
+  min-width: 0;
+}
+.page-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.page-head p {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+}
+.grid {
+  display: grid;
+  gap: 16px;
+}
+.grid.tiles {
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+.grid.two {
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+}
+.grid.three {
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+}
+.stack {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+}
+
+@media (max-width: 860px) {
+  /* minmax(0, …), not 1fr: a wide table must scroll inside its panel instead of widening the page. */
+  .shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .nav {
+    position: static;
+    height: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .nav .spacer {
+    display: none;
+  }
+  .main {
+    padding: 16px;
+  }
+  .grid.two,
+  .grid.three {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Panels and tiles */
+.panel {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  min-width: 0;
+}
+.panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.panel-head p {
+  margin: 2px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.tile {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+.tile .label {
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.tile .value {
+  font-size: 26px;
+  font-weight: 650;
+  margin-top: 4px;
+  letter-spacing: -0.01em;
+}
+.tile .sub {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+.live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--good);
+  margin-right: 6px;
+  vertical-align: 1px;
+}
+.live-dot.stale {
+  background: var(--text-muted);
+}
+
+/* Controls */
+button,
+.button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-weight: 500;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+button:hover {
+  background: var(--surface-2);
+}
+button.primary,
+.button.primary {
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
+  color: var(--accent-ink);
+}
+button.ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-secondary);
+}
+button[aria-pressed='true'] {
+  background: var(--surface-2);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+input,
+select {
+  /* A select is as wide as its longest option: let it shrink instead of widening the page on a phone. */
+  max-width: 100%;
+  min-width: 0;
+  font: inherit;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+  color: var(--text-primary);
+}
+.segmented {
+  display: inline-flex;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.segmented button {
+  border: 0;
+  border-radius: 0;
+}
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.filters label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--text-secondary);
+}
+
+/* Tables */
+.table-wrap {
+  /* Positioned, so visually hidden (absolutely positioned) header text is clipped here and can't widen the page. */
+  position: relative;
+  overflow-x: auto;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+caption {
+  text-align: left;
+  color: var(--text-muted);
+  padding-bottom: 6px;
+}
+th,
+td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--grid);
+  text-align: left;
+  vertical-align: middle;
+}
+th {
+  color: var(--text-secondary);
+  font-weight: 600;
+  white-space: nowrap;
+}
+th button {
+  border: 0;
+  background: none;
+  padding: 0;
+  font-weight: 600;
+  color: inherit;
+}
+td.num,
+th.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+tr.clickable {
+  cursor: pointer;
+}
+tr.clickable:hover td {
+  background: var(--surface-2);
+}
+
+/* Charts */
+.chart {
+  position: relative;
+  width: 100%;
+}
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+.chart-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  display: inline-block;
+}
+.chart-tooltip {
+  position: absolute;
+  pointer-events: none;
+  z-index: 5;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  padding: 8px 10px;
+  font-size: 12px;
+  min-width: 140px;
+}
+.chart-tooltip .row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.chart-tooltip .t {
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.u-legend {
+  display: none;
+}
+
+.bars {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.bars li {
+  display: grid;
+  grid-template-columns: minmax(80px, 38%) 1fr auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+.bars .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+.bars .track {
+  height: 10px;
+  border-radius: 0 4px 4px 0;
+  background: transparent;
+}
+.bars .fill {
+  height: 100%;
+  min-width: 2px;
+  border-radius: 0 4px 4px 0;
+  background: var(--series-1);
+}
+.bars .v {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  min-width: 56px;
+  text-align: right;
+}
+
+.heatmap {
+  display: grid;
+  grid-template-columns: 36px repeat(24, minmax(10px, 1fr));
+  gap: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.heatmap .cell {
+  aspect-ratio: 1;
+  border-radius: 3px;
+  min-height: 12px;
+}
+.heat-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.heat-legend .cell {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+}
+.heatmap .rowlabel {
+  align-self: center;
+}
+.heatmap .collabel {
+  text-align: center;
+}
+
+/* Misc */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  background: var(--surface-2);
+}
+.badge.good {
+  color: var(--good-text);
+}
+.badge.bad {
+  color: var(--critical-text);
+}
+.delta-up {
+  color: var(--good-text);
+}
+.delta-down {
+  color: var(--critical-text);
+}
+.muted {
+  color: var(--text-muted);
+}
+.guild {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.guild img,
+.guild .initials {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  flex: none;
+}
+.guild .initials {
+  display: inline-grid;
+  place-items: center;
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 700;
+}
+.empty {
+  padding: 28px 16px;
+  text-align: center;
+  color: var(--text-secondary);
+}
+.empty code,
+code {
+  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+  background: var(--surface-2);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.checklist li {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.notice {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warning);
+  background: var(--surface-1);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin-bottom: 16px;
+}
+.login {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+.login .panel {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 14px;
+  padding: 28px;
+}
+.dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  margin: 0;
+}
+.dl dt {
+  color: var(--text-secondary);
+}
+.dl dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}

@@ -1,0 +1,47 @@
+---
+title: Shardlens
+description: Self-hosted, privacy-first analytics and health monitoring for discord.js bots.
+template: splash
+hero:
+  tagline: Product analytics and bot health for discord.js, self-hosted in one command. No privileged intents. User IDs never leave your bot.
+  image:
+    file: ../../assets/logo.svg
+  actions:
+    - text: Quick start
+      link: getting-started/quick-start/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/Kkkermit/Shardlens
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import { Image } from 'astro:assets';
+import overview from '../../assets/overview.png';
+
+<CardGrid stagger>
+  <Card title="Three lines in your bot" icon="rocket">
+    `createShardlens(client, { endpoint, apiKey })`. Works with the `Guilds` intent alone, on discord.js 14 and 15.
+  </Card>
+  <Card title="Private by construction" icon="approve-check">
+    User IDs are hashed inside your bot with a salt that rotates and is then destroyed. Message content is never
+    collected.
+  </Card>
+  <Card title="Bot health nobody else shows" icon="warning">
+    Response times against the 3-second deadline, REST latency by route, 429s, the invalid-request budget and shard
+    health.
+  </Card>
+  <Card title="Yours, self-hosted" icon="seti:docker">
+    `docker compose up` gives you the collector, PostgreSQL and the dashboard behind HTTPS. MIT-licensed.
+  </Card>
+</CardGrid>
+
+<Image
+  src={overview}
+  alt="The Shardlens overview page with fictional demo data: live tiles, servers, unique users and runs over 30 days"
+  loading="eager"
+/>
+
+<LinkCard title="Quick start" description="Run the collector, add three lines to your bot, open the dashboard." href="getting-started/quick-start/" />
+<LinkCard title="What is collected" description="Every field, generated from the wire format, with its purpose and retention." href="concepts/data-collected/" />

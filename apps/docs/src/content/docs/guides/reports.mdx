@@ -1,0 +1,75 @@
+---
+title: Reports in Discord
+description: A daily or weekly summary of your bot's numbers, posted to a Discord channel of your choice.
+sidebar:
+  order: 8.5
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+A report is a short summary Shardlens posts to a Discord channel on a schedule, so your team sees the numbers without
+opening a dashboard. It goes to whichever channel you like, through that channel's webhook.
+
+## What a report says
+
+```text
+📊 Daily report · Ticket Bot
+Wed 12 Nov (Europe/London)
+
+Commands run: 12,431 (▲ 8.2% on the day before)
+Unique users: 3,204 (412 new)
+Failed: 0.4% · Missed the 3-second deadline: 0.1% · p95 response: 412 ms
+Servers: 1,204 (+12 joined, −3 left)
+
+Top commands
+1. /ticket · 4,210
+2. /help · 2,100
+3. /close · 1,870
+
+Open in Shardlens
+```
+
+A weekly report covers the seven days before the day it is sent, and shows the average number of unique users a day.
+Reports contain **counts only**. No user is ever named in one, in any mode.
+
+## Set one up
+
+<Steps>
+
+1. **Create a webhook in the channel you want**
+
+   In Discord: open the channel's settings, then **Integrations → Webhooks → New Webhook → Copy Webhook URL**. The
+   channel you create it in is the channel reports arrive in.
+
+2. **Create the report**
+
+   In the Shardlens dashboard, open **Reports** (you need to be signed in with Discord as the app owner or a team
+   member). Give it a name, choose **Daily** or **Weekly**, the hour, and paste the webhook URL.
+
+3. **Try it**
+
+   Press **Send now**. The report for the last finished day or week appears in your channel straight away.
+
+</Steps>
+
+Times are in the time zone from **Settings → General**. You can have up to 10 reports, so different channels can get
+different schedules.
+
+## Good to know
+
+- **Discord webhooks only.** The URL must be `https://discord.com/api/webhooks/…` (`discordapp.com`,
+  `canary.discord.com` and `ptb.discord.com` work too). Anything else is refused, so the collector can't be pointed at
+  other systems.
+- **Unique users are counted per UTC day.** In another time zone, a daily report shows the UTC day that overlaps your
+  day the most.
+- **From the API.** `POST /v1/reports` takes the same fields as the form. `hour` is 0 to 23 in your time zone, and
+  `weekday` is 1 for Monday to 7 for Sunday.
+- **Stored encrypted.** The webhook URL is encrypted with `SHARDLENS_SETTINGS_KEY` and only ever shown masked.
+- **One attempt per period.** If Discord refuses a report (a deleted webhook, for example), the reason is shown in
+  the **Last sent** column and the report is tried again at its next scheduled time, not every few minutes.
+- **If the collector was down** at the scheduled hour, the report is sent as soon as it is back that day.
+
+<Aside type="tip">
+  Want to be told the moment something breaks, rather than the next morning? That is what [alerts](../alerts/) are
+  for. Want the numbers in your own web dashboard instead? See [Use your own dashboard](../your-own-dashboard/).
+</Aside>

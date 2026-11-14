@@ -1,0 +1,91 @@
+---
+title: Docker Compose
+description: The standard deployment — Caddy for HTTPS, the collector with the dashboard, and PostgreSQL.
+sidebar:
+  order: 1
+---
+
+import { Aside, FileTree, Steps } from '@astrojs/starlight/components';
+
+The standard deployment runs three containers on one server:
+
+- **Caddy** terminates HTTPS with an automatic certificate and forwards to the collector.
+- **The collector** receives events, runs the background jobs and serves the dashboard and API.
+- **PostgreSQL 17** stores everything. It is never published to the host.
+
+A small VPS (1 vCPU, 1 GB RAM) is enough for most bots.
+
+## Install
+
+<Steps>
+
+1. **Point a domain at your server**
+
+   Create an `A` (and `AAAA`) record such as `stats.example.com`. Ports 80 and 443 must be reachable for the
+   certificate.
+
+2. **Generate the files**
+
+   ```sh
+   npx shardlens init --domain stats.example.com --app-id <your application ID>
+   ```
+
+   <FileTree>
+   - shardlens/
+     - docker-compose.yml
+     - Caddyfile
+     - .env secrets and keys, generated; never commit it
+   </FileTree>
+
+   `init` refuses to overwrite an existing `.env` unless you pass `--force`. You can also copy `deploy/` from the
+   repository and fill in `.env.example` yourself; every variable is described in the
+   [environment reference](../../reference/environment/).
+
+3. **Start it**
+
+   ```sh
+   cd shardlens && docker compose up -d
+   docker compose logs -f collector
+   ```
+
+   The collector applies its database migrations, then starts listening. Open `https://stats.example.com`.
+
+</Steps>
+
+## Discord sign-in
+
+The dashboard accepts two kinds of sign-in:
+
+- **Read key**: anyone with `SHARDLENS_READ_KEY` can view the dashboard. Settings, keys, alerts and audit pages stay
+  locked.
+- **Sign in with Discord**: the application's owner and team members (and any IDs in `SHARDLENS_EXTRA_ADMINS`) get full
+  access.
+
+To turn on Discord sign-in:
+
+<Steps>
+
+1. In the [Developer Portal](https://discord.com/developers/applications), open your application → **OAuth2**.
+2. Add the redirect `https://stats.example.com/auth/discord/callback`.
+3. Copy the client ID and secret into `.env` as `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET`.
+4. `docker compose up -d` to restart the collector.
+
+</Steps>
+
+## Hardening that is already done
+
+- The collector container runs as a non-root user with a read-only root filesystem, no Linux capabilities and
+  `no-new-privileges`.
+- PostgreSQL has no published port; only the collector can reach it.
+- The dashboard is served with a strict Content Security Policy.
+- API keys are stored as SHA-256 hashes, and the settings that hold secrets (alert webhooks) are encrypted with
+  `SHARDLENS_SETTINGS_KEY`.
+
+## Backups
+
+Back up the `pgdata` volume with `pg_dump`. See [Backups](../../operations/backups/).
+
+<Aside type="caution">
+  Keep a copy of `.env` somewhere safe. Without `SHARDLENS_SETTINGS_KEY` the encrypted settings in a backup can't be
+  read, and without `SHARDLENS_AUDIT_KEY` neither can audit-mode data.
+</Aside>

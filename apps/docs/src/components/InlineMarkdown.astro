@@ -1,0 +1,14 @@
+---
+// Renders the tiny subset of Markdown used in JSDoc and register descriptions: `code` spans and {@link Name} tags.
+// Everything is emitted as text nodes, never as HTML.
+interface Props {
+  text: string;
+}
+const parts = Astro.props.text
+  .replace(/\{@link\s+([^}\s]+)\s*\}/g, '`$1`')
+  .split(/(`[^`]+`)/)
+  .filter(Boolean)
+  .map((part) => (part.startsWith('`') && part.endsWith('`') ? { code: part.slice(1, -1) } : { text: part }));
+---
+
+{parts.map((p) => ('code' in p ? <code>{p.code}</code> : p.text))}

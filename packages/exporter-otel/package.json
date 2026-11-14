@@ -1,0 +1,76 @@
+{
+  "name": "@shardlens/exporter-otel",
+  "version": "0.0.0",
+  "description": "OpenTelemetry metrics exporter for Shardlens: bot health metrics through your MeterProvider, with no user or server labels.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kkkermit/Shardlens.git",
+    "directory": "packages/exporter-otel"
+  },
+  "homepage": "https://kkkermit.github.io/Shardlens/self-hosting/exporter-only/",
+  "bugs": "https://github.com/Kkkermit/Shardlens/issues",
+  "keywords": [
+    "shardlens",
+    "discord",
+    "discord.js",
+    "opentelemetry",
+    "otel",
+    "metrics",
+    "observability"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.12"
+  },
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.cts",
+  "files": [
+    "dist",
+    "!dist/**/*.map"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "lint:package": "publint --strict && attw --pack . --profile node16",
+    "api-report": "api-extractor run",
+    "api-report:update": "api-extractor run --local"
+  },
+  "dependencies": {
+    "@shardlens/core": "workspace:^"
+  },
+  "peerDependencies": {
+    "@opentelemetry/api": "^1.9.0"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "catalog:",
+    "@microsoft/api-extractor": "catalog:",
+    "@types/node": "catalog:",
+    "@opentelemetry/api": "^1.10.0",
+    "@opentelemetry/sdk-metrics": "^3.1.1",
+    "publint": "catalog:",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

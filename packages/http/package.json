@@ -1,0 +1,72 @@
+{
+  "name": "@shardlens/http",
+  "version": "0.0.0",
+  "description": "Shardlens for HTTP-interaction Discord bots (Cloudflare Workers, Deno, Bun, @discordjs/core): privacy-first analytics with no gateway.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kkkermit/Shardlens.git",
+    "directory": "packages/http"
+  },
+  "homepage": "https://kkkermit.github.io/Shardlens/guides/http-bots/",
+  "bugs": "https://github.com/Kkkermit/Shardlens/issues",
+  "keywords": [
+    "shardlens",
+    "discord",
+    "interactions",
+    "cloudflare-workers",
+    "analytics",
+    "privacy"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.12"
+  },
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.cts",
+  "files": [
+    "dist",
+    "!dist/**/*.map"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "lint:package": "publint --strict && attw --pack . --profile node16",
+    "api-report": "api-extractor run",
+    "api-report:update": "api-extractor run --local"
+  },
+  "dependencies": {
+    "@shardlens/core": "workspace:^"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "catalog:",
+    "@microsoft/api-extractor": "catalog:",
+    "@shardlens/schema": "workspace:*",
+    "@types/node": "catalog:",
+    "discord-api-types": "catalog:",
+    "publint": "catalog:",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

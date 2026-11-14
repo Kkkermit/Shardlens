@@ -1,0 +1,59 @@
+---
+title: The /privacy command
+description: A ready-made command for users to see what is collected, opt out, opt back in or erase their data.
+sidebar:
+  order: 7
+---
+
+import { Aside, Code } from '@astrojs/starlight/components';
+import PolicyRule from '../../../components/PolicyRule.astro';
+import privacyCommand from '../../../../snippets/privacy-command.ts?raw';
+import forgetUser from '../../../../snippets/forget-user.ts?raw';
+
+`createPrivacyCommand(lens)` gives you a `/privacy` command with four subcommands. Replies are ephemeral, so only the
+user sees them.
+
+| Subcommand        | What it does                                                                 |
+| ----------------- | ---------------------------------------------------------------------------- |
+| `/privacy info`   | Explains what the bot records, with a link to your privacy policy             |
+| `/privacy optout` | Stops recording the user's usage                                              |
+| `/privacy optin`  | Allows recording again                                                        |
+| `/privacy erase`  | Deletes what was recorded about the user, and opts them out                   |
+
+The command works in servers, in DMs with the bot and in private channels, for both server and user installs.
+
+<Code code={privacyCommand} lang="ts" title="bot.ts" />
+
+<PolicyRule n={3} />
+
+## Persisting opt-outs
+
+Opt-outs live in the SDK's memory. To keep them across restarts, save them in `onOptOutChange` and pass them back in
+`optedOut` when the bot starts, as above. An opted-out user's events are dropped inside your bot, before hashing.
+
+## Erasure from your own code
+
+`/privacy erase` calls `lens.forgetUser()`. You can call it yourself, for example from support tooling:
+
+<Code code={forgetUser} lang="ts" />
+
+The collector deletes the user's raw events (by hash, across every salt period that still exists), unique-user rows,
+install and premium rows, and in audit mode their encrypted activity. Aggregate counts are kept, because they are
+anonymous. Every erasure is logged. An erasure from the dashboard (**Settings → Privacy**) takes an exact user ID.
+
+`forgetUser` first sends whatever the SDK still has queued, so nothing about the user arrives after the erasure. It
+resolves to `{ erased }`, the number of stored rows that were deleted: `0` means nothing was stored about them, or it
+had already expired. It resolves to `undefined` when the collector couldn't be reached, so you can try again.
+
+<Aside type="note">
+  `forgetUser` doesn't opt the user out of future collection. Call `optOut` as well when they ask for both, as
+  `/privacy erase` does.
+</Aside>
+
+## Your privacy policy
+
+`npx shardlens privacy` prints a privacy-policy paragraph that matches your configuration, for example:
+
+```sh
+npx shardlens privacy --option-values language --webhook-events --retention 35
+```

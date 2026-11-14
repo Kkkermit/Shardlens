@@ -1,0 +1,42 @@
+---
+// Rendered from @shardlens/schema's metric registry at build time.
+import metrics from '@shardlens/schema/metrics.json';
+
+type Metric = { name: string; kind: string; unit: string; source: string[]; description: string; perShard?: boolean };
+const list = metrics as Metric[];
+---
+
+<table>
+  <thead>
+    <tr>
+      <th>Metric</th>
+      <th>Kind</th>
+      <th>Unit</th>
+      <th>From</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    {list.map((m) => (
+      <tr>
+        <td>
+          <code>{m.name}</code>
+        </td>
+        <td>
+          {m.kind}
+          {m.perShard ? ' (per shard)' : ''}
+        </td>
+        <td>{m.unit}</td>
+        <td>
+          {m.source.map((s, i) => (
+            <>
+              {i > 0 ? ', ' : ''}
+              <code>{s}</code>
+            </>
+          ))}
+        </td>
+        <td>{m.description}</td>
+      </tr>
+    ))}
+  </tbody>
+</table>

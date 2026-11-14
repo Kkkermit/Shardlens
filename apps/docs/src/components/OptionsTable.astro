@@ -1,0 +1,31 @@
+---
+// Every SDK option, generated from the adapter's source (scripts/sdk-options.mjs).
+import options from '../generated/sdk-options.json';
+import InlineMarkdown from './InlineMarkdown.astro';
+---
+
+<table>
+  <thead>
+    <tr>
+      <th>Option</th>
+      <th>Type</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    {options.map((o) => (
+      <tr id={`option-${o.name}`}>
+        <td>
+          <code>{o.name}</code>
+          {o.required ? <strong> (required)</strong> : null}
+        </td>
+        <td>
+          <code>{o.type}</code>
+        </td>
+        <td>
+          <InlineMarkdown text={o.description} />
+        </td>
+      </tr>
+    ))}
+  </tbody>
+</table>

@@ -1,0 +1,78 @@
+---
+title: Scaling
+description: Running several collectors, and when to think about ClickHouse.
+sidebar:
+  order: 6
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+One collector on 1 vCPU handles a large bot. When you need more, the collector scales horizontally.
+
+## How much one collector handles
+
+Measured with the k6 script in `tests/load/ingest.js` against the collector image limited to one CPU (`--cpus=1`),
+with PostgreSQL 17 alongside, sending gzipped batches of 500 realistic events (hashed users, commands, custom events):
+
+| Rate                | Accepted | Latency per batch (p50 / p95 / p99) |
+| ------------------- | -------- | ----------------------------------- |
+| 5,000 events/s      | 100%     | 66 / 75 / 87 ms                     |
+| 8,000 events/s      | 100%     | 72 / 84 / 102 ms                    |
+
+The spec's target is 5,000 events/s per instance on 1 vCPU. The `load` workflow repeats the measurement weekly. For
+reference, a bot running 100 commands a second sends far less than 1,000 events a second.
+
+## Several collectors
+
+Ingest is stateless, so you can run several collectors behind a load balancer against the same PostgreSQL database:
+
+- **Migrations** run under an advisory lock, so collectors can start at the same time.
+- **Background jobs** (rollups, uniques, salts, retention, alerts) run on one collector at a time. They take a
+  PostgreSQL advisory lock (`pg_try_advisory_lock`) and another collector takes over if the leader stops.
+- **Live tiles** are shared through `LISTEN/NOTIFY`, so every collector's dashboard sees every event.
+- **Back-pressure**: when a collector is busy it answers `503` with `Retry-After`, and the SDK keeps the batch and
+  retries with jitter.
+
+Set `SHARDLENS_TRUST_PROXY=true` when a load balancer sits in front, so rate limits see client addresses.
+
+## PostgreSQL
+
+Raw events are stored in daily partitions and dropped whole when they expire, so deletes are cheap. Charts read from
+minute, hour and day rollups, never from raw rows, so dashboards stay fast as data grows.
+
+- Give PostgreSQL fast storage and enough memory for the current day's partitions.
+- Use a managed database with TLS for larger installs (`DATABASE_URL=postgres://…?sslmode=require`).
+- Lower raw retention (Settings → General, 7 to 90 days) if disk is the constraint. Aggregates are kept regardless.
+
+## ClickHouse (preview)
+
+For bots with very high event volumes, the collector can also keep interactions and custom events in ClickHouse and
+answer the heaviest chart queries from there.
+
+```sh
+echo "CLICKHOUSE_PASSWORD=$(openssl rand -hex 24)" >> .env
+docker compose -f docker-compose.yml -f docker-compose.clickhouse.yml up -d
+```
+
+How it works:
+
+- **PostgreSQL stays the system of record.** Everything is still written there; ClickHouse gets a copy of the
+  interactions and custom events PostgreSQL accepted (retries are never counted twice). Copying happens after the
+  write, from a bounded buffer, so a slow or unavailable ClickHouse never slows down or fails ingest.
+- **Charts** (series, top values and heatmaps of interactions and custom events) are answered from ClickHouse's minute
+  rollups for any range that starts after ClickHouse was enabled. Older ranges, and every other page, use PostgreSQL.
+- **Storage**: raw rows are `MergeTree` tables kept for 35 days; minute rollups are `AggregatingMergeTree` tables
+  (`sumState`, `quantilesTDigest` and `uniqState` of the salted user hash) kept for 400 days.
+- **Privacy**: ClickHouse only ever sees salted hashes, never user IDs, and an erasure request deletes the person's
+  rows there too.
+
+<Aside type="caution">
+  This is a preview: the data model may change before it is marked stable, in which case the ClickHouse database can
+  be dropped and refilled from new events. Set it with `CLICKHOUSE_URL`
+  ([environment reference](../../reference/environment/)).
+</Aside>
+
+## Very large bots
+
+If your bot handles millions of interactions a day, sample high-volume event types in the SDK with `sampleRate`.
+Sampled events carry their weight, so totals stay correct.

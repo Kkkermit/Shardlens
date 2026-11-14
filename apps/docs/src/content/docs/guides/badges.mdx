@@ -1,0 +1,36 @@
+---
+title: Badges
+description: Opt-in SVG badges for your README or bot-list page.
+sidebar:
+  order: 9
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Shardlens can serve public SVG badges with a headline number. Every badge is **off** until you switch it on.
+
+| Badge                | URL                                         | Shows                         |
+| -------------------- | ------------------------------------------- | ----------------------------- |
+| Servers              | `/v1/badge/servers.svg`                     | Servers the bot is in         |
+| Monthly users        | `/v1/badge/users-monthly.svg`               | Unique users this month       |
+| Commands per day     | `/v1/badge/commands-daily.svg`              | Interactions in the last day  |
+
+## Turn one on
+
+In the dashboard, **Settings → Public badges**, tick the badges you want and save. Then use the URL in Markdown:
+
+```md
+![Servers](https://stats.example.com/v1/badge/servers.svg)
+```
+
+A badge that is switched off answers `404`, so nothing is public by accident.
+
+## Caching
+
+Badges are cached for 10 minutes on the collector and tell browsers and image proxies to cache for 10 minutes too.
+The endpoint is rate limited.
+
+<Aside type="note">
+  Numbers on badges are shortened (for example `1.2K`). Turning on a badge makes that number public; nothing else about
+  your bot is exposed.
+</Aside>

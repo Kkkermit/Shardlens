@@ -1,0 +1,50 @@
+{
+  "name": "shardlens-monorepo",
+  "private": true,
+  "description": "Self-hosted, privacy-first analytics and health monitoring for discord.js bots.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kkkermit/Shardlens.git"
+  },
+  "packageManager": "pnpm@12.18.0",
+  "engines": {
+    "node": ">=24.11"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "lint": "biome check .",
+    "format": "biome check --write . && prettier --write .",
+    "size": "size-limit",
+    "api": "turbo run api-report:update",
+    "check": "prettier --check . && biome check . && turbo run typecheck test build lint:package api-report && knip && size-limit",
+    "changeset": "changeset",
+    "release": "turbo run build && changeset publish",
+    "format:check": "prettier --check .",
+    "unused": "knip",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.7",
+    "@changesets/cli": "^3.0.3",
+    "@size-limit/preset-small-lib": "^14.3.0",
+    "husky": "^9.1.7",
+    "knip": "^6.45.1",
+    "lint-staged": "^17.6.0",
+    "prettier": "^3.10.1",
+    "prettier-plugin-astro": "^1.1.2",
+    "size-limit": "^14.3.0",
+    "turbo": "^2.11.11",
+    "typescript": "~6.0.3"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,mjs,cjs,json,css}": [
+      "biome check --write --no-errors-on-unmatched",
+      "prettier --write"
+    ],
+    "*.{md,yml,yaml,astro,html}": "prettier --write"
+  }
+}

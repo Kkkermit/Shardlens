@@ -1,0 +1,85 @@
+{
+  "name": "@shardlens/collector",
+  "version": "0.0.0",
+  "description": "Shardlens collector: ingest, rollups, query API and dashboard. Run it with Docker, or in your bot process with embedded mode.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kkkermit/Shardlens.git",
+    "directory": "apps/collector"
+  },
+  "homepage": "https://kkkermit.github.io/Shardlens/self-hosting/embedded/",
+  "bugs": "https://github.com/Kkkermit/Shardlens/issues",
+  "keywords": [
+    "shardlens",
+    "discord",
+    "discord.js",
+    "analytics",
+    "collector",
+    "self-hosted"
+  ],
+  "engines": {
+    "node": ">=24.11"
+  },
+  "exports": {
+    "./embedded": {
+      "types": "./dist/embedded.d.ts",
+      "default": "./dist/embedded.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "migrations",
+    "public"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsdown && node scripts/copy-dashboard.mjs",
+    "dev": "tsdown --watch --on-success \"node --env-file-if-exists=.env dist/main.js\"",
+    "start": "node dist/main.js",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --project unit",
+    "test:int": "vitest run --project integration",
+    "lint:package": "publint --strict"
+  },
+  "dependencies": {
+    "@clickhouse/client": "^1.25.0",
+    "@fastify/compress": "^9.3.0",
+    "@fastify/cookie": "^11.1.5",
+    "@fastify/helmet": "^13.2.0",
+    "@fastify/rate-limit": "^11.2.2",
+    "@fastify/static": "^10.1.11",
+    "@shardlens/core": "workspace:*",
+    "@shardlens/schema": "workspace:*",
+    "arctic": "^3.7.0",
+    "fastify": "^5.12.8",
+    "pg": "^8.23.1",
+    "zod": "catalog:"
+  },
+  "peerDependencies": {
+    "@electric-sql/pglite": "^0.5.16"
+  },
+  "peerDependenciesMeta": {
+    "@electric-sql/pglite": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.16",
+    "@shardlens/dashboard": "workspace:*",
+    "@testcontainers/clickhouse": "^12.2.1",
+    "@testcontainers/postgresql": "^12.2.1",
+    "@types/node": "catalog:",
+    "@types/pg": "^8.23.1",
+    "publint": "catalog:",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

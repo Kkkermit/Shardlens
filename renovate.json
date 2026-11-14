@@ -1,0 +1,25 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":semanticCommits", "helpers:pinGitHubActionDigests", "schedule:weekly"],
+  "labels": ["dependencies"],
+  "packageRules": [
+    {
+      "description": "ADR 0005: TypeScript stays on 6.0.x until TypeDoc supports 7",
+      "matchPackageNames": ["typescript"],
+      "allowedVersions": "~6.0.0"
+    },
+    {
+      "groupName": "discord libraries",
+      "matchPackageNames": ["discord.js", "discord-api-types", "@discordjs/**"]
+    },
+    {
+      "groupName": "non-major dev dependencies",
+      "matchDepTypes": ["devDependencies"],
+      "matchUpdateTypes": ["minor", "patch"]
+    },
+    {
+      "groupName": "github actions",
+      "matchManagers": ["github-actions"]
+    }
+  ]
+}

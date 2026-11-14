@@ -1,0 +1,42 @@
+---
+title: Grafana
+description: A ready-made Grafana dashboard for the Prometheus exporter.
+sidebar:
+  order: 10
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+The repository has a Grafana dashboard for [`@shardlens/exporter-prometheus`](../../self-hosting/exporter-only/):
+[`deploy/grafana/shardlens-dashboard.json`](https://github.com/Kkkermit/Shardlens/blob/main/deploy/grafana/shardlens-dashboard.json).
+
+<Steps>
+
+1. Add the exporter to your bot and point Prometheus at it, as in [Exporter only](../../self-hosting/exporter-only/).
+2. In Grafana, open **Dashboards → New → Import**, upload `shardlens-dashboard.json` and pick your Prometheus data
+   source.
+
+</Steps>
+
+## What's on it
+
+- **Headline stats**: interactions per second, the share that failed or got no response, p95 response time against
+  the 3-second deadline, and how much of the invalid-request budget the last 10 minutes used.
+- **Interactions**: by command and by outcome, response-time percentiles, and handler errors by class.
+- **REST**: requests by status, the busiest routes, rate limits by scope, and invalid requests by status.
+- **Gateway**: ping per shard, servers per shard and in total, shard state changes, servers joined and left, and the
+  identify budget.
+- **Process**: event loop delay, memory, and your custom events.
+
+## Alerts worth setting
+
+| Alert                       | PromQL                                                                                                       |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Missed deadlines above 1%   | `1 - sum(rate(shardlens_interaction_response_seconds_bucket{le="3"}[10m])) / sum(rate(shardlens_interaction_response_seconds_count[10m])) > 0.01` |
+| Invalid-request budget > 50% | `sum(increase(shardlens_rest_invalid_requests_total[10m])) > 5000`                                          |
+| A shard stopped reporting   | `absent_over_time(shardlens_shard_ping_seconds[5m])`                                                        |
+
+<Aside type="note">
+  A test checks that every query in the dashboard uses a metric the exporter really produces, so the dashboard
+  can't drift from the code.
+</Aside>
