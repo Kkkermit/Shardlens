@@ -9,5 +9,5 @@
   "updateInternalDependencies": "patch",
   "commit": false,
   "changelog": "@changesets/cli/changelog",
-  "privatePackages": { "version": true, "tag": true }
+  "privatePackages": { "version": true, "tag": false }
 }
