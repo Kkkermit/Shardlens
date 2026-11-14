@@ -4,9 +4,10 @@ import { applyMigrations } from '../src/migrate.js';
 
 let pg: PGlite;
 
+// Creating the database is the slow part (PostgreSQL's initdb, in WebAssembly), so it gets the tests' time limit.
 beforeAll(async () => {
   pg = await PGlite.create();
-});
+}, 60_000);
 
 afterAll(async () => {
   await pg.close();

@@ -20,7 +20,7 @@
     "format": "biome check --write . && prettier --write .",
     "size": "size-limit",
     "api": "turbo run api-report:update",
-    "check": "prettier --check . && biome check . && turbo run typecheck test build lint:package api-report && knip && size-limit",
+    "check": "prettier --check . && biome check . && turbo run typecheck build lint:package api-report && turbo run test && knip && size-limit",
     "changeset": "changeset",
     "release": "turbo run build && changeset publish",
     "format:check": "prettier --check .",

@@ -4,7 +4,8 @@
 
 - Install: `pnpm install` (also installs the pre-commit hook, which formats and lints staged files)
 - Everything: `pnpm check` (must pass before every commit): format check, lint, types, tests, builds, package lint,
-  API reports, unused code (knip), bundle size
+  API reports, unused code (knip), bundle size. Tests run in a step of their own after the rest: on a 4-core CI runner,
+  tests sharing the CPU with builds and type-checks run out of time at random
 - Format: `pnpm format` (Prettier formats; Biome lints and sorts imports)
 - Unit tests: `pnpm test` · one package: `pnpm --filter @shardlens/core test`
 - Refresh API reports after a public API change: `pnpm api`
