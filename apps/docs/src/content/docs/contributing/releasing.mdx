@@ -25,7 +25,10 @@ follow [Conventional Commits](https://www.conventionalcommits.org).
 3. The collector image is built, signed and pushed to the GitHub Container Registry with full, minor and major version
    tags.
 
-## Before 1.0
+## What a version number promises
 
-Until 1.0, minor versions may contain breaking changes, which the changelog calls out. The wire format already follows
-its own versioning rule: additive changes only within a major version.
+Within a major version, nothing covered by semantic versioning breaks: the packages' exported APIs (recorded in each
+package's `etc/*.api.md` report), the CLI, the collector's HTTP API and environment variables, and data in an existing
+database. A breaking change needs a `major` changeset and a migration note. The wire format has its own major version,
+and a collector accepts the current and the previous one. The full list is in
+[ADR 0017](https://github.com/Kkkermit/Shardlens/blob/main/docs/adr/0017-version-1.md).

@@ -22,6 +22,7 @@ one rather than editing history.
 | [0014](0014-quality-and-hardening-pass.md)          | Pre-release quality and hardening pass                            | Accepted |
 | [0015](0015-reports-and-identified-users.md)        | Reports in Discord, and what identified mode may collect          | Accepted |
 | [0016](0016-corrections-from-simulated-installs.md) | Corrections from simulated installs                               | Accepted |
+| [0017](0017-version-1.md)                           | Version 1.0 and what it promises                                  | Accepted |
 
 Early records mention "the spec" and milestones M0 to M4: the private build specification Shardlens was first written
 from. It is not part of this repository; these records and the docs site are the public account.

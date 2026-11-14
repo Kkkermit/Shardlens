@@ -26,10 +26,6 @@ Three lines to install. No privileged intents. User IDs never leave your bot.
 
 </div>
 
-> [!NOTE]
-> **Pre-release.** The SDK, collector, dashboard and docs work end to end, but the packages are not on npm and the
-> image is not on GHCR yet. Star or watch the repository to hear about the first release.
-
 ## Why Shardlens
 
 - **Answers the questions you actually have.** Which commands are used, by how many people, in which servers, how
