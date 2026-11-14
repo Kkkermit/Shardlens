@@ -100,7 +100,7 @@ function slash(
           type: 1,
           options: [
             { name: 'category', type: 3, value: 'billing' },
-            { name: 'reason', type: 3, value: `my card 4111 and ${TOKEN}` },
+            { name: 'reason', type: 3, value: `my card 4111-1111-1111-1111 and ${TOKEN}` },
           ],
         },
       ],
@@ -180,7 +180,10 @@ describe('createShardlensHttp', () => {
     expect(event?.user).toMatch(new RegExp(`^h1:${currentMonth()}:[0-9a-f]{32}$`));
     expect(collector.violations).toEqual([]);
     const raw = collector.raw();
-    for (const secret of [USER_ID, TOKEN, 'tester', 'Tester', '4111']) expect(raw).not.toContain(secret);
+    // Markers that can't turn up by chance in an event ID, a hash or a timestamp.
+    for (const secret of [USER_ID, TOKEN, 'tester', 'Tester', 'my card', '4111-1111']) {
+      expect(raw).not.toContain(secret);
+    }
   });
 
   it('identifies users by ID, username and avatar only, and only when both sides are in audit mode', async () => {

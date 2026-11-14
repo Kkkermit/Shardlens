@@ -170,7 +170,8 @@ describe('refreshGuildCounts', () => {
       return Response.json({
         ...rawGuild(),
         approximate_member_count: 1234,
-        approximate_presence_count: 4242,
+        // Long enough that it can't turn up by chance in the event's ID or timestamp.
+        approximate_presence_count: 987_654_321_987,
       });
     });
     const guild = Reflect.construct(Guild, [client, rawGuild()]) as Guild;
@@ -181,7 +182,7 @@ describe('refreshGuildCounts', () => {
     expect(urls[0]).toContain(`/guilds/${GUILD_ID}`);
     expect(urls[0]).toContain('with_counts=true');
     expect(event).toMatchObject({ type: 'guild_update', info: { guild: GUILD_ID, memberCount: 1234 } });
-    expect(JSON.stringify(event)).not.toContain('4242');
+    expect(JSON.stringify(event)).not.toContain('987654321987');
     client.removeAllListeners();
   });
 });
