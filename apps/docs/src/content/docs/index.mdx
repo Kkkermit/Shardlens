@@ -4,8 +4,6 @@ description: Self-hosted, privacy-first analytics and health monitoring for disc
 template: splash
 hero:
   tagline: Product analytics and bot health for discord.js, self-hosted in one command. No privileged intents. User IDs never leave your bot.
-  image:
-    file: ../../assets/logo.svg
   actions:
     - text: Quick start
       link: getting-started/quick-start/
@@ -20,7 +18,7 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import { Image } from 'astro:assets';
 import overview from '../../assets/overview.png';
 
-<CardGrid stagger>
+<CardGrid>
   <Card title="Three lines in your bot" icon="rocket">
     `createShardlens(client, { endpoint, apiKey })`. Works with the `Guilds` intent alone, on discord.js 14 and 15.
   </Card>
