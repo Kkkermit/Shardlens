@@ -1,6 +1,6 @@
 {
   "name": "@shardlens/core",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "description": "Library-agnostic core of the Shardlens SDK: queue, batching, transport, hashing and redaction. Zero runtime dependencies.",
   "license": "MIT",
   "type": "module",
