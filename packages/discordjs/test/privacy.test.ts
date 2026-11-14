@@ -125,7 +125,8 @@ describe('/privacy command', () => {
 });
 
 describe('secrets never leave the process (security checklist 19.4)', () => {
-  it('redacts 10,000 generated token-shaped strings from every free-text path', async () => {
+  // About 3 seconds alone, and it shares the CPU with every other build and test in `pnpm check`.
+  it('redacts 10,000 generated token-shaped strings from every free-text path', { timeout: 30_000 }, async () => {
     const logs: string[] = [];
     const { client, collector, lens } = setup({
       captureOptionValues: ['reason'],
