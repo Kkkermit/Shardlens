@@ -6,7 +6,7 @@ export default defineConfig({
   dts: true,
   target: 'node22',
   platform: 'node',
-  sourcemap: true,
+  sourcemap: false,
   clean: true,
   fixedExtension: false,
 });

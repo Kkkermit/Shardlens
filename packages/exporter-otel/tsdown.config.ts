@@ -9,7 +9,7 @@ export default defineConfig({
   dts: true,
   target: 'node22',
   platform: 'node',
-  sourcemap: true,
+  sourcemap: false,
   clean: true,
   fixedExtension: false,
   define: { __EXPORTER_VERSION__: JSON.stringify(version) },
