@@ -2,6 +2,7 @@ packages:
   - packages/*
   - apps/*
   - examples/*
+  - tests/sim
 
 # Dependency install scripts are denied unless listed as true. These three come from Testcontainers' optional SSH and
 # protobuf support and are not needed.

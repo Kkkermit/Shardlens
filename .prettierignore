@@ -16,5 +16,8 @@ apps/docs/src/generated/
 apps/collector/public/
 apps/docs/src/content/docs/reference/sdk/
 
+# Bots as coding agents set them up, kept verbatim (the simulated-install test)
+tests/sim/bots/
+
 # MDX with Starlight components: Prettier's MDX parser re-indents JSX inside lists
 *.mdx

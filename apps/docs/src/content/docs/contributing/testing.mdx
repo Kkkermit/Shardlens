@@ -16,10 +16,11 @@ Every change comes with tests, and every bug fix with a regression test.
 | Integration    | `pnpm --filter @shardlens/collector test:int`        | Real PostgreSQL 16 and 17 (Testcontainers): ingest, rollups, salts, retention, auth on every route |
 | End to end     | `pnpm --filter @shardlens/dashboard test:e2e`        | A real collector with seeded data: every dashboard page with axe (WCAG 2.1 AA and best practices, light and dark), XSS-safe rendering, CSP, sign-in, admin gating, audit mode |
 | Benchmark      | `pnpm --filter @shardlens/discordjs bench`           | SDK CPU and memory overhead against the targets                    |
+| Simulated installs | `pnpm sim`                                       | The packed packages, installed with npm into three bots that coding agents set up and run against a fake Discord: exact counts, no leaked IDs, names, tokens or typed text, clean shutdown (weekly, see `tests/sim/README.md`) |
 | Docs           | `pnpm --filter @shardlens/docs build`                | Code samples compile; no broken links                              |
 
-Integration and end-to-end tests need Docker. Before the first end-to-end run, install the browser with
-`pnpm --filter @shardlens/dashboard exec playwright install chromium`.
+Integration, end-to-end and simulated-install tests need Docker. Before the first end-to-end run, install the browser
+with `pnpm --filter @shardlens/dashboard exec playwright install chromium`.
 
 ## One package at a time
 

@@ -20,6 +20,10 @@
     },
     "examples/*": {
       "entry": ["src/*.ts"]
+    },
+    "tests/sim": {
+      "entry": ["fake-discord/server.mjs", "fake-discord/preload.cjs"],
+      "ignore": ["bots/**"]
     }
   }
 }
