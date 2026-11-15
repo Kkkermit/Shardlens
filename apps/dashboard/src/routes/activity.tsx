@@ -1,20 +1,11 @@
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { type FormEvent, useState } from 'react';
-import { api, useMeta } from '../api';
+import { api, errorText, request, useMeta } from '../api';
 import { NeedsDiscord, useAdminGate } from '../components/AdminGate';
 import { DataTable } from '../components/DataTable';
-import {
-  ErrorNote,
-  Loading,
-  Name,
-  PageHead,
-  Panel,
-  QueryBody,
-  Segmented,
-  StatusMessage,
-  UserTag,
-} from '../components/ui';
+import { Name, PageHead, Pager, Panel, QueryBody, Segmented, StatusMessage, UserTag } from '../components/ui';
 import { commandLabel, dateTime, label, ms, num } from '../format';
+import { activityFilterError } from '../forms';
 
 const WINDOWS = [
   { id: '24h', label: '24 hours' },
@@ -59,6 +50,7 @@ export function ActivityPage() {
     queryKey: ['audit-log', applied, before],
     queryFn: () => api<{ rows: AuditRow[]; nextBefore: string | null }>(`/v1/audit/log?${pageParams.toString()}`),
     enabled: gate.allowed && meta.data?.mode === 'audit',
+    placeholderData: keepPreviousData,
   });
   const top = useQuery({
     queryKey: ['audit-top', windowSel],
@@ -70,34 +62,29 @@ export function ActivityPage() {
     if (!window.confirm('Export who ran what as CSV? This export contains user IDs and is recorded in the access log.'))
       return;
     setMessage('');
-    const res = await fetch(`/v1/audit/export.csv?${params.toString()}`, {
-      credentials: 'same-origin',
-      headers: { 'x-shardlens-csrf': '1', 'x-shardlens-confirm': 'export-audit-log' },
-    }).catch(() => undefined);
-    if (!res?.ok) {
-      setMessage(
-        res?.status === 429
-          ? 'Too many exports. Wait a minute and try again.'
-          : `The export failed${res ? ` (${res.status})` : ''}. Try again.`,
-      );
-      return;
+    try {
+      const res = await request(`/v1/audit/export.csv?${params.toString()}`, {
+        headers: { accept: 'text/csv', 'x-shardlens-csrf': '1', 'x-shardlens-confirm': 'export-audit-log' },
+      });
+      const url = URL.createObjectURL(await res.blob());
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'shardlens-activity.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+      setMessage('Exported. The download is in your browser.');
+    } catch (error) {
+      setMessage(`The export failed. ${errorText(error)}`);
     }
-    const url = URL.createObjectURL(await res.blob());
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'shardlens-activity.csv';
-    a.click();
-    URL.revokeObjectURL(url);
   };
 
-  if (gate.loading || meta.isLoading) return <Loading />;
-  if (!gate.allowed) return <NeedsDiscord title="Activity" />;
+  if (!gate.allowed && !gate.loading) return <NeedsDiscord title="Activity" />;
   // Without the mode there is nothing to go on: never say privacy mode because the request failed.
-  if (!meta.data) {
+  if (gate.loading || !meta.data) {
     return (
       <>
         <PageHead title="Activity" />
-        <ErrorNote error={meta.error} retry={() => void meta.refetch()} />
+        <QueryBody query={[{ isLoading: gate.loading, error: null }, meta]}>{null}</QueryBody>
       </>
     );
   }
@@ -116,10 +103,14 @@ export function ActivityPage() {
   }
   const submit = (e: FormEvent) => {
     e.preventDefault();
+    const problem = activityFilterError(filters);
+    setMessage(problem);
+    if (problem) return;
     setApplied(filters);
     setPages([]);
   };
-  const nextBefore = log.data?.nextBefore ?? null;
+  // While another page loads, the buttons wait for it: its cursor isn't known yet.
+  const nextBefore = log.isPlaceholderData ? null : (log.data?.nextBefore ?? null);
   return (
     <>
       <PageHead
@@ -159,16 +150,13 @@ export function ActivityPage() {
         </label>
         <button type="submit">Apply</button>
       </form>
-      <div className="grid" style={{ gridTemplateColumns: 'minmax(0, 3fr) minmax(240px, 1fr)' }}>
+      <div className="grid log">
         <Panel
           title="Activity log"
           subtitle={pages.length === 0 ? 'Newest first, 50 per page' : `Newest first, page ${pages.length + 1}`}
+          busy={log.isPlaceholderData}
         >
-          {log.isLoading ? (
-            <Loading />
-          ) : log.error ? (
-            <ErrorNote error={log.error} />
-          ) : (
+          <QueryBody query={log}>
             <DataTable
               caption="Activity log"
               rowKey={(r) => r.interactionId}
@@ -198,7 +186,8 @@ export function ActivityPage() {
                 {
                   key: 'server',
                   header: 'Server',
-                  render: (r) => (r.guildName ? <Name>{r.guildName}</Name> : (r.guildId ?? 'DM')),
+                  render: (r) =>
+                    r.guildName ? <Name>{r.guildName}</Name> : r.guildId ? <code>{r.guildId}</code> : 'DM',
                 },
                 {
                   key: 'user',
@@ -209,25 +198,16 @@ export function ActivityPage() {
                 { key: 'ack', header: 'Response', numeric: true, render: (r) => ms(r.ackMs) },
               ]}
             />
-          )}
+          </QueryBody>
           {pages.length > 0 || nextBefore ? (
-            <div className="filters" style={{ marginTop: 12, marginBottom: 0 }}>
-              <button type="button" disabled={pages.length === 0} onClick={() => setPages([])}>
-                Newest
-              </button>
-              <button type="button" disabled={pages.length === 0} onClick={() => setPages(pages.slice(0, -1))}>
-                Newer
-              </button>
-              <button
-                type="button"
-                disabled={!nextBefore}
-                onClick={() => {
-                  if (nextBefore) setPages([...pages, nextBefore]);
-                }}
-              >
-                Older
-              </button>
-            </div>
+            <Pager
+              label="Pages of the activity log"
+              buttons={[
+                { label: 'Newest', onClick: pages.length > 0 ? () => setPages([]) : undefined },
+                { label: 'Newer', onClick: pages.length > 0 ? () => setPages(pages.slice(0, -1)) : undefined },
+                { label: 'Older', onClick: nextBefore ? () => setPages([...pages, nextBefore]) : undefined },
+              ]}
+            />
           ) : null}
         </Panel>
         <Panel

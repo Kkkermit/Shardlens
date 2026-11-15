@@ -8,6 +8,7 @@ export interface EventError {
   issues?: { path: (string | number)[]; message: string }[];
 }
 
+/** What `parseBatch()` returns: the envelope and the events kept, with why others were refused, or why the batch was. */
 export type ParseBatchResult =
   | { ok: true; envelope: Omit<BatchEnvelope, 'events'>; events: Event[]; errors: EventError[] }
   | { ok: false; issues: { path: (string | number)[]; message: string }[] };

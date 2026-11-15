@@ -3,9 +3,11 @@
  * table from this registry. Renaming a metric is a breaking change.
  */
 
+/** `counter`: summed over time. `gauge`: a sampled value. */
 export type MetricKind = 'counter' | 'gauge';
 export type MetricUnit = 'count' | 'ms' | 'bytes' | 'servers' | 'users' | 'sessions';
 
+/** One metric the collector computes. */
 export interface MetricDefinition {
   /** Stable identifier. Names ending in `.<name>` or `.<type>` are patterns. */
   readonly name: string;
@@ -18,6 +20,7 @@ export interface MetricDefinition {
   readonly perShard?: boolean;
 }
 
+/** Every metric, counters first. */
 export const METRICS = [
   {
     name: 'interactions',
@@ -61,7 +64,8 @@ export const METRICS = [
     kind: 'counter',
     unit: 'count',
     source: ['command_permissions'],
-    description: 'Servers changing who may use commands (command lockdowns).',
+    description:
+      'Servers changing who may use commands (command lockdowns). Each change is stored, but not summed into rollups or shown in the dashboard.',
   },
   {
     name: 'modals.shown',
@@ -88,8 +92,9 @@ export const METRICS = [
     name: 'rest.invalid',
     kind: 'counter',
     unit: 'count',
-    source: ['rest_window', 'invalid_request_warning'],
-    description: '401, 403 and non-shared 429 responses, counted against the 10,000 per 10 minutes ban threshold.',
+    source: ['rest_window'],
+    description:
+      "401, 403 and 429 responses by status, toward Discord's ban at 10,000 invalid requests in 10 minutes. Shared 429s, which don't count toward it, are counted apart.",
   },
   {
     name: 'rest.ratelimits',
@@ -124,21 +129,22 @@ export const METRICS = [
     kind: 'counter',
     unit: 'count',
     source: ['shard_state'],
-    description: 'Shard lifecycle events: ready, resumed, reconnecting, disconnected, error, invalidated.',
+    description:
+      'Shard lifecycle events (ready, resumed, reconnecting, disconnected, error, invalidated), listed one by one on the Reliability page rather than summed into rollups.',
   },
   {
     name: 'entitlements',
     kind: 'counter',
     unit: 'count',
-    source: ['entitlement'],
-    description: 'Entitlements created, updated and deleted, by SKU.',
+    source: ['entitlement', 'webhook'],
+    description: 'Entitlements created, updated and deleted, by SKU, from the gateway and from Discord webhook events.',
   },
   {
     name: 'subscriptions',
     kind: 'counter',
     unit: 'count',
     source: ['subscription'],
-    description: 'Subscriptions created, updated and deleted, by SKU and status.',
+    description: 'Subscriptions created, updated and deleted, by status.',
   },
   {
     name: 'custom.<name>',
@@ -207,6 +213,14 @@ export const METRICS = [
     description: 'Size of the discord.js channel cache.',
   },
   {
+    name: 'rest.invalid_warning_count',
+    kind: 'gauge',
+    unit: 'count',
+    source: ['invalid_request_warning'],
+    description:
+      "Invalid requests discord.js has counted in its current 10-minute window, from its warning event. Sent only when the bot sets discord.js's `invalidRequestWarningInterval`.",
+  },
+  {
     name: 'identify.remaining',
     kind: 'gauge',
     unit: 'sessions',
@@ -229,7 +243,8 @@ export const METRICS = [
   },
 ] as const satisfies readonly MetricDefinition[];
 
+/** A metric's stable name, such as `interactions` or the pattern `custom.<name>`. */
 export type MetricName = (typeof METRICS)[number]['name'];
 
-/** Gauge names the SDK may send in a `gauge_window`. */
+/** Every gauge's name: those the SDK sends in a `gauge_window`, and those the collector takes from other events. */
 export const GAUGE_NAMES: readonly string[] = METRICS.filter((m) => m.kind === 'gauge').map((m) => m.name);

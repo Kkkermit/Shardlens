@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   Batch,
   containsNul,
+  GuildInfo,
   HISTOGRAM_BUCKETS,
   InteractionEvent,
   MAX_BATCH_EVENTS,
@@ -163,10 +164,41 @@ describe('input the database could not store', () => {
   it('finds NUL characters at any depth without recursing', () => {
     expect(containsNul({ a: ['x', { b: 'ok' }], c: 1, d: null })).toBe(false);
     expect(containsNul({ a: ['x', { b: 'bad\u0000' }] })).toBe(true);
-    expect(containsNul({ ['key\u0000']: 1 })).toBe(true);
+    expect(containsNul({ 'key\u0000': 1 })).toBe(true);
     let deep: unknown = 'leaf';
     for (let i = 0; i < 200_000; i++) deep = [deep];
     expect(containsNul(deep)).toBe(false);
+  });
+
+  it('accepts permission bitfields up to 64 bits, leading zeros included', () => {
+    const bits = (botPermissions: string) => GuildInfo.safeParse(guildInfo({ botPermissions })).success;
+    for (const ok of ['0', '8', '2147483648', '18446744073709551615', '18446744073709551609', '09999999999999999999']) {
+      expect(bits(ok), ok).toBe(true);
+    }
+    for (const bad of [
+      '18446744073709551616',
+      '18446744073709552000',
+      '99999999999999999999',
+      '000000000000000000001',
+    ]) {
+      expect(bits(bad), bad).toBe(false);
+    }
+  });
+
+  it('refuses a permission bitfield that is not a number instead of throwing', () => {
+    // Regression: a numeric check ran on any string and threw, so one bad event failed the request with a 500.
+    const join = (botPermissions: string) => ({
+      id: '0193f2b4-7c1a-7d4e-9a51-3c2f1e0b9a78',
+      ts: 1763052121000,
+      type: 'guild_join',
+      info: guildInfo({ botPermissions }),
+      detectedAtStartup: false,
+    });
+    for (const botPermissions of ['x', '1e5', '0x10', '-1', '']) {
+      const result = parseBatch(batch([interaction(), join(botPermissions)]));
+      expect(result.ok && result.events.map((e) => e.type), botPermissions).toEqual(['interaction']);
+      expect(result.ok && result.errors.map((e) => e.index)).toEqual([1]);
+    }
   });
 
   it('drops only the event that carries a NUL character, and the whole batch when the envelope does', () => {

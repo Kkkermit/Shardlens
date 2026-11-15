@@ -30,7 +30,7 @@ export function privacyParagraph(o: PrivacyOptions): string {
       ? 'When you add or remove the bot, Discord reports it to Shardlens, and your user ID is handled as described above.'
       : '',
     'Shardlens never reads your messages, and the data stays on infrastructure run by the bot owner; it is not sold or shared with third parties.',
-    `Detailed records are kept for ${o.retentionDays ?? 35} days; after that only anonymous totals remain.`,
+    `Detailed records are kept for ${o.retentionDays ?? 35} days; after that only totals remain, and records of premium purchases, whose pseudonymous codes can no longer be linked to anyone.`,
     'You can stop this recording, or ask for your recorded data to be deleted, with the /privacy command or by contacting the bot owner.',
   ];
   return parts.filter(Boolean).join(' ');
