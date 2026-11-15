@@ -1,5 +1,5 @@
 ---
-'@shardlens/http': patch
+'@shardlens/http': minor
 ---
 
 Fixes found by running an HTTP-interactions bot on Node, Bun, Deno and Cloudflare's own runtime (workerd) against a
