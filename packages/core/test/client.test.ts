@@ -1207,7 +1207,8 @@ describe('hostile options and collectors', () => {
     const { client } = makeClient({ fetch: fakeCollector().fetch });
     const seen: unknown[] = [];
     client.on('error', (_name, error) => seen.push(error));
-    const token = 'aW50ZXJhY3Rpb246MTIzNDU2Nzg5MDEyMzQ1Njc4OTpzZWNyZXQ';
+    // Shaped like an interaction token, and built here so no secret scanner takes the fixture for a real one.
+    const token = btoa('interaction:1234567890123456789:secret').replace(/=+$/, '');
     const url = `https://discord.com/api/v10/interactions/112233445566778899/${token}/callback`;
     const apiError = Object.assign(new Error(`Unknown interaction at ${url}`), {
       name: 'DiscordAPIError[10062]',

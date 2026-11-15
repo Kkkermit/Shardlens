@@ -24,6 +24,8 @@ const { publicKey, privateKey } = generateKeyPairSync('ed25519');
 const PUBLIC_KEY_HEX = Buffer.from(publicKey.export({ format: 'jwk' }).x!, 'base64url').toString('hex');
 const AUDIT_KEY = Buffer.alloc(32, 9).toString('base64');
 const ADMIN = '987654321098765432';
+/** Signed in once, but on no team list any more. */
+const FORMER_ADMIN = '876543210987654321';
 const USER = '555555555555555555';
 const WEBHOOK = 'https://discord.com/api/webhooks/112233445566778899/abcDEF_token';
 
@@ -296,7 +298,7 @@ describe('admin access', () => {
   });
 
   it('takes admin access away from someone no longer on the team, without waiting for the session to end', async () => {
-    const former = await testSession(h.db, 'discord', '876543210987654321');
+    const former = await testSession(h.db, 'discord', FORMER_ADMIN);
     const settings = await h.app.inject({ method: 'GET', url: '/v1/settings', cookies: { shardlens_session: former } });
     expect(settings.statusCode).toBe(403);
     expect(settings.json()).toEqual({ error: 'not_a_team_member' });

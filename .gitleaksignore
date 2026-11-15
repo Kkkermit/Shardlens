@@ -1,0 +1,8 @@
+# Findings gitleaks should skip: test fixtures that look like secrets but are made up. One fingerprint per line
+# (commit:file:rule:line), as `gitleaks detect` prints it. Both fixtures have since been rewritten so they no longer
+# match; these entries cover the commits they were first added in.
+
+# A fake interaction token (base64 of "interaction:1234567890123456789:secret") in a test that checks tokens are redacted.
+344abb268688e9292e6ed17f00b95b7ebe8ab539:packages/core/test/client.test.ts:generic-api-key:973
+# An invented 18-digit user ID passed next to the word "discord" in a session test.
+029f1ffd7f31ed0db2ec32185309f9f82cbf6773:apps/collector/test/admin.int.test.ts:discord-client-id:291
