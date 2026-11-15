@@ -1,4 +1,5 @@
 import type { Db } from '../db.js';
+import { COMMAND_KINDS_SQL } from '../ingest/codes.js';
 import type { QuerySpec } from './spec.js';
 
 type Spec<K extends QuerySpec['kind']> = Extract<QuerySpec, { kind: K }>;
@@ -25,7 +26,7 @@ function stepSource(step: Step | 'any', params: unknown[], from: string, to: str
              WHERE app_id = $1 AND name = ${name} AND user_hash IS NOT NULL AND ts >= ${from} AND ts < ${to}`;
   }
   return `SELECT user_hash AS u, ts FROM interactions
-           WHERE app_id = $1 AND command = ${name} AND kind BETWEEN 1 AND 4 AND ts >= ${from} AND ts < ${to}`;
+           WHERE app_id = $1 AND command = ${name} AND kind IN ${COMMAND_KINDS_SQL} AND ts >= ${from} AND ts < ${to}`;
 }
 
 const label = (step: Step) => (step.type === 'command' ? `/${step.name}` : step.name);

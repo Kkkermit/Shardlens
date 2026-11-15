@@ -1,4 +1,5 @@
 import { generateKeyPairSync, sign } from 'node:crypto';
+import { uuidv7 } from '@shardlens/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { evaluateMetric, runAlerts } from '../src/jobs/alerts.js';
 import { runReports } from '../src/jobs/reports.js';
@@ -476,6 +477,39 @@ describe('audit mode', () => {
       "SELECT details FROM audit_access_log WHERE action = 'lookup_user'",
     );
     expect(JSON.stringify(lookups.rows)).not.toContain(USER);
+  });
+
+  it('records who ran a prefix command the same way', async () => {
+    const { hasher, period } = await sdkHasher(h.app);
+    const user = (await hasher.hash(USER, period))!;
+    const res = await ingest(
+      h.app,
+      envelope(
+        [
+          {
+            id: uuidv7(),
+            ts: Date.now(),
+            type: 'message_command',
+            command: 'warn',
+            user,
+            outcome: 'ok',
+            actor: { userId: USER, username: 'someone' },
+          },
+        ],
+        { mode: 'audit' },
+      ),
+    );
+    expect(res.json()).toMatchObject({ accepted: 1 });
+    const log = await h.app.inject({
+      method: 'GET',
+      url: `/v1/audit/log?user=${USER}`,
+      cookies: { shardlens_session: adminCookie },
+    });
+    expect(log.json().rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ userId: USER, kind: 'message_command', command: 'warn', outcome: 'ok' }),
+      ]),
+    );
   });
 
   it('refuses a filter it does not know, instead of ignoring it and showing every row', async () => {

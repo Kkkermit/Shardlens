@@ -11,6 +11,7 @@ import { CustomEventName } from '@shardlens/core';
 import { CustomEventProps } from '@shardlens/core';
 import { Interaction } from 'discord.js';
 import { Logger } from '@shardlens/core';
+import { Message } from 'discord.js';
 import { RESTPostAPIChatInputApplicationCommandsJSONBody } from 'discord.js';
 import { SaltPeriod } from '@shardlens/core';
 import { ShardlensClient } from '@shardlens/core';
@@ -21,6 +22,22 @@ export function createPrivacyCommand(lens: Shardlens, options?: PrivacyCommandOp
 
 // @public
 export function createShardlens(client: Client, options: ShardlensOptions): Shardlens;
+
+// @public
+export interface MessageCommandInfo {
+    command: string;
+    group?: string | undefined;
+    options?: readonly string[] | undefined;
+    optionValues?: Readonly<Record<string, string | number | boolean>> | undefined;
+    sub?: string | undefined;
+}
+
+// @public
+export interface MessageCommandRun extends MessageCommandInfo {
+    durationMs?: number | undefined;
+    error?: unknown;
+    failed?: boolean | undefined;
+}
 
 // @public
 export type MetricGroup = 'interactions' | 'guilds' | 'rest' | 'gateway' | 'process' | 'premium' | 'app';
@@ -62,7 +79,9 @@ export interface Shardlens {
     // (undocumented)
     stats(): ShardlensStats;
     track<N extends CustomEventName>(name: N, props?: CustomEventProps<N>, context?: TrackContext): void;
+    trackMessageCommand(message: Message, run: MessageCommandRun): void;
     wrap<A extends [Interaction, ...unknown[]], R>(handler: (...args: A) => R | Promise<R>): (...args: A) => Promise<Awaited<R>>;
+    wrapMessageCommand<A extends [Message, ...unknown[]], R>(command: string | MessageCommandInfo, handler: (...args: A) => R | Promise<R>): (...args: A) => Promise<Awaited<R>>;
 }
 
 export { ShardlensExporter }

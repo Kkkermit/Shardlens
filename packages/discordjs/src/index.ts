@@ -18,7 +18,15 @@ import {
   type WireEvent,
 } from '@shardlens/core';
 import type { EventInput } from '@shardlens/schema';
-import { type Client, type Entitlement, Events, type Guild, type Interaction, type Subscription } from 'discord.js';
+import {
+  type Client,
+  type Entitlement,
+  Events,
+  type Guild,
+  type Interaction,
+  type Message,
+  type Subscription,
+} from 'discord.js';
 import { listenShardEvents, shardIds } from './gateway.js';
 import {
   CountRefresher,
@@ -30,6 +38,7 @@ import {
   ProfilePacer,
 } from './guilds.js';
 import { InteractionTracker } from './interactions.js';
+import { describeMessageCommand, type MessageCommandInfo, type MessageCommandRun } from './message-commands.js';
 import type { MetricGroup, ShardlensOptions } from './options.js';
 import { installRestHooks, type RestHooks } from './rest.js';
 import {
@@ -45,6 +54,7 @@ import { FileSpool } from './spool.js';
 import { LruMap, SDK_NAME, SDK_VERSION } from './util.js';
 
 export type { ShardlensExporter } from '@shardlens/core';
+export type { MessageCommandInfo, MessageCommandRun } from './message-commands.js';
 export type { MetricGroup, ShardlensOptions } from './options.js';
 export { createPrivacyCommand, type PrivacyCommand, type PrivacyCommandOptions } from './privacy-command.js';
 export { normaliseRoute } from './util.js';
@@ -55,6 +65,12 @@ const REGISTRY_INTERVAL_MS = 60 * 60_000;
 const PROFILES_PER_TICK = 250;
 /** `refreshGuildCounts`: one server every two seconds, at most 30 REST calls a minute. */
 const COUNT_REFRESH_MS = 2_000;
+
+/** Duck-typed so a second copy of discord.js in `node_modules` still counts as an interaction. */
+function isInteraction(value: unknown): value is Interaction {
+  const v = value as { id?: unknown; isRepliable?: unknown } | null | undefined;
+  return typeof v?.id === 'string' && typeof v.isRepliable === 'function';
+}
 
 /** Optional context for a custom event. The user ID is hashed in-process before it is sent. */
 export interface TrackContext {
@@ -78,6 +94,20 @@ export interface Shardlens {
    * so your own error handling still runs.
    */
   wrap<A extends [Interaction, ...unknown[]], R>(
+    handler: (...args: A) => R | Promise<R>,
+  ): (...args: A) => Promise<Awaited<R>>;
+  /**
+   * Records a command run from a message, such as a prefix command (`!ban @user`), after your bot's parser matched it.
+   * Pass the command's own name, not what was typed: message content is never read. Counted with interactions on
+   * the dashboard. Invalid runs are dropped and counted, never thrown.
+   */
+  trackMessageCommand(message: Message, run: MessageCommandRun): void;
+  /**
+   * Wraps a message command handler to record its duration and failures, like {@link Shardlens.wrap} does for
+   * interactions. The handler's errors are re-thrown unchanged.
+   */
+  wrapMessageCommand<A extends [Message, ...unknown[]], R>(
+    command: string | MessageCommandInfo,
     handler: (...args: A) => R | Promise<R>,
   ): (...args: A) => Promise<Awaited<R>>;
   /** Stops recording a user's interactions in this process (for example from a `/privacy optout` command). */
@@ -345,6 +375,21 @@ export function createShardlens(client: Client, options: ShardlensOptions): Shar
   every(APP_INFO_INTERVAL_MS, 'appInfo', sendAppInfo);
   every(REGISTRY_INTERVAL_MS, 'commandRegistry', sendRegistry);
 
+  const trackMessageCommand = (message: Message, run: MessageCommandRun): void => {
+    try {
+      const userId = message.author.id;
+      if (!tracker || tracker.isOptedOut(userId)) return;
+      const event = describeMessageCommand(message, run, { ...options, mode }, shardCount());
+      if (!event) {
+        count('message_command_invalid');
+        return;
+      }
+      transport.enqueueWithUser(userId, event.ts, 3, (user) => ({ ...event, user }));
+    } catch (error) {
+      count('trackMessageCommand', error);
+    }
+  };
+
   let closed = false;
   return {
     client: transport as unknown as ShardlensClient<WireEvent>,
@@ -379,17 +424,18 @@ export function createShardlens(client: Client, options: ShardlensOptions): Shar
 
     wrap<A extends [Interaction, ...unknown[]], R>(handler: (...args: A) => R | Promise<R>) {
       return async (...args: A): Promise<Awaited<R>> => {
-        const interaction = args[0];
+        // A handler shared by slash and prefix commands may get something else first; that is not recorded here.
+        const interaction = isInteraction(args[0]) ? args[0] : undefined;
         const started = performance.now();
         try {
-          tracker?.handlerStarted(interaction);
+          if (interaction) tracker?.handlerStarted(interaction);
         } catch (error) {
           count('wrap', error);
         }
         try {
           const result = (await handler(...args)) as Awaited<R>;
           try {
-            tracker?.handlerFinished(interaction, performance.now() - started);
+            if (interaction) tracker?.handlerFinished(interaction, performance.now() - started);
           } catch (error) {
             count('wrap', error);
           }
@@ -397,13 +443,35 @@ export function createShardlens(client: Client, options: ShardlensOptions): Shar
         } catch (error) {
           try {
             const code = errorCode(error);
-            tracker?.handlerFinished(interaction, performance.now() - started, {
-              errorClass: errorClass(error),
-              ...(code !== undefined ? { errorCode: code } : {}),
-            });
+            if (interaction) {
+              tracker?.handlerFinished(interaction, performance.now() - started, {
+                errorClass: errorClass(error),
+                ...(code !== undefined ? { errorCode: code } : {}),
+              });
+            }
           } catch (inner) {
             count('wrap', inner);
           }
+          throw error;
+        }
+      };
+    },
+
+    trackMessageCommand,
+
+    wrapMessageCommand<A extends [Message, ...unknown[]], R>(
+      command: string | MessageCommandInfo,
+      handler: (...args: A) => R | Promise<R>,
+    ) {
+      const info: MessageCommandInfo = typeof command === 'string' ? { command } : command;
+      return async (...args: A): Promise<Awaited<R>> => {
+        const started = performance.now();
+        try {
+          const result = (await handler(...args)) as Awaited<R>;
+          trackMessageCommand(args[0], { ...info, durationMs: performance.now() - started });
+          return result;
+        } catch (error) {
+          trackMessageCommand(args[0], { ...info, durationMs: performance.now() - started, error });
           throw error;
         }
       };

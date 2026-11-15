@@ -41,7 +41,9 @@ Change the period in **Settings → User identity**.
 
 ## What else stays out
 
-- Message content is never collected, and no privileged intents are needed.
+- Message content is never collected, and no privileged intents are needed. For
+  [prefix commands](../../guides/prefix-commands/), your bot reports the command it matched; the SDK never reads the
+  message.
 - Usernames, avatars and display names are never collected in privacy mode.
 - Option values are recorded only for options you allow-list, and secrets are redacted before anything is sent.
 - Bot tokens, interaction tokens, REST paths and request headers are never sent or logged. REST calls are recorded by

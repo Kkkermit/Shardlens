@@ -1,0 +1,66 @@
+---
+title: Prefix commands
+description: Record message commands such as !ban next to slash commands, without Shardlens reading message content.
+sidebar:
+  order: 2.5
+---
+
+import { Aside, Code } from '@astrojs/starlight/components';
+import prefix from '../../../../snippets/prefix-commands.ts?raw';
+
+Slash commands, context menus, buttons, select menus, modals and autocomplete are interactions: Shardlens records them
+on its own. Prefix commands (`!ban @someone`, or `@YourBot ban @someone`) are ordinary messages, so Shardlens can't tell
+one from chat, and it never reads message content to find out. Your bot already knows: tell Shardlens when your own
+parser has matched a command.
+
+<Code code={prefix} lang="ts" title="bot.ts" />
+
+`wrapMessageCommand(command, handler)` records how long the handler took and whether it threw, then re-throws the error
+unchanged, like [`wrap()`](../wrapping-handlers/) does for interactions. Pass `{ command, sub, group }` instead of a
+name when the command has subcommands.
+
+## If your bot catches errors itself
+
+Report the run after it finishes instead. `failed: true` records a failure your own `catch` handled; `error` records
+the error's class and Discord error code as well:
+
+```ts
+const started = performance.now();
+let failed = false;
+try {
+  await command.execute(message, args);
+} catch (error) {
+  failed = true;
+  await message.reply('Something went wrong.');
+}
+lens.trackMessageCommand(message, { command: command.name, durationMs: performance.now() - started, failed });
+```
+
+## What is recorded
+
+A prefix command is stored with your interactions, so the **Commands** page, unique users, servers, funnels, alerts on
+error rate and the Prometheus and OpenTelemetry exporters all count it. Filter or group by kind
+(`message_command`, shown as "Prefix command") to see the two apart.
+
+From the message, the SDK reads the author's ID (hashed in your bot, as for interactions), the server, the channel
+type, the server's language and the author's permissions (for the admin, manager or member split). From your call, it
+takes the command name, subcommand, the names of the arguments you list in `options` and, only for names in
+[`captureOptionValues`](../../getting-started/configuration/), their values. Never the message text, attachments,
+mentions or the prefix itself. The full list is on [Data collected](../../concepts/data-collected/).
+
+A message has no response deadline, no user language and no entitlements, so prefix commands are left out of the
+3-second deadline figures, response time, the **Reliability** page and premium share. Their failures show on the
+**Commands** page and in the `error_rate` alert.
+
+<Aside type="note">
+  Your bot needs the privileged Message Content intent to read prefix commands. Shardlens itself still needs only
+  `Guilds` and never reads what it gives you.
+</Aside>
+
+## Slash and prefix commands that share one handler
+
+If both kinds of command end in the same function (a prefix command dressed up as an interaction, for example), you can
+wrap that function with `lens.wrap()`. It records interactions and passes anything else straight to your handler, so
+report the prefix run with `trackMessageCommand` where you still have the `Message`.
+
+Opt-outs apply to prefix commands too, and `disable: ['interactions']` turns them off along with interactions.

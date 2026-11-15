@@ -2,7 +2,7 @@ import { Snowflake } from '@shardlens/schema';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { Db } from '../db.js';
-import { parseUserHash } from '../ingest/codes.js';
+import { KIND_NAME, OUTCOME_NAME, parseUserHash } from '../ingest/codes.js';
 import { bearerToken } from '../security/auth.js';
 import { auditCipher } from '../security/crypto.js';
 import { csvRow } from '../security/csv.js';
@@ -115,19 +115,6 @@ async function eraseUser(
   return erased;
 }
 
-const KINDS = [
-  '',
-  'chat_input',
-  'user_context',
-  'message_context',
-  'primary_entry_point',
-  'button',
-  'select',
-  'modal_submit',
-  'autocomplete',
-];
-const OUTCOMES = ['ok', 'error', 'timeout', 'no_response'];
-
 export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<void> {
   const cipher = deps.config.auditKey ? auditCipher(deps.config.auditKey) : undefined;
 
@@ -223,11 +210,11 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
         ts: r.ts,
         guildId: r.guild_id,
         guildName: r.guild_name,
-        kind: KINDS[r.kind] ?? String(r.kind),
+        kind: KIND_NAME[r.kind] ?? String(r.kind),
         command: r.command,
         sub: r.sub,
         customId: r.custom_id,
-        outcome: OUTCOMES[r.outcome] ?? String(r.outcome),
+        outcome: OUTCOME_NAME[r.outcome] ?? String(r.outcome),
         ackMs: r.ack_ms,
         userId,
         username: profile.username ?? null,

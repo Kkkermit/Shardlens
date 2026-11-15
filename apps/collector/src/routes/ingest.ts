@@ -145,7 +145,9 @@ export async function ingestRoutes(app: FastifyInstance, deps: Deps): Promise<vo
         if (result.mirror) deps.analytics?.mirror(result.mirror);
         // Live tiles count by when things happened, so replayed or backfilled batches never look live.
         for (const { event } of items) {
-          if (event.type !== 'interaction' || event.ts < now - 15 * 60_000) continue;
+          if ((event.type !== 'interaction' && event.type !== 'message_command') || event.ts < now - 15 * 60_000) {
+            continue;
+          }
           deps.live.bump(auth.appId, event.ts, event.weight, event.outcome === 'ok' ? 0 : event.weight);
         }
         const allRejected = [...rejected, ...result.rejected].sort((a, b) => a.index - b.index);

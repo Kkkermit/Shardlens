@@ -38,7 +38,10 @@ export interface ShardlensOptions {
   flushIntervalMs?: number | undefined;
   /** Events per batch (max 499 plus one health event). Default 499. */
   maxBatchSize?: number | undefined;
-  /** Option names whose values may be recorded (values are truncated to 100 characters). Default none. */
+  /**
+   * Option names whose values may be recorded, for slash commands and for the `optionValues` you pass with message
+   * commands (values are truncated to 100 characters). Default none.
+   */
   captureOptionValues?: readonly string[] | undefined;
   /** Replaces the default custom-ID normaliser (numbers and IDs become `*`). */
   normaliseCustomId?: ((customId: string) => string) | undefined;
@@ -50,7 +53,7 @@ export interface ShardlensOptions {
   release?: string | undefined;
   /** Print events to the console instead of sending them. */
   dryRun?: boolean | undefined;
-  /** Turn off whole metric groups. */
+  /** Turn off whole metric groups. `'interactions'` also turns off message (prefix) commands. */
   disable?: readonly MetricGroup[] | undefined;
   /** Where SDK warnings go. Default `console`. */
   logger?: Logger | undefined;

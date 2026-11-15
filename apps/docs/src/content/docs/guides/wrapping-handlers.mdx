@@ -63,3 +63,8 @@ client.on(Events.InteractionCreate, lens.wrap((interaction) => router.handle(int
   Wrap one top-level handler rather than every command. The command name, type and outcome are read from the
   interaction itself.
 </Aside>
+
+## Prefix commands
+
+`wrap` records interactions only. If a wrapped function also receives prefix commands, it runs them untouched and
+records nothing for them. Record those with [`wrapMessageCommand` or `trackMessageCommand`](../prefix-commands/).

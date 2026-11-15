@@ -135,7 +135,7 @@ export interface EventSpool {
 export const EXPORTER_METRICS: {
     readonly interactions: {
         readonly kind: "counter";
-        readonly description: "Interactions handled (commands, context menus, components, modals, autocomplete), by outcome.";
+        readonly description: "Interactions handled (commands, context menus, components, modals, autocomplete) and message (prefix) commands, by outcome.";
         readonly unit: "1";
         readonly labels: readonly ["kind", "command", "outcome"];
     };
@@ -147,7 +147,7 @@ export const EXPORTER_METRICS: {
     };
     readonly interaction_handler: {
         readonly kind: "histogram";
-        readonly description: "Time spent in a handler wrapped with lens.wrap().";
+        readonly description: "Time spent in a handler wrapped with lens.wrap(), or reported for a message command.";
         readonly unit: "seconds";
         readonly labels: readonly ["kind", "command"];
     };

@@ -62,8 +62,8 @@ await client.login(process.env.DISCORD_TOKEN);
 
 **3. Open the dashboard** at your domain and sign in with Discord (the app owner and team) or your read key.
 
-That's it. Add `lens.wrap(handler)` to record handler time and errors, `lens.track('ticket_opened', { … })` for your
-own events, and `lens.shutdown()` to flush on exit.
+That's it. Add `lens.wrap(handler)` to record handler time and errors, `lens.wrapMessageCommand(name, handler)` for
+prefix commands, `lens.track('ticket_opened', { … })` for your own events, and `lens.shutdown()` to flush on exit.
 
 ### Or paste this to your agent
 
@@ -83,18 +83,18 @@ packages in CI. The docs are also published as plain text for agents
 
 ## What you get
 
-| Page            | What it tells you                                                                                                                                                      |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Overview**    | Live interactions per minute, p95 response time, failures and shard state, streamed as they happen                                                                     |
-| **Commands**    | Runs, trend, unique users, servers, failure rate, p95, options used, channel types, languages and peak hours for every command. Registered-but-unused ones are flagged |
-| **Servers**     | Every server with its profile, usage and install history. Joins and removals that happened while the bot was offline are found at the next startup                     |
-| **Growth**      | Servers added and removed, size at install, activation within 24 hours, weekly retention cohorts, drift from Discord's own count                                       |
-| **Audience**    | Daily, weekly and monthly unique users, new against returning, stickiness, languages, install types. Counts only                                                       |
-| **Reliability** | p50/p95/p99 against the 3-second deadline, errors by Discord code, REST latency by route, 429s, the invalid-request budget, shards and SDK health                      |
-| **Events**      | Your `track()` events with property breakdowns, funnels across events and commands, and a cohort builder                                                               |
-| **Premium**     | Entitlements and subscriptions by SKU, premium share and estimated revenue                                                                                             |
-| **Alerts**      | Rules such as "missed deadlines above 1% for 10 minutes", posted to a Discord channel                                                                                  |
-| **Reports**     | A daily or weekly summary posted to a Discord channel of your choice: commands, users, failures, response time, servers, top commands                                  |
+| Page            | What it tells you                                                                                                                                                                       |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Overview**    | Live interactions per minute, p95 response time, failures and shard state, streamed as they happen                                                                                      |
+| **Commands**    | Runs, trend, unique users, servers, failure rate, p95, options used, channel types, languages and peak hours for every command, slash or prefix. Registered-but-unused ones are flagged |
+| **Servers**     | Every server with its profile, usage and install history. Joins and removals that happened while the bot was offline are found at the next startup                                      |
+| **Growth**      | Servers added and removed, size at install, activation within 24 hours, weekly retention cohorts, drift from Discord's own count                                                        |
+| **Audience**    | Daily, weekly and monthly unique users, new against returning, stickiness, languages, install types. Counts only                                                                        |
+| **Reliability** | p50/p95/p99 against the 3-second deadline, errors by Discord code, REST latency by route, 429s, the invalid-request budget, shards and SDK health                                       |
+| **Events**      | Your `track()` events with property breakdowns, funnels across events and commands, and a cohort builder                                                                                |
+| **Premium**     | Entitlements and subscriptions by SKU, premium share and estimated revenue                                                                                                              |
+| **Alerts**      | Rules such as "missed deadlines above 1% for 10 minutes", posted to a Discord channel                                                                                                   |
+| **Reports**     | A daily or weekly summary posted to a Discord channel of your choice: commands, users, failures, response time, servers, top commands                                                   |
 
 ## Works with your setup
 

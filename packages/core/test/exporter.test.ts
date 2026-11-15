@@ -48,6 +48,26 @@ describe('translateEvent', () => {
     expect(ok.calls.map((c) => c[1])).not.toContain('interaction_errors');
   });
 
+  it('counts message (prefix) commands with interactions, without a response time', () => {
+    const { sink, calls } = capture();
+    translateEvent(
+      ev('message_command', {
+        command: 'ban',
+        outcome: 'error',
+        errorClass: 'TypeError',
+        handlerMs: 40,
+        user: '',
+        guild: '112233445566778899',
+      }),
+      sink,
+    );
+    expect(calls).toEqual([
+      ['add', 'interactions', { kind: 'message_command', command: 'ban', outcome: 'error' }, 1],
+      ['add', 'interaction_errors', { command: 'ban', error_class: 'TypeError' }, 1],
+      ['record', 'interaction_handler', { kind: 'message_command', command: 'ban' }, 0.04],
+    ]);
+  });
+
   it('labels components with the command that created their message', () => {
     const { sink, calls } = capture();
     translateEvent(ev('interaction', { kind: 'button', sourceCommand: 'poll', outcome: 'no_response' }), sink);

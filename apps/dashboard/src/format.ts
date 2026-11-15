@@ -68,6 +68,7 @@ const LABELS: Record<string, Record<string, string>> = {
     select: 'Select menu',
     modal_submit: 'Modal',
     autocomplete: 'Autocomplete',
+    message_command: 'Prefix command',
   },
 };
 

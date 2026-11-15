@@ -315,6 +315,33 @@ export const InteractionError = Base.extend({
   handlerMs: z.number().int().nonnegative().optional(),
 });
 
+/**
+ * A command run from a message, such as a prefix command (`!ban`) or a mention (`@bot ban`). The bot reports it after
+ * its own parser matched a command; the SDK never reads message content. Stored and counted with interactions.
+ */
+export const MessageCommandEvent = Base.extend({
+  type: z.literal('message_command'),
+  /** The command's own name after aliases are resolved, never the text the user typed. */
+  command: z.string().min(1).max(32),
+  group: z.string().max(32).optional(),
+  sub: z.string().max(32).optional(),
+  options: z.array(z.string().max(32)).max(25).default([]),
+  optionValues: z.record(z.string().max(32), z.union([z.string().max(100), z.number(), z.boolean()])).optional(),
+  guild: Snowflake.optional(),
+  channelType: z.number().int().optional(),
+  guildLocale: z.string().max(10).optional(),
+  memberTier: z.enum(['admin', 'manager', 'member', 'dm']).optional(),
+  user: UserHash,
+  actor: Actor.optional(),
+  /** A message command has no response deadline, so it either worked or failed. */
+  outcome: z.enum(['ok', 'error']),
+  /** Error constructor name only, never a message or stack. */
+  errorClass: z.string().max(64).optional(),
+  errorCode: z.number().int().optional(),
+  handlerMs: z.number().int().nonnegative().optional(),
+  shard: z.number().int().nonnegative().optional(),
+});
+
 /** A server changed who may use the app's commands (`APPLICATION_COMMAND_PERMISSIONS_UPDATE`). */
 export const CommandPermissions = Base.extend({
   type: z.literal('command_permissions'),
@@ -328,6 +355,7 @@ export const CommandPermissions = Base.extend({
 export const Event = z.discriminatedUnion('type', [
   InteractionEvent,
   InteractionError,
+  MessageCommandEvent,
   CommandPermissions,
   GuildJoin,
   GuildUpdate,
@@ -372,11 +400,13 @@ export const BatchEnvelope = z.object({
 
 /**
  * Returns a reason when an event carries identifying data that its batch mode does not allow.
- * In privacy mode no interaction may carry an `actor`.
+ * In privacy mode no interaction or message command may carry an `actor`.
  */
 export function privacyViolation(event: Event, mode: Mode): string | undefined {
   if (mode === 'audit') return undefined;
-  if (event.type === 'interaction' && event.actor !== undefined) return 'actor_in_privacy_mode';
+  if ((event.type === 'interaction' || event.type === 'message_command') && event.actor !== undefined) {
+    return 'actor_in_privacy_mode';
+  }
   return undefined;
 }
 
@@ -419,6 +449,7 @@ export type CustomEvent = z.output<typeof CustomEvent>;
 export type AppInfo = z.output<typeof AppInfo>;
 export type SdkHealth = z.output<typeof SdkHealth>;
 export type InteractionError = z.output<typeof InteractionError>;
+export type MessageCommandEvent = z.output<typeof MessageCommandEvent>;
 export type CommandPermissions = z.output<typeof CommandPermissions>;
 
 /** What an SDK may send (input types: defaulted fields are optional). */

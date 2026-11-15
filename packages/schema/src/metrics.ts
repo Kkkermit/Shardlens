@@ -24,15 +24,15 @@ export const METRICS = [
     name: 'interactions',
     kind: 'counter',
     unit: 'count',
-    source: ['interaction'],
+    source: ['interaction', 'message_command'],
     description:
-      'Commands, context menus and entry points run, with outcome and response-time histogram. Split by command, subcommand, outcome, context, install type, locale and member tier; never by server.',
+      'Commands, context menus, entry points and message (prefix) commands run, with outcome and response-time histogram. Split by command, subcommand, kind, outcome, context, install type, locale and member tier; never by server.',
   },
   {
     name: 'interactions.by_guild',
     kind: 'counter',
     unit: 'count',
-    source: ['interaction'],
+    source: ['interaction', 'message_command'],
     description:
       'The same runs split by server, kind, command and outcome only, so the main rollup does not grow with commands × servers.',
   },

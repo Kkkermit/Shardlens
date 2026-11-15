@@ -30,7 +30,8 @@ export const DEFAULT_DURATION_BUCKETS: readonly number[] = [0.05, 0.1, 0.25, 0.5
 export const EXPORTER_METRICS = {
   interactions: {
     kind: 'counter',
-    description: 'Interactions handled (commands, context menus, components, modals, autocomplete), by outcome.',
+    description:
+      'Interactions handled (commands, context menus, components, modals, autocomplete) and message (prefix) commands, by outcome.',
     unit: '1',
     labels: ['kind', 'command', 'outcome'],
   },
@@ -42,7 +43,7 @@ export const EXPORTER_METRICS = {
   },
   interaction_handler: {
     kind: 'histogram',
-    description: 'Time spent in a handler wrapped with lens.wrap().',
+    description: 'Time spent in a handler wrapped with lens.wrap(), or reported for a message command.',
     unit: 'seconds',
     labels: ['kind', 'command'],
   },
@@ -157,6 +158,17 @@ export function translateEvent(event: WireEvent, sink: MetricSink): void {
       if (ack !== undefined) sink.record('interaction_response', { kind, command }, ack / 1000);
       const handler = num(e.handlerMs);
       if (handler !== undefined) sink.record('interaction_handler', { kind, command }, handler / 1000);
+      return;
+    }
+    case 'message_command': {
+      const command = str(e.command);
+      const labels = { kind: 'message_command', command };
+      sink.add('interactions', { ...labels, outcome: str(e.outcome, 'unknown') }, weight);
+      if (e.outcome === 'error' && e.errorClass !== undefined) {
+        sink.add('interaction_errors', { command, error_class: str(e.errorClass, 'Error') }, weight);
+      }
+      const handler = num(e.handlerMs);
+      if (handler !== undefined) sink.record('interaction_handler', labels, handler / 1000);
       return;
     }
     case 'interaction_error':

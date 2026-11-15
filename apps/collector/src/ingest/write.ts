@@ -83,6 +83,37 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
   // Guild lifecycle must be applied in order, inside the transaction.
   const ordered: Indexed[] = [];
 
+  /** Who ran a command, encrypted: only when the batch and the app are both in audit mode, within audit retention. */
+  const audit = (
+    e: Extract<Event, { type: 'interaction' | 'message_command' }>,
+    ts: Date,
+    kind: number,
+    customId: string | undefined,
+    ackMs: number | undefined,
+  ) => {
+    if (!ctx.audit || !e.actor || e.ts < ctx.audit.oldestMs) return;
+    const { cipher } = ctx.audit;
+    const profile =
+      e.actor.username !== undefined || e.actor.avatar !== undefined
+        ? cipher.encrypt(JSON.stringify({ username: e.actor.username, avatar: e.actor.avatar }))
+        : null;
+    auditRows.push([
+      e.id,
+      ts,
+      ctx.appId,
+      cipher.lookupHash(e.actor.userId),
+      cipher.encrypt(e.actor.userId),
+      profile,
+      e.guild ?? null,
+      kind,
+      e.command ?? null,
+      e.sub ?? null,
+      customId ?? null,
+      OUTCOME[e.outcome],
+      ackMs ?? null,
+    ]);
+  };
+
   for (const { index, event: e } of items) {
     const ts = new Date(e.ts);
     switch (e.type) {
@@ -140,28 +171,68 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
           const t = commandTimes.get(e.guild);
           commandTimes.set(e.guild, { first: Math.min(t?.first ?? e.ts, e.ts), last: Math.max(t?.last ?? e.ts, e.ts) });
         }
-        if (ctx.audit && e.actor && e.ts >= ctx.audit.oldestMs) {
-          const { cipher } = ctx.audit;
-          const profile =
-            e.actor.username !== undefined || e.actor.avatar !== undefined
-              ? cipher.encrypt(JSON.stringify({ username: e.actor.username, avatar: e.actor.avatar }))
-              : null;
-          auditRows.push([
-            e.id,
-            ts,
-            ctx.appId,
-            cipher.lookupHash(e.actor.userId),
-            cipher.encrypt(e.actor.userId),
-            profile,
-            e.guild ?? null,
-            KIND[e.kind],
-            e.command ?? null,
-            e.sub ?? null,
-            e.customId ?? null,
-            OUTCOME[e.outcome],
-            e.ackMs ?? null,
-          ]);
+        audit(e, ts, KIND[e.kind], e.customId, e.ackMs);
+        result.interactions += e.weight;
+        if (e.outcome !== 'ok') result.errors += e.weight;
+        break;
+      }
+      case 'message_command': {
+        const user = userHash(index, e.user);
+        if (!user) continue;
+        periods.add(user.period);
+        markLate(e.ts);
+        // Stored with interactions so every command view counts it. A message has no user language, install type,
+        // entitlements or response, so those columns hold empty values that the deadline and premium figures skip.
+        interactionRows.push([
+          e.id,
+          ts,
+          ctx.appId,
+          ctx.env,
+          ctx.release ?? null,
+          KIND.message_command,
+          e.command,
+          e.group ?? null,
+          e.sub ?? null,
+          null,
+          null,
+          e.options,
+          e.optionValues ? JSON.stringify(e.optionValues) : null,
+          null,
+          null,
+          null,
+          e.guild ? 0 : 1,
+          null,
+          e.guild ?? null,
+          e.channelType ?? null,
+          '',
+          e.guildLocale ?? null,
+          e.memberTier ? MEMBER_TIER[e.memberTier] : null,
+          user.bytes,
+          user.period,
+          false,
+          OUTCOME[e.outcome],
+          e.errorCode ?? null,
+          e.errorClass ?? null,
+          null,
+          null,
+          null,
+          null,
+          e.handlerMs ?? null,
+          e.shard ?? null,
+          e.weight,
+        ]);
+        const day = ts.toISOString().slice(0, 10);
+        const scopes: [string, string][] = [
+          ['global', '*'],
+          ['command', e.command],
+        ];
+        if (e.guild) scopes.push(['guild', e.guild]);
+        for (const [scope, key] of scopes) uniqueRows.push([ctx.appId, user.period, day, scope, key, user.bytes]);
+        if (e.guild) {
+          const t = commandTimes.get(e.guild);
+          commandTimes.set(e.guild, { first: Math.min(t?.first ?? e.ts, e.ts), last: Math.max(t?.last ?? e.ts, e.ts) });
         }
+        audit(e, ts, KIND.message_command, undefined, undefined);
         result.interactions += e.weight;
         if (e.outcome !== 'ok') result.errors += e.weight;
         break;

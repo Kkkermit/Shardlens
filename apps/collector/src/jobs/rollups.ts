@@ -1,4 +1,5 @@
 import type { Db } from '../db.js';
+import { COMMAND_KINDS_SQL } from '../ingest/codes.js';
 import { periodBounds } from '../storage/periods.js';
 
 /**
@@ -7,20 +8,20 @@ import { periodBounds } from '../storage/periods.js';
  * in [$1, $2). Every SQL string here is a constant; only the window bounds are parameters.
  */
 const MINUTE_SOURCES: readonly string[] = [
-  // interactions: commands, context menus and entry points. No server dimension here, so the table doesn't grow with
-  // commands × servers; per-server numbers come from `interactions.by_guild` below.
+  // interactions: commands, context menus, entry points and message commands. No server dimension here, so the table
+  // doesn't grow with commands × servers; per-server numbers come from `interactions.by_guild` below.
   `SELECT app_id, date_trunc($3, ts) AS bucket, 'interactions' AS metric,
           jsonb_build_object('kind', kind, 'command', command, 'sub', sub, 'outcome', outcome, 'context', context,
             'install', install, 'locale', locale, 'tier', member_tier) AS dims,
           sum(weight) AS count, sum(coalesce(ack_ms, 0) * weight) AS sum, min(ack_ms) AS min, max(ack_ms) AS max,
           shardlens_hist_sum(shardlens_hist_one(ack_ms, weight)) AS hist
-     FROM interactions WHERE ts >= $1 AND ts < $2 AND kind BETWEEN 1 AND 4
+     FROM interactions WHERE ts >= $1 AND ts < $2 AND kind IN ${COMMAND_KINDS_SQL}
     GROUP BY app_id, 2, kind, command, sub, outcome, context, install, locale, member_tier`,
   `SELECT app_id, date_trunc($3, ts), 'interactions.by_guild',
           jsonb_build_object('kind', kind, 'command', command, 'outcome', outcome, 'guild', guild_id::text),
           sum(weight), sum(coalesce(ack_ms, 0) * weight), min(ack_ms), max(ack_ms),
           shardlens_hist_sum(shardlens_hist_one(ack_ms, weight))
-     FROM interactions WHERE ts >= $1 AND ts < $2 AND kind BETWEEN 1 AND 4 AND guild_id IS NOT NULL
+     FROM interactions WHERE ts >= $1 AND ts < $2 AND kind IN ${COMMAND_KINDS_SQL} AND guild_id IS NOT NULL
     GROUP BY app_id, 2, kind, command, outcome, guild_id`,
   `SELECT app_id, date_trunc($3, ts), 'interactions.autocomplete',
           jsonb_build_object('command', command, 'option', options[1]),

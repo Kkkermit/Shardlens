@@ -305,8 +305,9 @@ export class ClickHouseStore {
     if (q.metric === 'interactions' || q.metric === 'interactions.by_guild') {
       const stat = STAT[q.stat]?.interactions;
       if (!stat || fields.some((f) => !(f in INTERACTION_COLUMNS))) return undefined;
-      // Like PostgreSQL's `interactions` metric: commands, context menus and entry points (kinds 1–4).
-      const where = q.metric === 'interactions.by_guild' ? ' AND kind <= 4 AND guild_id > 0' : ' AND kind <= 4';
+      // Like PostgreSQL's `interactions` metric: commands, context menus, entry points (kinds 1–4) and message commands (9).
+      const kinds = ' AND (kind <= 4 OR kind = 9)';
+      const where = q.metric === 'interactions.by_guild' ? `${kinds} AND guild_id > 0` : kinds;
       return { table: 'interactions_1m', columns: INTERACTION_COLUMNS, where, stat };
     }
     if (q.metric.startsWith('custom.')) {

@@ -9,7 +9,7 @@ import {
   Snowflake,
   UserHash,
 } from '../src/index.js';
-import { batch, guildInfo, interaction, USER_HASH } from './fixtures.js';
+import { batch, guildInfo, interaction, messageCommand, USER_HASH } from './fixtures.js';
 
 describe('Batch', () => {
   it('accepts a valid privacy-mode batch and applies defaults', () => {
@@ -53,6 +53,31 @@ describe('Batch', () => {
     );
     expect(result.success).toBe(true);
     expect(JSON.stringify(result.data)).not.toContain('223344556677889900');
+  });
+
+  it('accepts a message command, which has no locale, response or deadline', () => {
+    const result = Batch.safeParse(batch([messageCommand({ options: undefined })]));
+    expect(result.success).toBe(true);
+    const event = result.data?.events[0];
+    expect(event?.type === 'message_command' && event.options).toEqual([]);
+  });
+
+  it('refuses message commands without a name, with a raw user ID, or with a deadline outcome', () => {
+    for (const bad of [
+      messageCommand({ command: '' }),
+      messageCommand({ command: 'x'.repeat(33) }),
+      messageCommand({ user: '112233445566778899' }),
+      { ...messageCommand(), outcome: 'timeout' },
+    ]) {
+      expect(Batch.safeParse(batch([bad])).success, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it('applies the privacy-mode actor rule to message commands too', () => {
+    const actor = { userId: '112233445566778899' };
+    const privacy = Batch.safeParse(batch([messageCommand({ actor })]));
+    expect(privacy.error?.issues[0]?.message).toBe('actor_in_privacy_mode');
+    expect(Batch.safeParse(batch([messageCommand({ actor })], { mode: 'audit' })).success).toBe(true);
   });
 
   it('rejects a non-v7 event ID', () => {

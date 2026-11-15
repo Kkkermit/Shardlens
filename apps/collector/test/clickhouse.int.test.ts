@@ -165,4 +165,35 @@ describe('ClickHouse analytics store (preview)', () => {
     expect(Number(((await rows.json()) as { n: string | number }[])[0]?.n)).toBe(0);
     await client.close();
   });
+  // Last, because it adds a run the tests above don't count.
+  it('counts message (prefix) commands with interactions, like PostgreSQL does', async () => {
+    const now = Date.now();
+    const res = await ingest(
+      h.app,
+      envelope([
+        {
+          id: uuidv7(now),
+          ts: now,
+          type: 'message_command',
+          command: 'warn',
+          guild: GUILD_A,
+          user: await hashOf('300000000000000004'),
+          outcome: 'ok',
+        },
+      ]),
+    );
+    expect(res.json()).toMatchObject({ accepted: 1, rejected: [] });
+    await store.flush();
+    await runRollups(h.db, new Date(Date.now() + 120_000));
+    const spec = {
+      kind: 'top',
+      metric: 'interactions',
+      groupBy: 'kind',
+      filters: [{ field: 'command', value: 'warn' }],
+    };
+    const fromCh = await run({ ...spec, range: range() }, true);
+    const fromPg = await run({ ...spec, range: pgRange() }, false);
+    expect(fromCh.rows).toEqual([expect.objectContaining({ key: 'message_command', count: 1 })]);
+    expect(fromPg.rows).toEqual([expect.objectContaining({ key: 'message_command', count: 1 })]);
+  });
 });

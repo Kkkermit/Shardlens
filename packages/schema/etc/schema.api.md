@@ -146,6 +146,39 @@ export const Batch: z.ZodObject<{
         id: z.ZodUUID;
         ts: z.ZodNumber;
         weight: z.ZodDefault<z.ZodNumber>;
+        type: z.ZodLiteral<"message_command">;
+        command: z.ZodString;
+        group: z.ZodOptional<z.ZodString>;
+        sub: z.ZodOptional<z.ZodString>;
+        options: z.ZodDefault<z.ZodArray<z.ZodString>>;
+        optionValues: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnion<readonly [z.ZodString, z.ZodNumber, z.ZodBoolean]>>>;
+        guild: z.ZodOptional<z.ZodString>;
+        channelType: z.ZodOptional<z.ZodNumber>;
+        guildLocale: z.ZodOptional<z.ZodString>;
+        memberTier: z.ZodOptional<z.ZodEnum<{
+            admin: "admin";
+            manager: "manager";
+            member: "member";
+            dm: "dm";
+        }>>;
+        user: z.ZodString;
+        actor: z.ZodOptional<z.ZodObject<{
+            userId: z.ZodString;
+            username: z.ZodOptional<z.ZodString>;
+            avatar: z.ZodOptional<z.ZodString>;
+        }, z.core.$strip>>;
+        outcome: z.ZodEnum<{
+            error: "error";
+            ok: "ok";
+        }>;
+        errorClass: z.ZodOptional<z.ZodString>;
+        errorCode: z.ZodOptional<z.ZodNumber>;
+        handlerMs: z.ZodOptional<z.ZodNumber>;
+        shard: z.ZodOptional<z.ZodNumber>;
+    }, z.core.$strip>, z.ZodObject<{
+        id: z.ZodUUID;
+        ts: z.ZodNumber;
+        weight: z.ZodDefault<z.ZodNumber>;
         type: z.ZodLiteral<"command_permissions">;
         guild: z.ZodString;
         command: z.ZodString;
@@ -440,7 +473,7 @@ export interface CollectedField {
 }
 
 // @public
-export type CollectedObject = 'envelope' | 'event' | 'actor' | 'guild_info' | 'interaction' | 'guild_join' | 'guild_update' | 'guild_leave' | 'guild_availability' | 'guild_snapshot' | 'command_registry' | 'shard_state' | 'rest_window' | 'rate_limit' | 'invalid_request_warning' | 'gauge_window' | 'entitlement' | 'subscription' | 'custom' | 'app_info' | 'sdk_health' | 'interaction_error' | 'command_permissions';
+export type CollectedObject = 'envelope' | 'event' | 'actor' | 'guild_info' | 'interaction' | 'guild_join' | 'guild_update' | 'guild_leave' | 'guild_availability' | 'guild_snapshot' | 'command_registry' | 'shard_state' | 'rest_window' | 'rate_limit' | 'invalid_request_warning' | 'gauge_window' | 'entitlement' | 'subscription' | 'custom' | 'app_info' | 'sdk_health' | 'interaction_error' | 'message_command' | 'command_permissions';
 
 // @public
 export const CommandPermissions: z.ZodObject<{
@@ -634,6 +667,39 @@ export const Event: z.ZodDiscriminatedUnion<[z.ZodObject<{
     errorClass: z.ZodString;
     errorCode: z.ZodOptional<z.ZodNumber>;
     handlerMs: z.ZodOptional<z.ZodNumber>;
+}, z.core.$strip>, z.ZodObject<{
+    id: z.ZodUUID;
+    ts: z.ZodNumber;
+    weight: z.ZodDefault<z.ZodNumber>;
+    type: z.ZodLiteral<"message_command">;
+    command: z.ZodString;
+    group: z.ZodOptional<z.ZodString>;
+    sub: z.ZodOptional<z.ZodString>;
+    options: z.ZodDefault<z.ZodArray<z.ZodString>>;
+    optionValues: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnion<readonly [z.ZodString, z.ZodNumber, z.ZodBoolean]>>>;
+    guild: z.ZodOptional<z.ZodString>;
+    channelType: z.ZodOptional<z.ZodNumber>;
+    guildLocale: z.ZodOptional<z.ZodString>;
+    memberTier: z.ZodOptional<z.ZodEnum<{
+        admin: "admin";
+        manager: "manager";
+        member: "member";
+        dm: "dm";
+    }>>;
+    user: z.ZodString;
+    actor: z.ZodOptional<z.ZodObject<{
+        userId: z.ZodString;
+        username: z.ZodOptional<z.ZodString>;
+        avatar: z.ZodOptional<z.ZodString>;
+    }, z.core.$strip>>;
+    outcome: z.ZodEnum<{
+        error: "error";
+        ok: "ok";
+    }>;
+    errorClass: z.ZodOptional<z.ZodString>;
+    errorCode: z.ZodOptional<z.ZodNumber>;
+    handlerMs: z.ZodOptional<z.ZodNumber>;
+    shard: z.ZodOptional<z.ZodNumber>;
 }, z.core.$strip>, z.ZodObject<{
     id: z.ZodUUID;
     ts: z.ZodNumber;
@@ -1230,6 +1296,45 @@ export const MAX_BATCH_EVENTS = 500;
 // @public
 export const MAX_DECOMPRESSED_BYTES: number;
 
+// @public
+export const MessageCommandEvent: z.ZodObject<{
+    id: z.ZodUUID;
+    ts: z.ZodNumber;
+    weight: z.ZodDefault<z.ZodNumber>;
+    type: z.ZodLiteral<"message_command">;
+    command: z.ZodString;
+    group: z.ZodOptional<z.ZodString>;
+    sub: z.ZodOptional<z.ZodString>;
+    options: z.ZodDefault<z.ZodArray<z.ZodString>>;
+    optionValues: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnion<readonly [z.ZodString, z.ZodNumber, z.ZodBoolean]>>>;
+    guild: z.ZodOptional<z.ZodString>;
+    channelType: z.ZodOptional<z.ZodNumber>;
+    guildLocale: z.ZodOptional<z.ZodString>;
+    memberTier: z.ZodOptional<z.ZodEnum<{
+        admin: "admin";
+        manager: "manager";
+        member: "member";
+        dm: "dm";
+    }>>;
+    user: z.ZodString;
+    actor: z.ZodOptional<z.ZodObject<{
+        userId: z.ZodString;
+        username: z.ZodOptional<z.ZodString>;
+        avatar: z.ZodOptional<z.ZodString>;
+    }, z.core.$strip>>;
+    outcome: z.ZodEnum<{
+        error: "error";
+        ok: "ok";
+    }>;
+    errorClass: z.ZodOptional<z.ZodString>;
+    errorCode: z.ZodOptional<z.ZodNumber>;
+    handlerMs: z.ZodOptional<z.ZodNumber>;
+    shard: z.ZodOptional<z.ZodNumber>;
+}, z.core.$strip>;
+
+// @public (undocumented)
+export type MessageCommandEvent = z.output<typeof MessageCommandEvent>;
+
 // @public (undocumented)
 export interface MetricDefinition {
     // (undocumented)
@@ -1254,13 +1359,13 @@ export const METRICS: readonly [{
     readonly name: "interactions";
     readonly kind: "counter";
     readonly unit: "count";
-    readonly source: readonly ["interaction"];
-    readonly description: "Commands, context menus and entry points run, with outcome and response-time histogram. Split by command, subcommand, outcome, context, install type, locale and member tier; never by server.";
+    readonly source: readonly ["interaction", "message_command"];
+    readonly description: "Commands, context menus, entry points and message (prefix) commands run, with outcome and response-time histogram. Split by command, subcommand, kind, outcome, context, install type, locale and member tier; never by server.";
 }, {
     readonly name: "interactions.by_guild";
     readonly kind: "counter";
     readonly unit: "count";
-    readonly source: readonly ["interaction"];
+    readonly source: readonly ["interaction", "message_command"];
     readonly description: "The same runs split by server, kind, command and outcome only, so the main rollup does not grow with commands × servers.";
 }, {
     readonly name: "interactions.autocomplete";

@@ -1,5 +1,6 @@
 import type { Db } from '../db.js';
 import {
+  COMMAND_KINDS_SQL,
   INSTALL,
   INSTALL_NAME,
   KIND,
@@ -295,7 +296,7 @@ async function command(db: Db, appId: string, spec: Spec<'command'>, now: Date) 
   const from = new Date(Math.max(Date.parse(spec.range.from), now.getTime() - 35 * DAY));
   const to = new Date(spec.range.to);
   const p = [appId, spec.name, from, to];
-  const base = `FROM interactions WHERE app_id = $1 AND command = $2 AND ts >= $3 AND ts < $4 AND kind BETWEEN 1 AND 4`;
+  const base = `FROM interactions WHERE app_id = $1 AND command = $2 AND ts >= $3 AND ts < $4 AND kind IN ${COMMAND_KINDS_SQL}`;
   const [totals, subs, options, values, tiers, installs, contexts, channels, locales, servers, components, modals] =
     await Promise.all([
       db.query(
@@ -304,9 +305,9 @@ async function command(db: Db, appId: string, spec: Spec<'command'>, now: Date) 
                 sum(weight) FILTER (WHERE outcome = 1)::float8 AS error,
                 sum(weight) FILTER (WHERE outcome = 2)::float8 AS timeout,
                 sum(weight) FILTER (WHERE outcome = 3)::float8 AS "noResponse",
-                (sum(weight) FILTER (WHERE deferred) / nullif(sum(weight), 0))::float8 AS "deferRate",
-                (sum(weight) FILTER (WHERE ephemeral) / nullif(sum(weight), 0))::float8 AS "ephemeralRate",
-                (sum(weight) FILTER (WHERE premium) / nullif(sum(weight), 0))::float8 AS "premiumShare",
+                (sum(weight) FILTER (WHERE deferred) / nullif(sum(weight) FILTER (WHERE kind <> 9), 0))::float8 AS "deferRate",
+                (sum(weight) FILTER (WHERE ephemeral) / nullif(sum(weight) FILTER (WHERE kind <> 9), 0))::float8 AS "ephemeralRate",
+                (sum(weight) FILTER (WHERE premium) / nullif(sum(weight) FILTER (WHERE kind <> 9), 0))::float8 AS "premiumShare",
                 (sum(weight) FILTER (WHERE ack_ms > 3000) / nullif(sum(weight) FILTER (WHERE ack_ms IS NOT NULL), 0))::float8 AS "over3sRate",
                 shardlens_hist_sum(shardlens_hist_one(ack_ms, weight)) AS latency,
                 shardlens_hist_quantile(shardlens_hist_sum(shardlens_hist_one(handler_ms, weight)), 0.95)::float8 AS "handlerP95Ms",
@@ -336,7 +337,10 @@ async function command(db: Db, appId: string, spec: Spec<'command'>, now: Date) 
         `SELECT channel_type AS key, sum(weight)::float8 AS value ${base} AND channel_type IS NOT NULL GROUP BY 1 ORDER BY 2 DESC`,
         p,
       ),
-      db.query(`SELECT locale AS key, sum(weight)::float8 AS value ${base} GROUP BY 1 ORDER BY 2 DESC LIMIT 15`, p),
+      db.query(
+        `SELECT locale AS key, sum(weight)::float8 AS value ${base} AND locale <> '' GROUP BY 1 ORDER BY 2 DESC LIMIT 15`,
+        p,
+      ),
       db.query(
         `SELECT guild_id::text AS key, sum(weight)::float8 AS value ${base} AND guild_id IS NOT NULL GROUP BY 1 ORDER BY 2 DESC LIMIT 10`,
         p,
@@ -622,12 +626,13 @@ async function audience(db: Db, appId: string, spec: Spec<'audience'>, now: Date
       `SELECT k AS dimension, dims->>k AS key, sum(count)::float8 AS value
          FROM ${rollups.table}, unnest(ARRAY['locale', 'install', 'context', 'tier']) AS k
         WHERE app_id = $1 AND metric = 'interactions' AND bucket >= $2 AND bucket < $3
+          AND coalesce(dims->>k, '') <> ''
         GROUP BY 1, 2 ORDER BY 1, 3 DESC`,
       [appId, rollups.from, to],
     ),
     db.query<{ share: number | null }>(
       `SELECT (sum(weight) FILTER (WHERE premium) / nullif(sum(weight), 0))::float8 AS share
-         FROM interactions WHERE app_id = $1 AND ts >= $2 AND ts < $3`,
+         FROM interactions WHERE app_id = $1 AND ts >= $2 AND ts < $3 AND kind <> 9`,
       [appId, rawFrom, to],
     ),
   ]);

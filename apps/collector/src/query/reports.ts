@@ -5,6 +5,7 @@ const DAY = 86_400_000;
 const rawFrom = (from: Date, now: Date) => new Date(Math.max(from.getTime(), now.getTime() - 35 * DAY));
 
 /** Reliability page: deadlines, errors, REST, rate limits, budgets, shards, process and SDK health. */
+/** Interactions only: message commands (kind 9) have no response or deadline, and show on the Commands page. */
 export async function reliability(db: Db, appId: string, range: { from: string; to: string }, now: Date) {
   const from = new Date(range.from);
   const to = new Date(range.to);
@@ -20,12 +21,12 @@ export async function reliability(db: Db, appId: string, range: { from: string; 
               shardlens_hist_quantile(shardlens_hist_sum(shardlens_hist_one(ack_ms, weight)), 0.5)::float8 AS "p50Ms",
               shardlens_hist_quantile(shardlens_hist_sum(shardlens_hist_one(ack_ms, weight)), 0.95)::float8 AS "p95Ms",
               shardlens_hist_quantile(shardlens_hist_sum(shardlens_hist_one(ack_ms, weight)), 0.99)::float8 AS "p99Ms"
-         FROM interactions WHERE app_id = $1 AND ts >= $2 AND ts < $3`,
+         FROM interactions WHERE app_id = $1 AND ts >= $2 AND ts < $3 AND kind <> 9`,
       [appId, rf, to],
     ),
     db.query(
       `SELECT coalesce(error_code::text, error_class, 'unknown') AS key, sum(weight)::float8 AS value
-         FROM interactions WHERE app_id = $1 AND ts >= $2 AND ts < $3 AND outcome IN (1, 2)
+         FROM interactions WHERE app_id = $1 AND ts >= $2 AND ts < $3 AND outcome IN (1, 2) AND kind <> 9
         GROUP BY 1 ORDER BY 2 DESC LIMIT 10`,
       [appId, rf, to],
     ),
@@ -144,7 +145,7 @@ export async function premium(db: Db, appId: string, range: { from: string; to: 
     ),
     db.query<{ share: number | null }>(
       `SELECT (sum(weight) FILTER (WHERE premium) / nullif(sum(weight), 0))::float8 AS share
-         FROM interactions WHERE app_id = $1 AND ts >= $2 AND ts < $3`,
+         FROM interactions WHERE app_id = $1 AND ts >= $2 AND ts < $3 AND kind <> 9`,
       [appId, rawFrom(from, now), to],
     ),
   ]);

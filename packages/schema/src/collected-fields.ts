@@ -51,6 +51,7 @@ export type CollectedObject =
   | 'app_info'
   | 'sdk_health'
   | 'interaction_error'
+  | 'message_command'
   | 'command_permissions';
 
 export interface CollectedField {
@@ -136,6 +137,35 @@ export const COLLECTED_FIELDS: readonly CollectedField[] = [
   f('interaction', 'ephemeral', 'Whether the first response was ephemeral.'),
   f('interaction', 'handlerMs', 'Handler duration, when the handler is wrapped with `lens.wrap()`.'),
   f('interaction', 'shard', 'Shard that received the interaction.'),
+
+  // Message (prefix) command, reported by the bot with `trackMessageCommand()`. Message content is never read.
+  f('message_command', 'command', 'Command name as the bot defines it, after aliases. Never the text the user typed.'),
+  f('message_command', 'group', 'Subcommand group name, if the bot reports one.'),
+  f('message_command', 'sub', 'Subcommand name, if the bot reports one.'),
+  f('message_command', 'options', 'Names of the arguments the bot reports as used. Values are not collected.'),
+  f(
+    'message_command',
+    'optionValues',
+    'Values of arguments the bot owner allow-listed with `captureOptionValues` only.',
+  ),
+  f('message_command', 'guild', 'Server ID (not personal data).'),
+  f('message_command', 'channelType', 'Channel type number. Channel IDs and names are never collected.'),
+  f('message_command', 'guildLocale', "The server's preferred language."),
+  f('message_command', 'memberTier', 'Admin, manager, member or DM, derived from the member’s permissions.'),
+  f('message_command', 'user', 'Keyed hash of the message author’s ID, computed inside the bot process.', {
+    personal: 'pseudonymous',
+    retention: 'hash',
+  }),
+  f('message_command', 'actor', 'Who ran it (raw user ID, optional names). Audit mode only; encrypted at rest.', {
+    mode: 'audit',
+    personal: 'yes',
+    retention: 'audit',
+  }),
+  f('message_command', 'outcome', 'ok or error, as the handler finished.'),
+  f('message_command', 'errorClass', 'Error class name the handler threw. Never messages or stack traces.'),
+  f('message_command', 'errorCode', 'Discord API error code, if the error came from Discord.'),
+  f('message_command', 'handlerMs', 'Handler duration, when the bot reports it.'),
+  f('message_command', 'shard', 'Shard that received the message.'),
 
   // Interaction_error
   f('interaction_error', 'interaction', 'ID of the interaction event the error belongs to.'),

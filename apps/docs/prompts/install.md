@@ -7,7 +7,7 @@ You are adding Shardlens to the discord.js bot in this repository. Everything yo
 Shardlens is self-hosted, privacy-first analytics and health monitoring for discord.js bots (MIT).
 
 - It has two parts: an **SDK** inside the bot (`@shardlens/discordjs`, what you are installing) and a **collector** with a dashboard that the bot's owner runs separately. The SDK sends batches of events to the collector over HTTPS.
-- The SDK records interactions (command name, outcome, response time), servers joined and left, REST and shard health. It never records message content, and user IDs are hashed inside the bot before anything is sent.
+- The SDK records interactions (command name, outcome, response time), prefix commands the bot reports, servers joined and left, REST and shard health. It never records message content, and user IDs are hashed inside the bot before anything is sent.
 - It listens through public discord.js events only. It does not change how the bot behaves, never throws into the bot, and needs no Gateway intent beyond `Guilds`.
 - Requirements: discord.js 14 or 15, Node.js 22.12 or newer. It ships ESM and CommonJS builds with types.
 
@@ -104,6 +104,46 @@ client.on(Events.InteractionCreate, async (interaction) => {
 ```
 
 Interactions are recorded even without `wrap`; wrapping adds handler time and handler errors.
+
+### Prefix commands, if the bot has them
+
+Skip this if the bot has no message commands. Prefix commands (`!ban @someone`, or a mention of the bot followed by a command) are ordinary messages, so Shardlens can't see them on its own, and it never reads message content. Tell it at the single place the project dispatches prefix commands, after the project's own parser has found the command:
+
+```ts
+import type { Message } from 'discord.js';
+
+async function runPrefixCommand(message: Message, name: string, args: string[]) {
+  // `prefixCommands` stands for the project's own registry of message commands
+  const command = prefixCommands.get(name);
+  if (!command) return;
+  // The command's own name, after aliases: never the text that was typed.
+  await lens.wrapMessageCommand(command.name, (m: Message) => command.execute(m, args))(message);
+}
+```
+
+If the project catches command errors itself, report the result after its `try`/`catch` instead:
+
+```ts
+import type { Message } from 'discord.js';
+
+async function runPrefixCommand(message: Message, name: string, args: string[]) {
+  const command = prefixCommands.get(name);
+  if (!command) return;
+  const started = performance.now();
+  let failed = false;
+  try {
+    await command.execute(message, args);
+  } catch {
+    failed = true;
+    // the project's existing error reply, unchanged
+  }
+  lens.trackMessageCommand(message, { command: command.name, durationMs: performance.now() - started, failed });
+}
+```
+
+- If the command has a subcommand, pass `{ command, sub }` to `wrapMessageCommand` or add `sub` to the `trackMessageCommand` object.
+- Never pass `message.content`, the typed name, argument values or anything else the user wrote.
+- Don't add the Message Content intent for Shardlens. If the bot has prefix commands it already has it.
 
 ## 5. Flush on shutdown
 
