@@ -7,12 +7,15 @@
 import { ClientStats } from '@shardlens/core';
 import { CustomEventName } from '@shardlens/core';
 import { CustomEventProps } from '@shardlens/core';
+import { CustomEvents } from '@shardlens/core';
 import { Logger } from '@shardlens/core';
 import { SaltPeriod } from '@shardlens/core';
 import { ShardlensExporter } from '@shardlens/core';
 
 // @public
 export function createShardlensHttp(options: ShardlensHttpOptions): ShardlensHttp;
+
+export { CustomEvents }
 
 // @public
 export interface RawInteraction {

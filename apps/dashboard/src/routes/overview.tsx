@@ -5,6 +5,7 @@ import { TimeChart } from '../components/charts';
 import { DataTable } from '../components/DataTable';
 import { Name, PageHead, Panel, QueryBody, Tile } from '../components/ui';
 import { ago, day, ms, num, pct } from '../format';
+import { overviewRefreshMs } from '../freshness';
 
 interface Overview {
   servers: number;
@@ -36,7 +37,7 @@ interface Overview {
 export function OverviewPage() {
   const meta = useMeta();
   const { tiles, stale } = useLive();
-  const overview = useSpec<Overview>({ kind: 'overview' });
+  const overview = useSpec<Overview>({ kind: 'overview' }, { refreshMs: overviewRefreshMs });
   const runs = overview.data?.runs30d ?? [];
   const chart = useMemo(
     () => ({

@@ -155,14 +155,21 @@ export const useMeta = () => useQuery({ queryKey: ['meta'], queryFn: () => api<M
 /** True while any of these shows the previous answer because a new one (another range, page or filter) is loading. */
 export const updating = (...queries: { isPlaceholderData: boolean }[]) => queries.some((q) => q.isPlaceholderData);
 
-/** Runs a typed query spec. Queries are cancelled when the component unmounts or the spec changes. */
-export function useSpec<T>(spec: Record<string, unknown> | null) {
-  return useQuery({
+/**
+ * Runs a typed query spec. Queries are cancelled when the component unmounts or the spec changes. `refreshMs` asks
+ * again that often while the page is open and visible, for a page people leave open (the Overview).
+ */
+export function useSpec<T>(
+  spec: Record<string, unknown> | null,
+  options: { refreshMs?: (data: T | undefined) => number } = {},
+) {
+  return useQuery<T>({
     queryKey: ['query', spec],
     queryFn: ({ signal }) => api<T>('/v1/query', { body: spec, signal }),
     enabled: spec !== null,
     placeholderData: keepPreviousData,
     staleTime: 30_000,
+    refetchInterval: (query) => options.refreshMs?.(query.state.data) ?? false,
   });
 }
 

@@ -23,8 +23,8 @@ export function NeedsDiscord(props: { title: string }) {
           </a>
         ) : (
           <p className="muted">
-            Discord sign-in isn't set up on this collector: set <code>DISCORD_CLIENT_ID</code> and{' '}
-            <code>DISCORD_CLIENT_SECRET</code> to use it.
+            Discord sign-in isn't set up on this collector. To use it, set <code>DISCORD_CLIENT_ID</code> and{' '}
+            <code>DISCORD_CLIENT_SECRET</code>, or the <code>discord</code> option of an embedded collector.
           </p>
         )}
       </Panel>

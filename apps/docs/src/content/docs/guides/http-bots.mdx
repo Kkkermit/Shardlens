@@ -188,7 +188,8 @@ token and what users type never leave your bot; nor do option values, unless you
 - **`Response` objects**: a handler may return a `Response` instead of the body. Shardlens reads the callback type
   from a copy of a JSON body; your `Response` is returned as it is.
 - **Custom events**: `lens.track(name, props, { userId, guildId }, ctx)` works as in the
-  [discord.js adapter](../custom-events/). Pass `ctx` on Workers, or the event waits for the next interaction.
+  [discord.js adapter](../custom-events/). Pass `ctx` on Workers, or the event waits for the next interaction. For
+  [typed events](../custom-events/#typed-events), register them with `declare module '@shardlens/http'`.
 
 ## When events are sent
 

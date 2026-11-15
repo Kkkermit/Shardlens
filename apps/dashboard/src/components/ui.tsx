@@ -125,17 +125,19 @@ export function ErrorNote(props: { error: unknown; retry?: (() => void) | undefi
 interface QueryState {
   isLoading: boolean;
   error: unknown;
+  data?: unknown;
   refetch?: () => unknown;
 }
 
 /**
  * What a query's answer is shown in: loading, its error (with a retry), or the content. Never an empty state while the
- * answer is on its way or failed. Several queries load and fail together.
+ * answer is on its way or failed. Several queries load and fail together. An answer already on the page stays when
+ * asking again fails (a refresh in the background): the error is for when there is nothing to show.
  */
 export function QueryBody(props: { query: QueryState | readonly QueryState[]; children: ReactNode }) {
   const queries: readonly QueryState[] = Array.isArray(props.query) ? props.query : [props.query as QueryState];
   if (queries.some((q) => q.isLoading)) return <Loading />;
-  const failed = queries.filter((q) => q.error);
+  const failed = queries.filter((q) => q.error && q.data === undefined);
   if (failed.length > 0) {
     const retry = failed.every((q) => q.refetch) ? () => failed.forEach((q) => void q.refetch?.()) : undefined;
     return <ErrorNote error={failed[0]?.error} retry={retry} />;

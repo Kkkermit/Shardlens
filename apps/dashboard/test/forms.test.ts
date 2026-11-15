@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, api, errorText, onUnauthorized, request } from '../src/api';
-import { decimal, firstCharacters, initials, ms, num, pct } from '../src/format';
+import { decimal, firstCharacters, initials, ms, num, pct, quoted } from '../src/format';
 import { activityFilterError, changedFields, isSnowflake, permissionBitsError } from '../src/forms';
 import { loginError } from '../src/routes/shell';
 import { pageCount, parseServerListSearch, searchText } from '../src/server-list';
@@ -85,6 +85,15 @@ describe('failed requests', () => {
         method: 'GET',
         headers: expect.objectContaining({ 'x-shardlens-confirm': 'export-audit-log' }),
       }),
+    );
+  });
+});
+
+describe('names inside plain-text messages', () => {
+  it('are quoted and isolated, so a right-to-left override cannot reorder the sentence', () => {
+    expect(quoted('Missed deadlines')).toBe('“\u2068Missed deadlines\u2069”');
+    expect(`${quoted('\u202Eevil')} deleted.`.indexOf('\u2069')).toBeLessThan(
+      `${quoted('\u202Eevil')} deleted.`.indexOf('deleted'),
     );
   });
 });

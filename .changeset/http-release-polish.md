@@ -20,4 +20,6 @@ real collector:
 - Only a JSON `Response` is copied to read the response type; a file or stream is left alone.
 - Exporters keep running when a client is replaced, and are shut down by `lens.shutdown()`.
 - `track()` accepts a BigInt user ID, and ignores a `waitUntil` argument that has no `waitUntil` method.
+- `CustomEvents` is exported, so typed custom events can be declared on `@shardlens/http`, which also works with pnpm,
+  where `@shardlens/core` isn't resolvable from the bot's code.
 - The published files no longer point at source maps that are not shipped.

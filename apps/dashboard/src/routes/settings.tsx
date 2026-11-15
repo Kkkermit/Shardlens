@@ -114,7 +114,9 @@ export function SettingsPage() {
     }
   };
   const revokeKey = async (k: Key) => {
-    if (!window.confirm(`Revoke ${k.label ? quoted(k.label) : 'this key'}? Anything using it stops working immediately.`))
+    if (
+      !window.confirm(`Revoke ${k.label ? quoted(k.label) : 'this key'}? Anything using it stops working immediately.`)
+    )
       return;
     say('keys', '');
     try {

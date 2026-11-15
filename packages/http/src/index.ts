@@ -31,6 +31,7 @@ import {
 } from './interaction.js';
 import { createTransports, type WaitUntilContext } from './transport.js';
 
+export type { CustomEvents } from '@shardlens/core';
 export type { RawInteraction, RawInteractionData, RawOption, RawUser } from './interaction.js';
 export type { WaitUntilContext } from './transport.js';
 
