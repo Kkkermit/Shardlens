@@ -17,10 +17,19 @@ export interface ServerListSearch {
 const oneOf = <T extends string>(values: readonly T[], value: unknown): value is T =>
   typeof value === 'string' && (values as readonly string[]).includes(value);
 
+/** The search the address keeps for what was typed in the box: nothing for blank text, at most 100 characters. */
+export function searchText(typed: string): string | undefined {
+  return typed.trim() === '' ? undefined : typed.slice(0, 100);
+}
+
+/** Pages of `size` rows for `total` rows: at least one, so an empty list is "page 1 of 1". */
+export const pageCount = (total: number, size: number) => Math.max(1, Math.ceil(total / size));
+
 /** Reads the list's search parameters, dropping anything unknown or out of range (the address is anyone's to write). */
 export function parseServerListSearch(raw: Record<string, unknown>): ServerListSearch {
   const out: ServerListSearch = {};
-  if (typeof raw.q === 'string' && raw.q.trim() !== '') out.q = raw.q.slice(0, 100);
+  const q = typeof raw.q === 'string' ? searchText(raw.q) : undefined;
+  if (q !== undefined) out.q = q;
   if (raw.status === 'left' || raw.status === 'all') out.status = raw.status;
   if (oneOf(SIZES, raw.size)) out.size = raw.size;
   if (raw.inactive === true || raw.inactive === 'true') out.inactive = true;

@@ -51,6 +51,15 @@ export function managerShardCount(client: Client): number | undefined {
   }
 }
 
+/** Total shard count across all processes, for `(guild_id >> 22) % count`. */
+export function totalShards(client: Client): number {
+  const fromShardUtil = client.shard?.count;
+  if (typeof fromShardUtil === 'number' && fromShardUtil > 0) return fromShardUtil;
+  const configured = (client.options as { shardCount?: unknown }).shardCount;
+  if (typeof configured === 'number' && configured > 0) return configured;
+  return managerShardCount(client) ?? Math.max(1, localShardCount(client));
+}
+
 /** Latest heartbeat latency per shard, in milliseconds (shards without one yet are left out). */
 export function shardPings(client: Client): { shard: number; ping: number }[] {
   const shards = legacyShards(client);

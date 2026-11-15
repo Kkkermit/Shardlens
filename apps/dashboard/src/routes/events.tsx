@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { updating, useMeta, useSpec } from '../api';
 import { BarList } from '../components/charts';
 import { DataTable } from '../components/DataTable';
-import { ErrorNote, Loading, Name, PageHead, Panel, QueryBody, RangePicker, Segmented } from '../components/ui';
+import { Name, PageHead, Panel, QueryBody, RangePicker, Segmented } from '../components/ui';
 import { ago, commandLabel, decimal, num, pct } from '../format';
 import { useRange } from '../range';
 
@@ -60,13 +60,20 @@ function StepSelect(props: {
   onChange: (v: StepValue) => void;
   events: string[];
   commands: { name: string; label: string }[];
+  /** How the chosen step reads when it isn't in this range's lists (picked before the range changed). */
+  missing: string;
   allowAny?: boolean;
 }) {
+  const listed =
+    props.value === 'any' ||
+    props.events.some((e) => `event:${e}` === props.value) ||
+    props.commands.some((c) => `command:${c.name}` === props.value);
   return (
     <label htmlFor={props.id}>
       {props.label}
       <select id={props.id} value={props.value} onChange={(e) => props.onChange(e.target.value)}>
         {props.allowAny ? <option value="any">Any activity</option> : null}
+        {listed ? null : <option value={props.value}>{`${props.missing} (none in this range)`}</option>}
         <optgroup label="Custom events">
           {props.events.map((e) => (
             <option key={`event:${e}`} value={`event:${e}`}>
@@ -126,12 +133,12 @@ export function EventsPage() {
     current && currentProp ? { kind: 'eventProps', name: current, prop: currentProp, range: r.range } : null,
   );
 
+  // Steps stay as picked when the range changes, even one with nothing in the new range: its count is then 0.
   const [stepsState, setSteps] = useState<StepValue[]>([]);
   const steps = stepsState.length >= 2 ? stepsState : options.slice(0, 2);
   const [windowHours, setWindowHours] = useState(24);
-  const funnelReady = steps.length >= 2 && steps.every((s) => options.includes(s));
   const funnel = useSpec<FunnelResult>(
-    funnelReady ? { kind: 'funnel', steps: steps.map(toStep), range: r.range, windowHours, timezone: tz } : null,
+    steps.length >= 2 ? { kind: 'funnel', steps: steps.map(toStep), range: r.range, windowHours, timezone: tz } : null,
   );
   const setStep = (i: number, v: StepValue) => setSteps(steps.map((s, j) => (j === i ? v : s)));
 
@@ -171,11 +178,7 @@ export function EventsPage() {
       </div>
       <div className="stack" aria-busy={updating(list, keys, values, funnel, retention) || undefined}>
         <Panel title="Events" subtitle="Select one to see its properties">
-          {list.error ? (
-            <ErrorNote error={list.error} />
-          ) : list.isLoading ? (
-            <Loading />
-          ) : (
+          <QueryBody query={list}>
             <DataTable
               caption="Custom events"
               rowKey={(e) => e.name}
@@ -187,22 +190,30 @@ export function EventsPage() {
                 {
                   key: 'name',
                   header: 'Event',
-                  render: (e) =>
-                    e.name === current ? (
-                      <strong>
-                        <Name>{e.name}</Name>
-                      </strong>
-                    ) : (
+                  render: (e) => (
+                    <button
+                      type="button"
+                      className="link"
+                      aria-pressed={e.name === current}
+                      onClick={() => setSelected(e.name)}
+                    >
                       <Name>{e.name}</Name>
-                    ),
+                    </button>
+                  ),
                   sort: (e) => e.name,
                 },
                 { key: 'count', header: 'Count', numeric: true, render: (e) => num(e.count), sort: (e) => e.count },
                 { key: 'users', header: 'People', numeric: true, render: (e) => num(e.users), sort: (e) => e.users },
-                { key: 'last', header: 'Last seen', render: (e) => ago(e.lastSeen), sort: (e) => e.lastSeen },
+                {
+                  key: 'last',
+                  header: 'Last seen',
+                  firstDir: 'desc',
+                  render: (e) => ago(e.lastSeen),
+                  sort: (e) => e.lastSeen,
+                },
               ]}
             />
-          )}
+          </QueryBody>
         </Panel>
 
         {current ? (
@@ -253,193 +264,197 @@ export function EventsPage() {
         ) : null}
 
         <Panel title="Funnel" subtitle="People who did each step in order, within the window of the first">
-          {options.length < 2 ? (
-            <p className="muted">Funnels need at least two custom events or commands in this range.</p>
-          ) : (
-            <>
-              <div className="filters">
-                {steps.map((s, i) => (
-                  // biome-ignore lint/suspicious/noArrayIndexKey: a step is its position, as the same event can appear twice
-                  <span key={i} className="funnel-step">
-                    <StepSelect
-                      id={`funnel-step-${i}`}
-                      label={`Step ${i + 1}`}
-                      value={s}
-                      onChange={(v) => setStep(i, v)}
-                      events={events}
-                      commands={commands}
-                    />
-                    {steps.length > 2 ? (
-                      <button
-                        type="button"
-                        className="ghost"
-                        aria-label={`Remove step ${i + 1}`}
-                        onClick={() => setSteps(steps.filter((_, j) => j !== i))}
-                      >
-                        ×
-                      </button>
-                    ) : null}
-                  </span>
-                ))}
-                {steps.length < 5 ? (
-                  <button type="button" onClick={() => setSteps([...steps, options[0] ?? ''])}>
-                    Add step
-                  </button>
-                ) : null}
-                <label htmlFor="funnel-window">
-                  Within
-                  <select
-                    id="funnel-window"
-                    value={windowHours}
-                    onChange={(e) => setWindowHours(Number(e.target.value))}
-                  >
-                    {WINDOWS.map((w) => (
-                      <option key={w.hours} value={w.hours}>
-                        {w.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-              {funnel.error ? (
-                <ErrorNote error={funnel.error} />
-              ) : funnel.isLoading || !funnel.data ? (
-                <Loading />
-              ) : (
-                <>
-                  <BarList
-                    label="Funnel"
-                    rows={funnel.data.steps.map((s, i) => ({
-                      key: String(i),
-                      name: (
-                        <>
-                          {i + 1}. <Name>{funnel.isPlaceholderData ? s.label : stepName(steps[i])}</Name>
-                        </>
-                      ),
-                      value: s.users,
-                    }))}
-                    format={(v) => `${num(v)}${first > 0 ? ` · ${pct(v / first, 0)}` : ''}`}
-                  />
-                  <DataTable
-                    caption="Funnel steps"
-                    rowKey={(s) => String(s.i)}
-                    rows={funnel.data.steps.map((s, i) => ({ ...s, i }))}
-                    columns={[
-                      {
-                        key: 'step',
-                        header: 'Step',
-                        render: (s) => (
-                          <>
-                            {s.i + 1}. <Name>{funnel.isPlaceholderData ? s.label : stepName(steps[s.i])}</Name>
-                          </>
-                        ),
-                      },
-                      { key: 'users', header: 'People', numeric: true, render: (s) => num(s.users) },
-                      {
-                        key: 'total',
-                        header: 'Of step 1',
-                        numeric: true,
-                        render: (s) => (first > 0 ? pct(s.users / first, 1) : '—'),
-                      },
-                      {
-                        key: 'prev',
-                        header: 'Of previous',
-                        numeric: true,
-                        render: (s) => {
-                          const prev = funnel.data?.steps[s.i - 1]?.users;
-                          return s.i === 0 || !prev ? '—' : pct(s.users / prev, 1);
-                        },
-                      },
-                      {
-                        key: 'median',
-                        header: 'Median time from step 1',
-                        numeric: true,
-                        render: (s) => (s.i === 0 ? '—' : duration(s.medianSeconds)),
-                      },
-                    ]}
-                  />
-                  <h3 style={{ margin: '16px 0 8px' }}>By day people entered</h3>
-                  <DataTable
-                    caption="Funnel by entry day"
-                    rowKey={(c) => c.day}
-                    rows={funnel.data.cohorts}
-                    empty="Nobody entered this funnel in the range."
-                    columns={[
-                      { key: 'day', header: 'Day', render: (c) => c.day },
-                      ...funnel.data.steps.map((s, i) => ({
-                        key: `s${i}`,
-                        header: s.label,
-                        numeric: true,
-                        render: (c: { users: number[] }) => {
-                          const v = c.users[i] ?? 0;
-                          const base = c.users[0] ?? 0;
-                          return i === 0 || base === 0 ? num(v) : `${num(v)} (${pct(v / base, 0)})`;
-                        },
-                      })),
-                    ]}
-                  />
-                </>
-              )}
-            </>
-          )}
+          <QueryBody query={[list, commandList]}>
+            {options.length < 2 ? (
+              <p className="muted">Funnels need at least two custom events or commands in this range.</p>
+            ) : (
+              <>
+                <div className="filters">
+                  {steps.map((s, i) => (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: a step is its position, as the same event can appear twice
+                    <span key={i} className="funnel-step">
+                      <StepSelect
+                        id={`funnel-step-${i}`}
+                        label={`Step ${i + 1}`}
+                        value={s}
+                        onChange={(v) => setStep(i, v)}
+                        events={events}
+                        commands={commands}
+                        missing={stepName(s)}
+                      />
+                      {steps.length > 2 ? (
+                        <button
+                          type="button"
+                          className="ghost"
+                          aria-label={`Remove step ${i + 1}`}
+                          onClick={() => setSteps(steps.filter((_, j) => j !== i))}
+                        >
+                          ×
+                        </button>
+                      ) : null}
+                    </span>
+                  ))}
+                  {steps.length < 5 ? (
+                    <button type="button" onClick={() => setSteps([...steps, options[0] ?? ''])}>
+                      Add step
+                    </button>
+                  ) : null}
+                  <label htmlFor="funnel-window">
+                    Within
+                    <select
+                      id="funnel-window"
+                      value={windowHours}
+                      onChange={(e) => setWindowHours(Number(e.target.value))}
+                    >
+                      {WINDOWS.map((w) => (
+                        <option key={w.hours} value={w.hours}>
+                          {w.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <QueryBody query={funnel}>
+                  {funnel.data ? (
+                    <>
+                      <BarList
+                        label="Funnel"
+                        rows={funnel.data.steps.map((s, i) => ({
+                          key: String(i),
+                          name: (
+                            <>
+                              {i + 1}. <Name>{funnel.isPlaceholderData ? s.label : stepName(steps[i])}</Name>
+                            </>
+                          ),
+                          value: s.users,
+                        }))}
+                        format={(v) => `${num(v)}${first > 0 ? ` · ${pct(v / first, 0)}` : ''}`}
+                      />
+                      <DataTable
+                        caption="Funnel steps"
+                        rowKey={(s) => String(s.i)}
+                        rows={funnel.data.steps.map((s, i) => ({ ...s, i }))}
+                        columns={[
+                          {
+                            key: 'step',
+                            header: 'Step',
+                            render: (s) => (
+                              <>
+                                {s.i + 1}. <Name>{funnel.isPlaceholderData ? s.label : stepName(steps[s.i])}</Name>
+                              </>
+                            ),
+                          },
+                          { key: 'users', header: 'People', numeric: true, render: (s) => num(s.users) },
+                          {
+                            key: 'total',
+                            header: 'Of step 1',
+                            numeric: true,
+                            render: (s) => (first > 0 ? pct(s.users / first, 1) : '—'),
+                          },
+                          {
+                            key: 'prev',
+                            header: 'Of previous',
+                            numeric: true,
+                            render: (s) => {
+                              const prev = funnel.data?.steps[s.i - 1]?.users;
+                              return s.i === 0 || !prev ? '—' : pct(s.users / prev, 1);
+                            },
+                          },
+                          {
+                            key: 'median',
+                            header: 'Median time from step 1',
+                            numeric: true,
+                            render: (s) => (s.i === 0 ? '—' : duration(s.medianSeconds)),
+                          },
+                        ]}
+                      />
+                      <h3>By day people entered</h3>
+                      <DataTable
+                        caption="Funnel by entry day"
+                        rowKey={(c) => c.day}
+                        rows={funnel.data.cohorts}
+                        empty="Nobody entered this funnel in the range."
+                        columns={[
+                          { key: 'day', header: 'Day', render: (c) => c.day },
+                          ...funnel.data.steps.map((s, i) => ({
+                            key: `s${i}`,
+                            header: s.label,
+                            numeric: true,
+                            render: (c: { users: number[] }) => {
+                              const v = c.users[i] ?? 0;
+                              const base = c.users[0] ?? 0;
+                              return i === 0 || base === 0 ? num(v) : `${num(v)} (${pct(v / base, 0)})`;
+                            },
+                          })),
+                        ]}
+                      />
+                    </>
+                  ) : null}
+                </QueryBody>
+              </>
+            )}
+          </QueryBody>
         </Panel>
 
         <Panel title="Cohorts" subtitle="People grouped by when they first did something, and who came back">
-          {!start ? (
-            <p className="muted">Cohorts appear once custom events or commands are recorded.</p>
-          ) : (
-            <>
-              <div className="filters">
-                <StepSelect
-                  id="cohort-start"
-                  label="Started with"
-                  value={start}
-                  onChange={setStart}
-                  events={events}
-                  commands={commands}
-                />
-                <StepSelect
-                  id="cohort-return"
-                  label="Came back for"
-                  value={back}
-                  onChange={setBack}
-                  events={events}
-                  commands={commands}
-                  allowAny
-                />
-                <Segmented label="Cohort size" options={COHORT_SIZES} value={cohortSize} onChange={setCohortSize} />
-              </div>
-              {retention.error ? (
-                <ErrorNote error={retention.error} />
-              ) : retention.isLoading || !retention.data ? (
-                <Loading />
-              ) : (
-                <DataTable
-                  caption="Retention cohorts"
-                  rowKey={(c) => c.cohort}
-                  rows={retention.data.cohorts}
-                  empty="Nobody started in this range."
-                  columns={[
-                    { key: 'cohort', header: cohortSize === 'day' ? 'Day' : 'Week of', render: (c) => c.cohort },
-                    { key: 'size', header: 'People', numeric: true, render: (c) => num(c.size) },
-                    ...Array.from({ length: shownPeriods }, (_, p) => ({
-                      key: `p${p + 1}`,
-                      header: `${cohortSize === 'day' ? 'Day' : 'Week'} ${p + 1}`,
-                      numeric: true,
-                      render: (c: { cohort: string; size: number; retained: number[] }) => {
-                        // A period that hasn't started yet has no data, not zero people.
-                        const periodStart =
-                          Date.parse(`${c.cohort}T00:00:00Z`) + (p + 1) * (cohortSize === 'day' ? 1 : 7) * 86_400_000;
-                        if (periodStart > Date.now()) return '—';
-                        const v = c.retained[p] ?? 0;
-                        return c.size > 0 ? `${num(v)} (${pct(v / c.size, 0)})` : num(v);
-                      },
-                    })),
-                  ]}
-                />
-              )}
-            </>
-          )}
+          <QueryBody query={[list, commandList]}>
+            {!start ? (
+              <p className="muted">Cohorts appear once custom events or commands are recorded.</p>
+            ) : (
+              <>
+                <div className="filters">
+                  <StepSelect
+                    id="cohort-start"
+                    label="Started with"
+                    value={start}
+                    onChange={setStart}
+                    events={events}
+                    commands={commands}
+                    missing={stepName(start)}
+                  />
+                  <StepSelect
+                    id="cohort-return"
+                    label="Came back for"
+                    value={back}
+                    onChange={setBack}
+                    events={events}
+                    commands={commands}
+                    missing={stepName(back)}
+                    allowAny
+                  />
+                  <Segmented label="Cohort size" options={COHORT_SIZES} value={cohortSize} onChange={setCohortSize} />
+                </div>
+                <QueryBody query={retention}>
+                  {retention.data ? (
+                    <DataTable
+                      caption="Retention cohorts"
+                      rowKey={(c) => c.cohort}
+                      rows={retention.data.cohorts}
+                      empty="Nobody started in this range."
+                      columns={[
+                        { key: 'cohort', header: cohortSize === 'day' ? 'Day' : 'Week of', render: (c) => c.cohort },
+                        { key: 'size', header: 'People', numeric: true, render: (c) => num(c.size) },
+                        ...Array.from({ length: shownPeriods }, (_, p) => ({
+                          key: `p${p + 1}`,
+                          header: `${cohortSize === 'day' ? 'Day' : 'Week'} ${p + 1}`,
+                          numeric: true,
+                          render: (c: { cohort: string; size: number; retained: number[] }) => {
+                            // A period that hasn't started yet has no data, not zero people.
+                            const periodStart =
+                              Date.parse(`${c.cohort}T00:00:00Z`) +
+                              (p + 1) * (cohortSize === 'day' ? 1 : 7) * 86_400_000;
+                            if (periodStart > Date.now()) return '—';
+                            const v = c.retained[p] ?? 0;
+                            return c.size > 0 ? `${num(v)} (${pct(v / c.size, 0)})` : num(v);
+                          },
+                        })),
+                      ]}
+                    />
+                  ) : null}
+                </QueryBody>
+              </>
+            )}
+          </QueryBody>
         </Panel>
       </div>
     </>

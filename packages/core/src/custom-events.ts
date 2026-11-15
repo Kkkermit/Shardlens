@@ -1,4 +1,4 @@
-import { redactSecrets } from './normalise.js';
+import { cutText, redactSecrets } from './normalise.js';
 
 export type CustomPropValue = string | number | boolean | null;
 
@@ -30,16 +30,20 @@ export const CUSTOM_EVENT_NAME = /^[a-z][a-z0-9_]{0,63}$/;
 
 export const MAX_CUSTOM_PROPS_BYTES = 2048;
 
-/** Copies custom event properties if they fit the limits (2 KB, 64-character keys, 256-character strings). */
+/**
+ * Copies custom event properties if they fit the limits (2 KB, 64-character keys, 256-character strings), with secrets
+ * redacted and NUL or broken characters in keys and strings replaced.
+ */
 export function sanitiseCustomProps(props: unknown): CustomProps | undefined {
   if (props === undefined) return {};
   if (props === null || typeof props !== 'object' || Array.isArray(props)) return undefined;
   const out: CustomProps = {};
-  for (const [key, value] of Object.entries(props)) {
-    if (key.length > 64) return undefined;
+  for (const [rawKey, value] of Object.entries(props)) {
+    if (rawKey.length > 64) return undefined;
+    const key = cutText(rawKey, 64);
     if (value === null || typeof value === 'boolean') out[key] = value;
     else if (typeof value === 'number' && Number.isFinite(value)) out[key] = value;
-    else if (typeof value === 'string' && value.length <= 256) out[key] = redactSecrets(value);
+    else if (typeof value === 'string' && value.length <= 256) out[key] = cutText(redactSecrets(value), 256);
     else return undefined;
   }
   if (new TextEncoder().encode(JSON.stringify(out)).byteLength > MAX_CUSTOM_PROPS_BYTES) return undefined;

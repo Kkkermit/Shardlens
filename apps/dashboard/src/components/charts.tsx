@@ -1,10 +1,10 @@
-import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
-import { formatX, type Series, xRange } from '../chart-data';
+import { formatX, type Series, timeAxisLabels, weekdayNames, xRange } from '../chart-data';
 import { count } from '../format';
 import { DataTable } from './DataTable';
-import { Empty, TableToggle } from './ui';
+import { Empty, Name, TableToggle } from './ui';
 
 const css = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
@@ -36,7 +36,7 @@ function Legend(props: { names: string[] }) {
       {props.names.map((n, i) => (
         <li key={n}>
           <span className="swatch" style={{ background: `var(${seriesToken(i)})` }} aria-hidden="true" />
-          {n}
+          <Name>{n}</Name>
         </li>
       ))}
     </ul>
@@ -86,7 +86,7 @@ export function TimeChart(props: {
             u.cursor.left === undefined ||
             u.cursor.left < 0
           ) {
-            t.style.display = 'none';
+            t.hidden = true;
             return;
           }
           t.replaceChildren();
@@ -109,7 +109,7 @@ export function TimeChart(props: {
             row.append(name, val);
             t.append(row);
           });
-          t.style.display = 'block';
+          t.hidden = false;
           const left = u.cursor.left + 12;
           t.style.left = `${Math.min(left, (el.clientWidth || 0) - 160)}px`;
           t.style.top = `${(u.cursor.top ?? 0) + 8}px`;
@@ -128,7 +128,15 @@ export function TimeChart(props: {
           y: { range: (_u, _min, max) => [0, max > 0 ? max * 1.1 : 1] },
         },
         axes: [
-          { stroke: muted, font, grid: { stroke: grid, width: 1 }, ticks: { stroke: axis, width: 1 } },
+          {
+            stroke: muted,
+            font,
+            // Room for a time in the locale's longest form ("12:00 PM").
+            space: 64,
+            grid: { stroke: grid, width: 1 },
+            ticks: { stroke: axis, width: 1 },
+            values: (_u, splits, _axis, _space, step) => timeAxisLabels(splits, step),
+          },
           {
             stroke: muted,
             font,
@@ -156,7 +164,7 @@ export function TimeChart(props: {
     const resize = new ResizeObserver(() => plot.setSize({ width: el.clientWidth, height: HEIGHT }));
     resize.observe(el);
     const leave = () => {
-      if (tip.current) tip.current.style.display = 'none';
+      if (tip.current) tip.current.hidden = true;
     };
     el.addEventListener('mouseleave', leave);
     return () => {
@@ -169,7 +177,7 @@ export function TimeChart(props: {
   if (props.x.length === 0) return <Empty>No data in this range yet.</Empty>;
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div className="chart-bar">
         <Legend names={props.series.map((s) => s.name)} />
         <TableToggle pressed={asTable} onToggle={() => setAsTable((v) => !v)} />
       </div>
@@ -180,8 +188,8 @@ export function TimeChart(props: {
           rows={props.x.map((_, i) => i)}
           columns={[
             { key: 't', header: 'Time', render: (i) => formatX(props.x[i] ?? 0, withTime), sort: (i) => props.x[i] },
-            ...props.series.map((s) => ({
-              key: s.name,
+            ...props.series.map((s, i) => ({
+              key: `s${i}`,
               header: s.name,
               numeric: true,
               render: (i: number) => {
@@ -195,7 +203,7 @@ export function TimeChart(props: {
       ) : (
         <div className="chart" role="img" aria-label={props.label}>
           <div ref={box} />
-          <div ref={tip} className="chart-tooltip" style={{ display: 'none' }} />
+          <div ref={tip} className="chart-tooltip" hidden />
         </div>
       )}
     </div>
@@ -218,9 +226,11 @@ export function BarList(props: {
     <ul className="bars" aria-label={props.label}>
       {rows.map((r) => (
         <li key={r.key}>
-          <span className="name">{r.name}</span>
+          <span className="name" title={typeof r.name === 'string' ? r.name : undefined}>
+            {r.name}
+          </span>
           <span className="track" aria-hidden="true">
-            <span className="fill" style={{ display: 'block', width: `${max > 0 ? (r.value / max) * 100 : 0}%` }} />
+            <span className="fill" style={{ width: `${max > 0 ? (r.value / max) * 100 : 0}%` }} />
           </span>
           <span className="v">{format(r.value)}</span>
         </li>
@@ -229,12 +239,12 @@ export function BarList(props: {
   );
 }
 
-const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
 
 /** Hour-of-day × weekday heatmap on a single blue ramp, with a table view. */
 export function Heatmap(props: { label: string; cells: { weekday: number; hour: number; value: number }[] }) {
   const [asTable, setAsTable] = useState(false);
+  const days = useMemo(() => weekdayNames(), []);
   const value = (d: number, h: number) => props.cells.find((c) => c.weekday === d && c.hour === h)?.value ?? 0;
   const max = Math.max(0, ...props.cells.map((c) => c.value));
   const step = (v: number) => {
@@ -245,7 +255,7 @@ export function Heatmap(props: { label: string; cells: { weekday: number; hour: 
   if (props.cells.length === 0) return <Empty>No activity in this range yet.</Empty>;
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+      <div className="chart-bar">
         <span className="heat-legend" aria-hidden="true">
           Fewer
           {[1, 2, 3, 4, 5, 6, 7].map((s) => (
@@ -261,10 +271,10 @@ export function Heatmap(props: { label: string; cells: { weekday: number; hour: 
           rowKey={(d: number) => String(d)}
           rows={[1, 2, 3, 4, 5, 6, 7]}
           columns={[
-            { key: 'day', header: 'Day', render: (d) => DAYS[d - 1] },
+            { key: 'day', header: 'Day', render: (d) => days[d - 1] },
             ...Array.from({ length: 24 }, (_, h) => ({
               key: String(h),
-              header: `${h}`,
+              header: count(h),
               numeric: true,
               render: (d: number) => count(value(d, h)),
             })),
@@ -275,10 +285,10 @@ export function Heatmap(props: { label: string; cells: { weekday: number; hour: 
           <span />
           {HOURS.map((h) => (
             <span key={`h${h}`} className="collabel">
-              {h % 3 === 0 ? h : ''}
+              {h % 3 === 0 ? count(h) : ''}
             </span>
           ))}
-          {DAYS.map((name, i) => (
+          {days.map((name, i) => (
             <Row key={name} name={name} values={Array.from({ length: 24 }, (_, h) => value(i + 1, h))} step={step} />
           ))}
         </div>

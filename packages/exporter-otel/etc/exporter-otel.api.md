@@ -13,7 +13,7 @@ export { DEFAULT_DURATION_BUCKETS }
 // @public
 export function openTelemetryExporter(options?: OpenTelemetryExporterOptions): ShardlensExporter;
 
-// @public (undocumented)
+// @public
 export interface OpenTelemetryExporterOptions {
     buckets?: readonly number[] | undefined;
     meter?: Meter | undefined;

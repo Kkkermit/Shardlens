@@ -90,6 +90,19 @@ export async function postToDiscordWebhook(
     });
     return plain.ok ? { ok: true } : { ok: false, error: `discord returned ${plain.status}` };
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.name : 'request failed' };
+    return { ok: false, error: requestFailure(error) };
   }
+}
+
+/**
+ * Why a request never got an answer, for the alert history and the report's last error. Only the error's name and
+ * code: fetch's messages can name the URL, and a webhook URL is a credential.
+ */
+function requestFailure(error: unknown): string {
+  if (!(error instanceof Error)) return 'request failed';
+  if (error.name === 'TimeoutError') return 'Discord did not answer within 10 seconds';
+  const code = (error.cause as { code?: unknown } | undefined)?.code;
+  return typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(code)
+    ? `could not reach Discord (${code})`
+    : 'could not reach Discord';
 }

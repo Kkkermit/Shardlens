@@ -987,6 +987,33 @@ describe('retention', () => {
     );
     expect(left.rows.map((r) => r.instance)).toEqual(['alive:2']);
   });
+
+  it("reads raw rows for as long as the app's raw retention keeps them, no longer and no shorter", async () => {
+    const DAY = 86_400_000;
+    const old = Date.now() - 50 * DAY;
+    const day = new Date(old).toISOString().slice(0, 10);
+    await h.db.query("SELECT shardlens_ensure_daily_partitions(ARRAY['interactions'], $1::date, $1::date)", [day]);
+    // Ingest accepts 35 days back at most, but rows collected live stay for the whole retention.
+    await h.db.query(
+      `INSERT INTO interactions (id, ts, app_id, env, kind, command, locale, user_hash, salt_period, premium, outcome)
+       VALUES ($1, $2, $3, 'production', 1, 'archive', 'en-GB', $4, $5, false, 0)`,
+      [uuidv7(old), new Date(old), APP_ID, Buffer.alloc(16, 7), day.slice(0, 7)],
+    );
+    const range = { from: new Date(Date.now() - 60 * DAY).toISOString(), to: new Date().toISOString() };
+    const detail = async () => (await query(h.app, { kind: 'command', name: 'archive', range })).json();
+    try {
+      await h.db.query('UPDATE apps SET raw_retention_days = 90 WHERE app_id = $1', [APP_ID]);
+      const kept = await detail();
+      expect(kept.totals.runs).toBe(1);
+      expect(kept.from).toBe(range.from);
+      await h.db.query('UPDATE apps SET raw_retention_days = 7 WHERE app_id = $1', [APP_ID]);
+      const cut = await detail();
+      expect(Date.parse(cut.from)).toBeGreaterThan(Date.now() - 7 * DAY - 60_000);
+    } finally {
+      await h.db.query('UPDATE apps SET raw_retention_days = 35 WHERE app_id = $1', [APP_ID]);
+      await h.db.query('DROP TABLE IF EXISTS "interactions_' + day.replace(/-/g, '') + '"');
+    }
+  });
 });
 
 describe('dashboard login', () => {

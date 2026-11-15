@@ -1,13 +1,15 @@
-// The databases the bots use, in throwaway Docker containers with fixed names, published on 127.0.0.1 only.
-// PostgreSQL and MySQL each hold a database named `shardlens`.
+// The databases the bots use, in throwaway Docker containers, published on 127.0.0.1 only. PostgreSQL and MySQL each
+// hold a database named `shardlens`.
 import { spawnSync } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const PASSWORD = 'sim';
+// Container names start with this, so two runs on one machine (with their own SIM_PORTS) don't remove each other's.
+const PREFIX = process.env.SIM_CONTAINERS ?? 'shardlens-sim';
 
 const CONTAINERS = {
   postgres: {
-    name: 'shardlens-sim-postgres',
+    name: `${PREFIX}-postgres`,
     image: 'postgres:17-alpine',
     port: 5432,
     env: { POSTGRES_USER: 'shardlens', POSTGRES_PASSWORD: PASSWORD, POSTGRES_DB: 'shardlens' },
@@ -16,7 +18,7 @@ const CONTAINERS = {
     url: (port) => `postgres://shardlens:${PASSWORD}@127.0.0.1:${port}`,
   },
   mysql: {
-    name: 'shardlens-sim-mysql',
+    name: `${PREFIX}-mysql`,
     image: 'mysql:8.4',
     port: 3306,
     env: { MYSQL_ROOT_PASSWORD: PASSWORD, MYSQL_DATABASE: 'shardlens' },
@@ -25,7 +27,7 @@ const CONTAINERS = {
     url: (port) => `mysql://root:${PASSWORD}@127.0.0.1:${port}`,
   },
   mongo: {
-    name: 'shardlens-sim-mongo',
+    name: `${PREFIX}-mongo`,
     image: 'mongo:8.0',
     port: 27017,
     env: {},

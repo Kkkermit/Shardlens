@@ -37,18 +37,15 @@ export class BoundedQueue<T> {
     return this.#lanes[priority]!.length;
   }
 
-  /** Lowest non-empty lane whose priority is at or below `max` (or strictly below, when `strict`). */
-  #evictable(max: Priority, strict: boolean): number {
-    for (let p = 0; p < PRIORITIES; p++) {
-      if (strict ? p >= max : p > max) return -1;
-      if (this.#lanes[p]!.length > 0) return p;
-    }
+  /** Lowest non-empty lane whose priority is at or below `max`. */
+  #evictable(max: Priority): number {
+    for (let p = 0; p <= max; p++) if (this.#lanes[p]!.length > 0) return p;
     return -1;
   }
 
   push(item: T, priority: Priority): void {
     if (this.#size >= this.capacity) {
-      const lane = this.#evictable(priority, false);
+      const lane = this.#evictable(priority);
       if (lane === -1) {
         this.dropped[priority]!++;
         return;

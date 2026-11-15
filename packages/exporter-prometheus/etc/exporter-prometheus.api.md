@@ -11,27 +11,22 @@ import { ShardlensExporter } from '@shardlens/core';
 
 export { DEFAULT_DURATION_BUCKETS }
 
-// @public (undocumented)
+// @public
 export interface MetricsServer {
-    // (undocumented)
     close(): Promise<void>;
-    // (undocumented)
     readonly port: number;
 }
 
-// @public (undocumented)
+// @public
 export interface PrometheusExporter extends ShardlensExporter {
     readonly registry: Registry;
-    serve(options?: {
-        port?: number | undefined;
-        host?: string | undefined;
-    }): Promise<MetricsServer>;
+    serve(options?: ServeOptions): Promise<MetricsServer>;
 }
 
 // @public
 export function prometheusExporter(options?: PrometheusExporterOptions): PrometheusExporter;
 
-// @public (undocumented)
+// @public
 export interface PrometheusExporterOptions {
     buckets?: readonly number[] | undefined;
     prefix?: string | undefined;
@@ -41,6 +36,10 @@ export interface PrometheusExporterOptions {
 // @public
 export function prometheusName(metric: ExporterMetricName, prefix?: string): string;
 
-// (No @packageDocumentation comment for this package)
+// @public
+export interface ServeOptions {
+    host?: string | undefined;
+    port?: number | undefined;
+}
 
 ```

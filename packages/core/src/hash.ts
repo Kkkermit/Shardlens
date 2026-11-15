@@ -22,7 +22,7 @@ export const HASH_VERSION = 'h1';
 
 export const HASH_BYTES = 16;
 
-/** The previous period, the current one and, in its last minutes, the next: a bot clock slightly ahead needs it. */
+/** The previous period, the current one and, in its last minutes, the next, which the SDK fetches before it starts. */
 const MAX_KEYS = 3;
 
 /** Recently computed hashes kept in memory. Active users repeat, so most interactions skip the HMAC. */
@@ -50,6 +50,11 @@ export class UserHasher {
     this.#keys.set(label, key);
     while (this.#keys.size > MAX_KEYS) this.#keys.delete(this.#keys.keys().next().value!);
     this.#cache.clear();
+  }
+
+  /** Removes a period's salt, such as one the collector has destroyed, and every hash computed with it. */
+  deleteSalt(label: string): void {
+    if (this.#keys.delete(label)) this.#cache.clear();
   }
 
   labels(): string[] {

@@ -1,14 +1,14 @@
 import { Link, useNavigate, useParams, useSearch } from '@tanstack/react-router';
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, updating, useMeta, useSpec } from '../api';
 import { pivot } from '../chart-data';
 import { BarList, TimeChart } from '../components/charts';
 import { DataTable } from '../components/DataTable';
-import { ErrorNote, GuildIcon, Loading, Name, PageHead, Panel, RangePicker, Tile } from '../components/ui';
-import { ago, date, dateTime, label, num } from '../format';
+import { GuildIcon, Name, NotFoundPage, PageHead, Pager, Panel, QueryBody, RangePicker, Tile } from '../components/ui';
+import { ago, date, dateTime, day, label, num } from '../format';
 import { isSnowflake } from '../forms';
 import { useRange } from '../range';
-import { parseServerListSearch, type ServerListSearch, SIZES } from '../server-list';
+import { pageCount, parseServerListSearch, type ServerListSearch, SIZES, searchText } from '../server-list';
 
 interface ServerRow {
   id: string;
@@ -56,18 +56,39 @@ export function ServersPage() {
   };
   const q = useSpec<{ total: number; rows: ServerRow[] }>(spec);
   const total = q.data?.total ?? 0;
+  const pages = pageCount(total, PAGE);
+  // A page past the end (an old link, or servers removed since): the last page instead of an empty one.
+  useEffect(() => {
+    if (q.data && !q.isPlaceholderData && page + 1 > pages && page > 0) update({ page: pages });
+  });
+
+  // What is typed is kept here and goes to the address once typing pauses. Following the address keystroke by
+  // keystroke would drop a leading space and move the caret to the end; it is followed only when it changes from
+  // elsewhere (Back, a link).
+  const [text, setText] = useState(search.q ?? '');
+  const typing = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(typing.current), []);
+  useEffect(() => {
+    setText((typed) => (searchText(typed) === search.q ? typed : (search.q ?? '')));
+  }, [search.q]);
 
   return (
     <>
-      <PageHead title="Servers" description={`${num(total)} servers match`} />
+      <PageHead title="Servers" description={q.data ? `${num(total)} servers match` : undefined} />
       <search className="filters">
         <label>
           <span className="visually-hidden">Search server names</span>
           <input
             type="search"
             placeholder="Search names"
-            value={search.q ?? ''}
-            onChange={(e) => update({ q: e.target.value })}
+            maxLength={100}
+            value={text}
+            onChange={(e) => {
+              const typed = e.target.value;
+              setText(typed);
+              clearTimeout(typing.current);
+              typing.current = setTimeout(() => update({ q: typed }), 250);
+            }}
           />
         </label>
         <label>
@@ -107,65 +128,63 @@ export function ServersPage() {
         </label>
       </search>
       <Panel title="Server list" subtitle="Runs are the last 30 days" busy={updating(q)}>
-        {q.isLoading ? (
-          <Loading />
-        ) : q.error ? (
-          <ErrorNote error={q.error} />
-        ) : (
-          <>
-            <DataTable
-              caption="Servers"
-              rows={q.data?.rows ?? []}
-              rowKey={(row) => row.id}
-              initialSort={sort}
-              onSort={(key, dir) => update({ sort: key, dir })}
-              onRowClick={(row) => void navigate({ to: '/servers/$id', params: { id: row.id } })}
-              columns={[
-                {
-                  key: 'name',
-                  header: 'Server',
-                  sort: (row) => row.name,
-                  render: (row) => <GuildIcon id={row.id} icon={row.icon} name={row.name || row.id} />,
-                },
-                {
-                  key: 'members',
-                  header: 'Members',
-                  numeric: true,
-                  sort: (row) => row.memberCount,
-                  render: (row) => num(row.memberCount),
-                },
-                { key: 'runs', header: 'Runs', numeric: true, sort: (row) => row.runs, render: (row) => num(row.runs) },
-                {
-                  key: 'last_active',
-                  header: 'Last active',
-                  sort: (row) => row.lastActive,
-                  render: (row) => ago(row.lastActive),
-                },
-                {
-                  key: 'joined',
-                  header: 'Added',
-                  sort: (row) => row.joinedAt,
-                  render: (row) =>
-                    row.baseline ? <span className="muted">before Shardlens</span> : date(row.joinedAt, tz),
-                },
-                { key: 'locale', header: 'Locale', render: (row) => row.locale ?? '—' },
-                { key: 'boosts', header: 'Boosts', numeric: true, render: (row) => num(row.boosts) },
-                { key: 'shard', header: 'Shard', numeric: true, render: (row) => num(row.shard) },
-              ]}
-            />
-            <div className="filters" style={{ marginTop: 12, marginBottom: 0 }}>
-              <button type="button" disabled={page === 0} onClick={() => update({ page: page })}>
-                Previous
-              </button>
-              <span className="muted">
-                Page {page + 1} of {Math.max(1, Math.ceil(total / PAGE))}
-              </span>
-              <button type="button" disabled={(page + 1) * PAGE >= total} onClick={() => update({ page: page + 2 })}>
-                Next
-              </button>
-            </div>
-          </>
-        )}
+        <QueryBody query={q}>
+          <DataTable
+            caption="Servers"
+            rows={q.data?.rows ?? []}
+            rowKey={(row) => row.id}
+            sort={sort}
+            onSort={(key, dir) => update({ sort: key, dir })}
+            onRowClick={(row) => void navigate({ to: '/servers/$id', params: { id: row.id } })}
+            empty="No servers match."
+            columns={[
+              {
+                key: 'name',
+                header: 'Server',
+                sort: (row) => row.name,
+                render: (row) => (
+                  <Link to="/servers/$id" params={{ id: row.id }}>
+                    <GuildIcon id={row.id} icon={row.icon} name={row.name || row.id} />
+                  </Link>
+                ),
+              },
+              {
+                key: 'members',
+                header: 'Members',
+                numeric: true,
+                sort: (row) => row.memberCount,
+                render: (row) => num(row.memberCount),
+              },
+              { key: 'runs', header: 'Runs', numeric: true, sort: (row) => row.runs, render: (row) => num(row.runs) },
+              {
+                key: 'last_active',
+                header: 'Last active',
+                firstDir: 'desc',
+                sort: (row) => row.lastActive,
+                render: (row) => ago(row.lastActive),
+              },
+              {
+                key: 'joined',
+                header: 'Added',
+                firstDir: 'desc',
+                sort: (row) => row.joinedAt,
+                render: (row) =>
+                  row.baseline ? <span className="muted">before Shardlens</span> : date(row.joinedAt, tz),
+              },
+              { key: 'locale', header: 'Locale', render: (row) => row.locale ?? '—' },
+              { key: 'boosts', header: 'Boosts', numeric: true, render: (row) => num(row.boosts) },
+              { key: 'shard', header: 'Shard', numeric: true, render: (row) => num(row.shard) },
+            ]}
+          />
+          <Pager
+            label="Pages of the server list"
+            status={`Page ${num(Math.min(page + 1, pages))} of ${num(pages)}`}
+            buttons={[
+              { label: 'Previous', onClick: page > 0 ? () => update({ page }) : undefined },
+              { label: 'Next', onClick: page + 1 < pages ? () => update({ page: page + 2 }) : undefined },
+            ]}
+          />
+        </QueryBody>
       </Panel>
     </>
   );
@@ -216,12 +235,18 @@ const CHANNEL_TYPES: Record<string, string> = {
 
 function ServerNotFound() {
   return (
-    <>
-      <PageHead title="Server not found" description={<Link to="/servers">← All servers</Link>} />
-      <p className="muted">There is no server with this ID in your bot's data.</p>
-    </>
+    <NotFoundPage title="Server not found" back={<Link to="/servers">← All servers</Link>}>
+      There is no server with this ID in your bot's data.
+    </NotFoundPage>
   );
 }
+
+const INSTALL_EVENTS: Record<string, string> = {
+  join: 'Added',
+  leave: 'Removed',
+  unavailable: 'Unavailable (Discord outage)',
+  available: 'Available again',
+};
 
 export function ServerPage() {
   const { id } = useParams({ from: '/servers/$id' });
@@ -261,13 +286,12 @@ function ServerDetailPage(props: { id: string }) {
   const chart = useMemo(() => pivot(series.data?.points ?? [], () => 'Runs'), [series.data]);
   const p = detail.data?.profile;
 
-  if (detail.isLoading) return <Loading />;
   if (detail.error instanceof ApiError && detail.error.status === 400) return <ServerNotFound />;
-  if (detail.error) {
+  if (detail.isLoading || detail.error) {
     return (
       <>
         <PageHead title="Server" description={<Link to="/servers">← All servers</Link>} />
-        <ErrorNote error={detail.error} retry={() => void detail.refetch()} />
+        <QueryBody query={detail}>{null}</QueryBody>
       </>
     );
   }
@@ -289,7 +313,7 @@ function ServerDetailPage(props: { id: string }) {
           <Tile
             label="Unique users"
             value={num(detail.data.uniqueUsersThisPeriod)}
-            sub={`Since ${detail.data.periodStart}`}
+            sub={`Since ${day(detail.data.periodStart)}`}
           />
           <Tile label="Last command" value={ago(p.lastCommandAt)} />
           <Tile
@@ -305,34 +329,44 @@ function ServerDetailPage(props: { id: string }) {
           />
         </div>
         <Panel title="Runs over time" subtitle={tz}>
-          <TimeChart
-            label="Runs in this server over time"
-            x={chart.x}
-            series={chart.series}
-            withTime={r.interval === 'hour'}
-            timezone={tz}
-          />
+          <QueryBody query={series}>
+            <TimeChart
+              label="Runs in this server over time"
+              x={chart.x}
+              series={chart.series}
+              withTime={r.interval === 'hour'}
+              timezone={tz}
+            />
+          </QueryBody>
         </Panel>
         <div className="grid three">
           <Panel title="Top commands">
-            <BarList
-              label="Top commands"
-              rows={(commands.data?.rows ?? []).map((c) => ({
-                key: c.key,
-                name: <Name>{c.key}</Name>,
-                value: c.count,
-              }))}
-            />
+            <QueryBody query={commands}>
+              <BarList
+                label="Top commands"
+                rows={(commands.data?.rows ?? []).map((c) => ({
+                  key: c.key,
+                  name: (
+                    <Link to="/commands/$name" params={{ name: c.key }}>
+                      <Name>{c.key}</Name>
+                    </Link>
+                  ),
+                  value: c.count,
+                }))}
+              />
+            </QueryBody>
           </Panel>
           <Panel title="Outcomes">
-            <BarList
-              label="Outcomes"
-              rows={(outcomes.data?.rows ?? []).map((c) => ({
-                key: c.key,
-                name: label('outcome', c.key),
-                value: c.count,
-              }))}
-            />
+            <QueryBody query={outcomes}>
+              <BarList
+                label="Outcomes"
+                rows={(outcomes.data?.rows ?? []).map((c) => ({
+                  key: c.key,
+                  name: label('outcome', c.key),
+                  value: c.count,
+                }))}
+              />
+            </QueryBody>
           </Panel>
           <Panel title="Profile">
             <dl className="dl">
@@ -357,7 +391,7 @@ function ServerDetailPage(props: { id: string }) {
                   .join(', ') || '—'}
               </dd>
               <dt>Features</dt>
-              <dd>{p.features.length ? p.features.join(', ') : '—'}</dd>
+              <dd>{p.features.length ? <Name>{p.features.join(', ')}</Name> : '—'}</dd>
               <dt>Permissions</dt>
               <dd>
                 {detail.data.missingPermissions && detail.data.missingPermissions !== '0' ? (
@@ -378,7 +412,7 @@ function ServerDetailPage(props: { id: string }) {
             rows={detail.data.events ?? []}
             columns={[
               { key: 'ts', header: 'When', render: (e) => dateTime(e.ts, tz) },
-              { key: 'kind', header: 'Event', render: (e) => e.kind },
+              { key: 'kind', header: 'Event', render: (e) => INSTALL_EVENTS[e.kind] ?? e.kind },
               {
                 key: 'detected',
                 header: 'Detected',

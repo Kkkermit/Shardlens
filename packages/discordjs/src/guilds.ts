@@ -1,14 +1,13 @@
 import { cutText, redactSecrets, uuidv7 } from '@shardlens/core';
 import type { EventInput, GuildInfo } from '@shardlens/schema';
 import type { Client, Guild } from 'discord.js';
+import { totalShards } from './gateway.js';
 import { shardForGuild } from './util.js';
 
 /** The guild's shard; falls back to `(id >> 22) % shardCount` when discord.js has none. */
 export function shardOf(g: Guild): number {
   if (typeof g.shardId === 'number' && g.shardId >= 0) return g.shardId;
-  const count =
-    g.client.shard?.count ?? (typeof g.client.options.shardCount === 'number' ? g.client.options.shardCount : 1);
-  return shardForGuild(g.id, count) ?? 0;
+  return shardForGuild(g.id, totalShards(g.client)) ?? 0;
 }
 
 /** The bot's permission bitfield in a server, or `0` when unknown (getters can throw before login). */

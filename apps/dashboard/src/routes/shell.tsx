@@ -1,8 +1,8 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { Link, Outlet, useRouter, useRouterState } from '@tanstack/react-router';
 import { type FormEvent, useEffect, useRef, useState } from 'react';
-import { ApiError, api, errorText, useMe, useMeta } from '../api';
-import { ErrorNote, Loading, PageHead } from '../components/ui';
+import { ApiError, api, errorText, type Me, useMe, useMeta } from '../api';
+import { ErrorNote, Loading, Name, NotFoundPage, useDocumentTitle } from '../components/ui';
 import { type Theme, useTheme } from '../theme';
 
 const NEXT_THEME: Record<Theme, Theme> = { system: 'light', light: 'dark', dark: 'system' };
@@ -29,12 +29,9 @@ const ADMIN_NAV = [
 
 export function NotFound() {
   return (
-    <>
-      <PageHead title="Page not found" description="There is nothing at this address." />
-      <p>
-        <Link to="/">Back to the overview</Link>
-      </p>
-    </>
+    <NotFoundPage title="Page not found" back={<Link to="/">← Back to the overview</Link>}>
+      There is nothing at this address.
+    </NotFoundPage>
   );
 }
 
@@ -86,7 +83,9 @@ function Shell(props: { demo: boolean }) {
         return;
       }
     }
-    await client.invalidateQueries();
+    // Straight to the sign-in page, which drops the cached answers. Asking the collector again for every query on
+    // this page would only collect a 401 for each.
+    client.setQueryData<Me>(['me'], (me) => me && { ...me, authenticated: false, method: null, userId: null });
   };
   return (
     <div className="shell">
@@ -96,7 +95,7 @@ function Shell(props: { demo: boolean }) {
       <nav className="nav" aria-label="Main">
         <div className="brand">
           <img src="/favicon.svg" alt="" />
-          <span>{meta.data?.name ?? 'Shardlens'}</span>
+          <Name>{meta.data?.name ?? 'Shardlens'}</Name>
         </div>
         {NAV.map((item) => (
           <Link key={item.to} to={item.to} activeOptions={{ exact: item.to === '/' }}>
@@ -160,6 +159,11 @@ export function loginError(code: string | null): string {
 function Login(props: { discordLogin: boolean }) {
   const client = useQueryClient();
   const router = useRouter();
+  useDocumentTitle('Sign in');
+  // Signed out, or the session ended: nothing from the last session stays in memory for the next one to see.
+  useEffect(() => {
+    client.removeQueries({ predicate: (query) => query.queryKey[0] !== 'me' });
+  }, [client]);
   const [key, setKey] = useState('');
   const [error, setError] = useState<string>(() =>
     loginError(new URLSearchParams(window.location.search).get('error')),
@@ -187,24 +191,22 @@ function Login(props: { discordLogin: boolean }) {
   return (
     <div className="login">
       <main className="panel">
-        <div className="brand" style={{ padding: 0 }}>
+        <div className="brand">
           <img src="/favicon.svg" alt="" />
           <h1>Shardlens</h1>
         </div>
-        <p className="muted" style={{ margin: 0 }}>
-          Sign in to see your bot's analytics.
-        </p>
+        <p className="muted">Sign in to see your bot's analytics.</p>
         {error ? (
-          <p role="alert" className="badge bad" style={{ justifyContent: 'flex-start', borderRadius: 6, padding: 8 }}>
+          <p role="alert" className="form-error">
             {error}
           </p>
         ) : null}
         {props.discordLogin ? (
-          <a className="button primary" href="/auth/discord" style={{ justifyContent: 'center' }}>
+          <a className="button primary" href="/auth/discord">
             Sign in with Discord
           </a>
         ) : null}
-        <form onSubmit={(e) => void submit(e)} style={{ display: 'grid', gap: 8 }}>
+        <form onSubmit={(e) => void submit(e)}>
           <label htmlFor="read-key">{props.discordLogin ? 'Or use a read key' : 'Read key'}</label>
           <input
             id="read-key"

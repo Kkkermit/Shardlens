@@ -13,6 +13,12 @@ export type PresetId = (typeof PRESETS)[number]['id'];
 const KEY = 'shardlens:range';
 const DEFAULT = PRESETS[2];
 
+/** The last `days` days up to the next whole minute, so queries asked within the same minute share a cache entry. */
+export function lastDays(days: number, now = Date.now()): { from: string; to: string } {
+  const to = Math.ceil(now / 60_000) * 60_000;
+  return { from: new Date(to - days * 86_400_000).toISOString(), to: new Date(to).toISOString() };
+}
+
 /** The page-wide time range (remembered per viewer), rounded to the minute so queries cache. */
 export function useRange() {
   const [id, setIdState] = useState<PresetId>(() => {
@@ -24,9 +30,6 @@ export function useRange() {
     store(KEY, next);
   };
   const preset = PRESETS.find((p) => p.id === id) ?? DEFAULT;
-  const range = useMemo(() => {
-    const to = Math.ceil(Date.now() / 60_000) * 60_000;
-    return { from: new Date(to - preset.days * 86_400_000).toISOString(), to: new Date(to).toISOString() };
-  }, [preset.days]);
+  const range = useMemo(() => lastDays(preset.days), [preset.days]);
   return { id, setId, range, interval: preset.interval };
 }

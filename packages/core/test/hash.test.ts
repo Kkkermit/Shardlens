@@ -73,6 +73,17 @@ describe('UserHasher', () => {
     expect(await hasher.hash('112233445566778899', '2026-11')).not.toBe(first);
   });
 
+  it('forgets a deleted salt and every hash made with it', async () => {
+    const hasher = new UserHasher();
+    await hasher.setSalt('2026-10', SALT);
+    await hasher.setSalt('2026-11', SALT);
+    expect(await hasher.hash('112233445566778899', '2026-10')).toMatch(/^h1:/); // cached
+    hasher.deleteSalt('2026-10');
+    hasher.deleteSalt('2026-09'); // never installed: nothing happens
+    expect(hasher.labels()).toEqual(['2026-11']);
+    expect(await hasher.hash('112233445566778899', '2026-10')).toBeUndefined();
+  });
+
   it('treats re-installing a period as the most recent', async () => {
     const hasher = new UserHasher();
     await hasher.setSalt('2026-10', SALT);

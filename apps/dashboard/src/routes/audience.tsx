@@ -2,8 +2,8 @@ import { useMemo } from 'react';
 import { updating, useSpec } from '../api';
 import { dayX } from '../chart-data';
 import { BarList, TimeChart } from '../components/charts';
-import { ErrorNote, Loading, PageHead, Panel, RangePicker, Tile } from '../components/ui';
-import { label, num, pct } from '../format';
+import { PageHead, Panel, QueryBody, RangePicker, Tile } from '../components/ui';
+import { day, label, num, pct } from '../format';
 import { useRange } from '../range';
 
 interface Audience {
@@ -40,31 +40,25 @@ export function AudiencePage() {
         description="Counts only. Users are pseudonymous hashes that cannot be linked across salt periods."
         actions={<RangePicker value={r.id} onChange={r.setId} />}
       />
-      {q.error ? (
-        <ErrorNote error={q.error} retry={() => void q.refetch()} />
-      ) : (
+      <QueryBody query={q}>
         <div className="stack" aria-busy={updating(q) || undefined}>
           <div className="grid tiles">
             <Tile label="Daily users (latest)" value={num(a?.daily.at(-1)?.users)} />
             <Tile
               label="Weekly users"
               value={num(latestWeek?.users)}
-              sub={latestWeek ? `Week of ${latestWeek.week}` : undefined}
+              sub={latestWeek ? `Week of ${day(latestWeek.week)}` : undefined}
             />
             <Tile
               label="Users this period"
               value={num(latestPeriod?.users)}
-              sub={latestPeriod ? `Since ${latestPeriod.period}` : undefined}
+              sub={latestPeriod ? `Since ${day(latestPeriod.period)}` : undefined}
             />
             <Tile label="Stickiness" value={pct(a?.stickiness)} sub="Average daily ÷ period users" />
             <Tile label="Premium share" value={pct(a?.premiumShare)} sub="Of runs" />
           </div>
           <Panel title="Daily users" subtitle="New = first seen in the current salt period · UTC days">
-            {q.isLoading ? (
-              <Loading />
-            ) : (
-              <TimeChart label="Daily new and returning users" x={dau.x} series={dau.series} />
-            )}
+            <TimeChart label="Daily new and returning users" x={dau.x} series={dau.series} />
           </Panel>
           <div className="grid two">
             <Panel title="Languages" subtitle="Discord app language, not location">
@@ -81,7 +75,7 @@ export function AudiencePage() {
             </Panel>
           </div>
         </div>
-      )}
+      </QueryBody>
     </>
   );
 }

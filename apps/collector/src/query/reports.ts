@@ -10,7 +10,7 @@ import { rawFrom, rollupSource } from './rollup-source.js';
 export async function reliability(db: Db, appId: string, range: { from: string; to: string }, now: Date) {
   const from = new Date(range.from);
   const to = new Date(range.to);
-  const rf = rawFrom(from, now);
+  const rf = await rawFrom(db, appId, from, now);
   const rollups = rollupSource(from, now);
   const [totals, codes, routes, limits, budget, info, shards, events, process, sdks] = await Promise.all([
     db.query(
@@ -112,6 +112,7 @@ export async function reliability(db: Db, appId: string, range: { from: string; 
 export async function premium(db: Db, appId: string, range: { from: string; to: string }, now: Date) {
   const from = new Date(range.from);
   const to = new Date(range.to);
+  const rawStart = await rawFrom(db, appId, from, now);
   const [skus, prices, changes, active, subs, share] = await Promise.all([
     db.query<{ skus: { id: string; name: string; type: number }[] }>('SELECT skus FROM app_info WHERE app_id = $1', [
       appId,
@@ -148,7 +149,7 @@ export async function premium(db: Db, appId: string, range: { from: string; to: 
     db.query<{ share: number | null }>(
       `SELECT (sum(weight) FILTER (WHERE premium) / nullif(sum(weight), 0))::float8 AS share
          FROM interactions WHERE app_id = $1 AND ts >= $2 AND ts < $3 AND ${INTERACTIONS_ONLY_SQL}`,
-      [appId, rawFrom(from, now), to],
+      [appId, rawStart, to],
     ),
   ]);
   const names = new Map((skus.rows[0]?.skus ?? []).map((s) => [s.id, s.name]));

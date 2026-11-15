@@ -1,23 +1,13 @@
 import { Link, useNavigate, useParams } from '@tanstack/react-router';
-import { useMemo } from 'react';
+import { type ReactNode, useMemo } from 'react';
 import { updating, useMeta, useSpec } from '../api';
 import { pivot } from '../chart-data';
+import { commandFound, KNOWN_COMMAND_DAYS, MAX_COMMAND_NAME } from '../commands';
 import { BarList, Heatmap, TimeChart } from '../components/charts';
 import { DataTable } from '../components/DataTable';
-import {
-  Delta,
-  ErrorNote,
-  GuildIcon,
-  Loading,
-  Name,
-  PageHead,
-  Panel,
-  QueryBody,
-  RangePicker,
-  Tile,
-} from '../components/ui';
-import { agoHour, commandLabel, label, ms, num, pct } from '../format';
-import { useRange } from '../range';
+import { Delta, GuildIcon, Name, NotFoundPage, PageHead, Panel, QueryBody, RangePicker, Tile } from '../components/ui';
+import { agoHour, commandLabel, date, day, label, ms, num, pct } from '../format';
+import { lastDays, useRange } from '../range';
 
 interface CommandRow {
   command: string;
@@ -56,13 +46,9 @@ export function CommandsPage() {
       <Panel
         busy={updating(q)}
         title="All commands"
-        subtitle={q.data ? `Unique users count since ${q.data.periodStart} (current salt period)` : undefined}
+        subtitle={q.data ? `Unique users count since ${day(q.data.periodStart)} (current salt period)` : undefined}
       >
-        {q.isLoading ? (
-          <Loading />
-        ) : q.error ? (
-          <ErrorNote error={q.error} />
-        ) : (
+        <QueryBody query={q}>
           <DataTable
             caption="Commands ranked by runs"
             rows={q.data?.rows ?? []}
@@ -133,10 +119,16 @@ export function CommandsPage() {
                 sort: (row) => row.p95Ms,
                 render: (row) => ms(row.p95Ms),
               },
-              { key: 'last', header: 'Last used', sort: (row) => row.lastUsed, render: (row) => agoHour(row.lastUsed) },
+              {
+                key: 'last',
+                header: 'Last used',
+                firstDir: 'desc',
+                sort: (row) => row.lastUsed,
+                render: (row) => agoHour(row.lastUsed),
+              },
             ]}
           />
-        )}
+        </QueryBody>
       </Panel>
     </>
   );
@@ -174,8 +166,22 @@ interface CommandDetail {
 /** Upper edge of bucket `i` of the SDK's latency histogram: 40 log-scale buckets up to 60 s (`@shardlens/core`). */
 const bucketUpper = (i: number) => Math.exp(((i + 1) / 39) * Math.log(60_000));
 
+function CommandNotFound(props: { name: string }) {
+  return (
+    <NotFoundPage title="Command not found" back={<Link to="/commands">← All commands</Link>}>
+      No command called <Name>{props.name}</Name> is registered, and none has run in the last {KNOWN_COMMAND_DAYS} days.
+    </NotFoundPage>
+  );
+}
+
 export function CommandPage() {
   const { name } = useParams({ from: '/commands/$name' });
+  // The collector refuses a longer name, and no command can have one.
+  return name.length > MAX_COMMAND_NAME ? <CommandNotFound name={name} /> : <CommandDetailPage name={name} />;
+}
+
+function CommandDetailPage(props: { name: string }) {
+  const name = props.name;
   const r = useRange();
   const meta = useMeta();
   const tz = meta.data?.timezone ?? 'UTC';
@@ -198,7 +204,14 @@ export function CommandPage() {
     timezone: tz,
   });
   const d = detail.data;
-  const title = commandLabel(name, d?.kinds.map((k) => k.key) ?? []);
+  // No runs in this range: is it a command at all? Asked only then, over the widest range the page offers.
+  const noRuns = d !== undefined && !detail.isPlaceholderData && (d.totals.runs ?? 0) === 0;
+  const wide = useMemo(() => lastDays(KNOWN_COMMAND_DAYS), []);
+  const known = useSpec<{ rows: { command: string; kinds: string[] }[] }>(
+    noRuns ? { kind: 'commands', range: wide } : null,
+  );
+  const listed = known.data?.rows.find((row) => row.command === name);
+  const title = commandLabel(name, d?.kinds.length ? d.kinds.map((k) => k.key) : (listed?.kinds ?? []));
   const chart = useMemo(
     () => pivot(series.data?.points ?? [], (k) => (k ? `${title} ${k}` : title)),
     [series.data, title],
@@ -209,6 +222,9 @@ export function CommandPage() {
     .map((v, i) => ({ key: String(i), name: `≤ ${ms(bucketUpper(i))}`, value: v }))
     .filter((b) => b.value > 0);
 
+  if (noRuns && commandFound(name, known.data?.rows) === false) return <CommandNotFound name={name} />;
+  // The detail reads raw events, which are kept for 35 days at most: a longer range starts later.
+  const cut = d !== undefined && Date.parse(d.from) > Date.parse(r.range.from);
   return (
     <>
       <PageHead
@@ -216,17 +232,15 @@ export function CommandPage() {
         description={<Link to="/commands">← All commands</Link>}
         actions={<RangePicker value={r.id} onChange={r.setId} />}
       />
-      {detail.error ? (
-        <ErrorNote error={detail.error} retry={() => void detail.refetch()} />
-      ) : (
+      <QueryBody query={noRuns ? [detail, { isLoading: known.isLoading, error: null }] : detail}>
         <div className="stack" aria-busy={updating(detail, series, heat) || undefined}>
-          {d && runs === 0 ? <p className="notice">No runs of {title} in this range.</p> : null}
+          {d && runs === 0 ? (
+            <p className="notice">
+              No runs of <Name>{title}</Name> {cut ? `since ${date(d.from, tz)}` : 'in this range'}.
+            </p>
+          ) : null}
           <div className="grid tiles">
-            <Tile
-              label="Runs"
-              value={num(runs)}
-              sub={d && Date.parse(d.from) > Date.parse(r.range.from) ? 'Detail covers the last 35 days' : undefined}
-            />
+            <Tile label="Runs" value={num(runs)} sub={cut ? `Counted since ${date(d?.from, tz)}` : undefined} />
             <Tile
               label="Failed"
               value={pct(runs ? ((t?.error ?? 0) + (t?.timeout ?? 0) + (t?.noResponse ?? 0)) / runs : null)}
@@ -266,13 +280,13 @@ export function CommandPage() {
             <Panel title="Subcommands">
               <BarList
                 label="Subcommands"
-                rows={(d?.subcommands ?? []).map((s) => ({ key: s.key, name: s.key || '(none)', value: s.value }))}
+                rows={(d?.subcommands ?? []).map((s) => ({ key: s.key, name: nameOf(s.key), value: s.value }))}
               />
             </Panel>
             <Panel title="Options used" subtitle="Names only, unless allow-listed">
               <BarList
                 label="Options used"
-                rows={(d?.options ?? []).map((o) => ({ key: o.key, name: o.key, value: o.value }))}
+                rows={(d?.options ?? []).map((o) => ({ key: o.key, name: nameOf(o.key), value: o.value }))}
               />
             </Panel>
             <Panel title="Who runs it">
@@ -387,7 +401,10 @@ export function CommandPage() {
             </QueryBody>
           </Panel>
         </div>
-      )}
+      </QueryBody>
     </>
   );
 }
+
+/** A subcommand or option name as the bot defined it. */
+const nameOf = (key: string): ReactNode => (key ? <Name>{key}</Name> : '(none)');

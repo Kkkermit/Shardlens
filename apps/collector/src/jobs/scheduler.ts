@@ -103,7 +103,9 @@ export function startJobs(db: Db, log: JobLogger, opts?: { settingsKey: string; 
       log.error({ job: 'rollups', skipped }, 'rows the database could not aggregate were skipped');
   };
 
-  const due = (name: string, every: number) => Date.now() - (lastRun.get(name) ?? 0) >= every;
+  // A job queued by the election, between two ticks, would otherwise wait for the tick after the one it falls due at:
+  // a 5-minute job ran every 6 minutes. Due within half a tick counts as due.
+  const due = (name: string, every: number) => Date.now() - (lastRun.get(name) ?? 0) >= every - MINUTE / 2;
 
   const tick = () => {
     if (!leader) return;

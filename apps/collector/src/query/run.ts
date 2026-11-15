@@ -304,7 +304,7 @@ async function commands(db: Db, appId: string, spec: Spec<'commands'>, now: Date
 }
 
 async function command(db: Db, appId: string, spec: Spec<'command'>, now: Date) {
-  const from = rawFrom(new Date(spec.range.from), now);
+  const from = await rawFrom(db, appId, new Date(spec.range.from), now);
   const to = new Date(spec.range.to);
   const p = [appId, spec.name, from, to];
   const base = `FROM interactions WHERE app_id = $1 AND command = $2 AND ts >= $3 AND ts < $4 AND kind IN ${COMMAND_KINDS_SQL}`;
@@ -630,6 +630,7 @@ async function audience(db: Db, appId: string, spec: Spec<'audience'>, now: Date
   // a range ending now includes today.
   const days = [appId, day(from), day(new Date(to.getTime() - 1))];
   const rollups = rollupSource(from, now);
+  const rawStart = await rawFrom(db, appId, from, now);
   const [daily, weekly, periods, splits, premium] = await Promise.all([
     db.query(
       `SELECT to_char(start_day, 'YYYY-MM-DD') AS day, users, new_users AS "newUsers" FROM unique_counts
@@ -661,7 +662,7 @@ async function audience(db: Db, appId: string, spec: Spec<'audience'>, now: Date
     db.query<{ share: number | null }>(
       `SELECT (sum(weight) FILTER (WHERE premium) / nullif(sum(weight), 0))::float8 AS share
          FROM interactions WHERE app_id = $1 AND ts >= $2 AND ts < $3 AND ${INTERACTIONS_ONLY_SQL}`,
-      [appId, rawFrom(from, now), to],
+      [appId, rawStart, to],
     ),
   ]);
   const dau = daily.rows as { users: number }[];

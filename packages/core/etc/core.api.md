@@ -400,6 +400,7 @@ export function translateEvent(event: WireEvent, sink: MetricSink): void;
 
 // @public
 export class UserHasher {
+    deleteSalt(label: string): void;
     hash(userId: string, label: string): Promise<string | undefined>;
     // (undocumented)
     hasSalt(label: string): boolean;

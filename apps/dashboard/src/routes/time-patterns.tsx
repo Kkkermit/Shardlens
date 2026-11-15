@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { updating, useMeta, useSpec } from '../api';
 import { Heatmap } from '../components/charts';
 import { DataTable } from '../components/DataTable';
-import { ErrorNote, Loading, PageHead, Panel, RangePicker } from '../components/ui';
+import { PageHead, Panel, QueryBody, RangePicker } from '../components/ui';
 import { commandLabel, dateTime, decimal, num } from '../format';
 import { useRange } from '../range';
 
@@ -50,38 +50,32 @@ export function TimePage() {
             </label>
           }
         >
-          {heat.isLoading ? (
-            <Loading />
-          ) : heat.error ? (
-            <ErrorNote error={heat.error} />
-          ) : (
+          <QueryBody query={heat}>
             <Heatmap label="Runs by hour of day and weekday" cells={heat.data?.cells ?? []} />
-          )}
+          </QueryBody>
         </Panel>
         <Panel title="Bursts" subtitle="Minutes with more than 5× the median minute (last 14 days at most)">
-          {bursts.isLoading ? (
-            <Loading />
-          ) : bursts.error ? (
-            <ErrorNote error={bursts.error} />
-          ) : (bursts.data?.rows ?? []).length === 0 ? (
-            <p className="muted">No bursts found.</p>
-          ) : (
-            <DataTable
-              caption="Bursts"
-              rowKey={(b) => b.minute}
-              rows={bursts.data?.rows ?? []}
-              columns={[
-                { key: 'minute', header: 'Minute', render: (b) => dateTime(b.minute, tz), sort: (b) => b.minute },
-                { key: 'runs', header: 'Runs', numeric: true, render: (b) => num(b.runs), sort: (b) => b.runs },
-                {
-                  key: 'x',
-                  header: '× median',
-                  numeric: true,
-                  render: (b) => (b.median ? `${decimal(b.runs / b.median, 1)}×` : '—'),
-                },
-              ]}
-            />
-          )}
+          <QueryBody query={bursts}>
+            {(bursts.data?.rows ?? []).length === 0 ? (
+              <p className="muted">No bursts found.</p>
+            ) : (
+              <DataTable
+                caption="Bursts"
+                rowKey={(b) => b.minute}
+                rows={bursts.data?.rows ?? []}
+                columns={[
+                  { key: 'minute', header: 'Minute', render: (b) => dateTime(b.minute, tz), sort: (b) => b.minute },
+                  { key: 'runs', header: 'Runs', numeric: true, render: (b) => num(b.runs), sort: (b) => b.runs },
+                  {
+                    key: 'x',
+                    header: '× median',
+                    numeric: true,
+                    render: (b) => (b.median ? `${decimal(b.runs / b.median, 1)}×` : '—'),
+                  },
+                ]}
+              />
+            )}
+          </QueryBody>
         </Panel>
       </div>
     </>

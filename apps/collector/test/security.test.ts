@@ -1,7 +1,7 @@
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
-import { isDiscordWebhookUrl, maskWebhook } from '../src/discord-webhook.js';
+import { isDiscordWebhookUrl, maskWebhook, postToDiscordWebhook } from '../src/discord-webhook.js';
 import { auditCipher } from '../src/security/crypto.js';
 import { csvCell, csvRow } from '../src/security/csv.js';
 import { makeDiscordVerifier } from '../src/security/ed25519.js';
@@ -144,6 +144,37 @@ describe('alert and report webhook allow-list (SSRF)', () => {
     const masked = maskWebhook('https://discord.com/api/webhooks/112233445566778899/abc-DEF_123');
     expect(masked).toBe('https://discord.com/api/webhooks/1122…/•••');
     expect(maskWebhook('anything else')).toBe('•••');
+  });
+});
+
+describe('posting to a Discord webhook', () => {
+  const url = 'https://discord.com/api/webhooks/112233445566778899/abc-DEF_123';
+  const message = { title: 'Test', body: 'Body', link: 'https://stats.example.com/', critical: false };
+
+  it('falls back to plain content when the webhook refuses a Components V2 message', async () => {
+    const calls: { url: string; body: Record<string, unknown> }[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(input), body: JSON.parse(String(init?.body)) as Record<string, unknown> });
+      return new Response(null, { status: calls.length === 1 ? 400 : 204 });
+    }) as typeof fetch;
+    expect(await postToDiscordWebhook(url, message, fetchImpl)).toEqual({ ok: true });
+    expect(calls.map((c) => c.url)).toEqual([`${url}?with_components=true`, url]);
+    expect(calls[1]?.body).toMatchObject({ content: '**Test**\nBody\nhttps://stats.example.com/' });
+    expect(calls[1]?.body.allowed_mentions).toEqual({ parse: [] });
+  });
+
+  it('says why a request got no answer, without the URL', async () => {
+    const unreachable = (async () => {
+      throw new TypeError(`fetch failed for ${url}`, { cause: { code: 'ENOTFOUND', message: url } });
+    }) as typeof fetch;
+    const result = await postToDiscordWebhook(url, message, unreachable);
+    expect(result).toEqual({ ok: false, error: 'could not reach Discord (ENOTFOUND)' });
+    const slow = (async () => {
+      throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    }) as typeof fetch;
+    expect((await postToDiscordWebhook(url, message, slow)).error).toMatch(/did not answer/);
+    const gone = (async () => new Response(null, { status: 404 })) as typeof fetch;
+    expect(await postToDiscordWebhook(url, message, gone)).toEqual({ ok: false, error: 'discord returned 404' });
   });
 });
 

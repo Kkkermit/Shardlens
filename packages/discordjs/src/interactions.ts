@@ -8,7 +8,7 @@ import {
   uuidv7,
 } from '@shardlens/core';
 import type { EventInput } from '@shardlens/schema';
-import { ApplicationIntegrationType, type Interaction } from 'discord.js';
+import type { Interaction } from 'discord.js';
 import type { ShardlensOptions } from './options.js';
 import { auditActor, capturedValues, memberTier } from './run-details.js';
 import { LruMap, shardForGuild } from './util.js';
@@ -87,9 +87,11 @@ function describeInteraction(
   options: ShardlensOptions,
   shardCount: number,
 ): InteractionBase | undefined {
+  // Keyed by `ApplicationIntegrationType`: 0 for a server install, 1 for a user install. Not the enum itself: some
+  // discord.js 14 releases don't export it, and importing a missing name stops an ES module from loading.
   const owners = (i.authorizingIntegrationOwners ?? {}) as unknown as Record<string, unknown>;
-  const guildInstalled = owners[String(ApplicationIntegrationType.GuildInstall)] !== undefined;
-  const userInstalled = owners[String(ApplicationIntegrationType.UserInstall)] !== undefined;
+  const guildInstalled = owners[0] !== undefined;
+  const userInstalled = owners[1] !== undefined;
   const context = i.context;
   const common = compact({
     id: uuidv7(i.createdTimestamp),
@@ -135,7 +137,8 @@ function describeInteraction(
       commandScope: i.commandGuildId ? ('guild' as const) : ('global' as const),
     });
   }
-  if (i.isPrimaryEntryPointCommand()) {
+  // discord.js 14.18 and older don't have this check; without the guard, every component would fail here.
+  if (typeof i.isPrimaryEntryPointCommand === 'function' && i.isPrimaryEntryPointCommand()) {
     return compact({ ...common, kind: 'primary_entry_point' as const, command: i.commandName, commandId: i.commandId });
   }
   if (i.isAutocomplete()) {

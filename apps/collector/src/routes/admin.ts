@@ -1,4 +1,4 @@
-import { Snowflake } from '@shardlens/schema';
+import { MAX_EVENT_WEIGHT, Snowflake } from '@shardlens/schema';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { isDiscordWebhookUrl, maskStoredWebhook, postToDiscordWebhook } from '../discord-webhook.js';
@@ -33,7 +33,10 @@ export const SettingsPatch = z
         z.object({ amount: z.number().nonnegative().max(1_000_000), currency: z.string().regex(/^[A-Z]{3}$/) }),
       )
       .optional(),
-    sampling: z.record(z.string().max(32), z.number().gt(0).max(1)).optional(),
+    // A kept event carries the weight 1 / rate, and the wire refuses weights over MAX_EVENT_WEIGHT.
+    sampling: z
+      .record(z.string().max(32), z.number().min(1 / MAX_EVENT_WEIGHT).max(1))
+      .optional(),
     badges: z.array(z.enum(BADGES)).max(BADGES.length).optional(),
   })
   .strict();

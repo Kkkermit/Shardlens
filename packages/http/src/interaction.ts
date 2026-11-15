@@ -28,6 +28,7 @@ export interface RawInteraction {
   message?: { interaction?: { name?: string | undefined } | undefined } | undefined;
 }
 
+/** The `data` of a raw interaction: the command, its options, or the component or modal's custom ID. */
 export interface RawInteractionData {
   id?: string | undefined;
   name?: string | undefined;
@@ -38,6 +39,7 @@ export interface RawInteractionData {
   component_type?: number | undefined;
 }
 
+/** A command option as Discord sends it; subcommands and groups hold their own `options`. */
 export interface RawOption {
   name: string;
   type: number;
@@ -46,6 +48,7 @@ export interface RawOption {
   options?: readonly RawOption[] | undefined;
 }
 
+/** The user who ran an interaction. Only the ID is read, plus username and avatar in audit mode. */
 export interface RawUser {
   id: string;
   username?: string | undefined;
@@ -72,12 +75,19 @@ const MESSAGE_COMPONENT = 3;
 const APPLICATION_COMMAND_AUTOCOMPLETE = 4;
 const MODAL_SUBMIT = 5;
 
-function snowflakeTime(id: string): number {
-  try {
-    return Number((BigInt(id) >> 22n) + DISCORD_EPOCH);
-  } catch {
-    return Date.now();
-  }
+/**
+ * The wire format's snowflake rule (`Snowflake` in `@shardlens/schema`): below 2^63, the largest the collector stores.
+ * A looser check would let through an ID the collector refuses, and with it the whole event.
+ */
+const SNOWFLAKE = /^(?:\d{17,18}|[1-8]\d{18}|9[01]\d{17})$/;
+
+export const snowflake = (v: unknown): string | undefined => (typeof v === 'string' && SNOWFLAKE.test(v) ? v : undefined);
+const integer = (v: unknown) => (Number.isSafeInteger(v) ? (v as number) : undefined);
+
+/** When Discord created the interaction, from its ID; now, for an ID that isn't one. */
+function snowflakeTime(id: unknown): number {
+  const valid = snowflake(id);
+  return valid === undefined ? Date.now() : Number((BigInt(valid) >> 22n) + DISCORD_EPOCH);
 }
 
 function memberTier(i: RawInteraction): 'admin' | 'manager' | 'member' | 'dm' {
@@ -95,7 +105,8 @@ function memberTier(i: RawInteraction): 'admin' | 'manager' | 'member' | 'dm' {
 
 function leaves(options: readonly RawOption[] | undefined, path: { group?: string; sub?: string } = {}) {
   const out: RawOption[] = [];
-  for (const o of options ?? []) {
+  for (const o of Array.isArray(options) ? (options as readonly RawOption[]) : []) {
+    if (typeof o !== 'object' || o === null) continue;
     if (o.type === SUB_COMMAND_GROUP) {
       path.group = o.name;
       out.push(...leaves(o.options, path));
@@ -107,20 +118,24 @@ function leaves(options: readonly RawOption[] | undefined, path: { group?: strin
   return out;
 }
 
-const snowflake = (v: unknown) => (typeof v === 'string' && /^\d{17,20}$/.test(v) ? v : undefined);
 const short = (v: unknown, n: number) => (typeof v === 'string' && v.length > 0 ? cutText(v, n) : undefined);
-const customId = (v: unknown, options: DescribeOptions) =>
-  cutText(options.normaliseCustomId(redactSecrets(String(v ?? ''))), MAX_CUSTOM_ID_LENGTH);
+
+/** A custom ID as it is recorded: secrets redacted, then the bot's normaliser (or the default one), then capped. */
+export function recordedCustomId(v: unknown, options: Pick<DescribeOptions, 'normaliseCustomId'>): string {
+  return cutText(options.normaliseCustomId(redactSecrets(String(v ?? ''))), MAX_CUSTOM_ID_LENGTH);
+}
 
 /**
  * Turns a raw interaction into the wire fields Shardlens keeps, exactly as the discord.js adapter does. Returns
- * `undefined` for PING and unknown types. The user ID is returned separately: it is hashed before it is queued.
+ * `undefined` for PING, unknown types and interactions without a user, which the collector would refuse. The user ID
+ * is returned separately: it is hashed before it is queued.
  */
 export function describeRawInteraction(
   i: RawInteraction,
   options: DescribeOptions,
-): { fields: InteractionFields; userId: string | undefined } | undefined {
+): { fields: InteractionFields; userId: string } | undefined {
   const user = i.member?.user ?? i.user;
+  if (typeof user?.id !== 'string') return undefined;
   const owners = i.authorizing_integration_owners ?? {};
   const guildInstalled = owners['0'] !== undefined;
   const userInstalled = owners['1'] !== undefined;
@@ -133,14 +148,14 @@ export function describeRawInteraction(
     context,
     install: guildInstalled && userInstalled ? 'both' : userInstalled ? 'user' : 'guild',
     guild: snowflake(i.guild_id),
-    channelType: typeof i.channel?.type === 'number' ? i.channel.type : undefined,
+    channelType: integer(i.channel?.type),
     locale: (short(i.locale, 10) ?? 'unknown') as string,
     guildLocale: short(i.guild_locale, 10),
     memberTier: memberTier(i),
     premium: (i.entitlements?.length ?? 0) > 0,
     options: [] as string[],
     actor:
-      options.mode === 'audit' && user
+      options.mode === 'audit' && snowflake(user.id)
         ? compact({
             userId: user.id,
             username: options.auditIncludeProfile ? short(user.username, 64) : undefined,
@@ -158,7 +173,7 @@ export function describeRawInteraction(
       const all = leaves(data.options, path);
       const values: Record<string, string | number | boolean> = {};
       for (const o of all) {
-        if (!options.captureOptionValues.has(o.name)) continue;
+        if (!options.captureOptionValues.has(o.name) || o.name.length > 32) continue;
         const recorded = recordedOptionValue(o.value, o.type);
         if (recorded !== undefined) values[o.name] = recorded;
       }
@@ -191,33 +206,42 @@ export function describeRawInteraction(
       options: focused ? [cutText(String(focused), 32)] : [],
     };
   } else if (i.type === MESSAGE_COMPONENT) {
-    const source = i.message?.interaction?.name?.split(' ')[0];
+    // `name` holds the subcommand too: `ticket open`.
+    const name = i.message?.interaction?.name;
+    const source = typeof name === 'string' ? name.split(' ')[0] : undefined;
     fields = {
       kind: data.component_type === 2 ? 'button' : 'select',
-      customId: customId(data.custom_id, options),
-      componentType: data.component_type,
+      customId: recordedCustomId(data.custom_id, options),
+      componentType: integer(data.component_type),
       sourceCommand: short(source, 32),
     };
   } else if (i.type === MODAL_SUBMIT) {
-    fields = { kind: 'modal_submit', customId: customId(data.custom_id, options) };
+    fields = { kind: 'modal_submit', customId: recordedCustomId(data.custom_id, options) };
   }
   if (!fields) return undefined;
-  return { fields: compact({ ...common, ...fields }) as unknown as InteractionFields, userId: user?.id };
+  return { fields: compact({ ...common, ...fields }) as unknown as InteractionFields, userId: user.id };
 }
 
-/** Reads the interaction callback type and ephemeral flag from what the handler returned. */
+const MODAL = 9;
+
+/**
+ * Reads the interaction callback type and ephemeral flag from what the handler returned, and the custom ID of a modal
+ * it opened, as the bot wrote it.
+ */
 export function describeResponse(body: unknown): {
   responseType?: number | undefined;
   deferred?: boolean | undefined;
   ephemeral?: boolean | undefined;
+  modalCustomId?: string | undefined;
 } {
   if (typeof body !== 'object' || body === null) return {};
-  const type = (body as { type?: unknown }).type;
-  const flags = (body as { data?: { flags?: unknown } }).data?.flags;
-  if (typeof type !== 'number') return {};
+  const type = integer((body as { type?: unknown }).type);
+  const data = (body as { data?: { flags?: unknown; custom_id?: unknown } | null }).data;
+  if (type === undefined) return {};
   return compact({
     responseType: type,
     deferred: type === 5 || type === 6,
-    ephemeral: typeof flags === 'number' ? (flags & 64) !== 0 : undefined,
+    ephemeral: Number.isSafeInteger(data?.flags) ? ((data?.flags as number) & 64) !== 0 : undefined,
+    modalCustomId: type === MODAL && typeof data?.custom_id === 'string' ? data.custom_id : undefined,
   });
 }

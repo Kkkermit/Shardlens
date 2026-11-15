@@ -3,9 +3,9 @@ import { type FormEvent, useState } from 'react';
 import { api, errorText } from '../api';
 import { NeedsDiscord, useAdminGate } from '../components/AdminGate';
 import { DataTable } from '../components/DataTable';
-import { ErrorNote, Loading, PageHead, Panel, QueryBody, StatusMessage } from '../components/ui';
-import { ago, dateTime } from '../format';
-import { changedFields, isSnowflake } from '../forms';
+import { Name, PageHead, Panel, QueryBody, StatusMessage, usePanelStatus } from '../components/ui';
+import { ago, dateTime, money, num } from '../format';
+import { changedFields, isSnowflake, permissionBitsError } from '../forms';
 
 interface Settings {
   timezone: string;
@@ -60,8 +60,9 @@ export function SettingsPage() {
       ),
     enabled: gate.allowed,
   });
-  const [message, setMessage] = useState('');
-  const [newKey, setNewKey] = useState<string>('');
+  const [messageFor, say] = usePanelStatus();
+  // The key just created, shown once, until it is revoked.
+  const [newKey, setNewKey] = useState<{ id: string; key: string }>();
   const [eraseId, setEraseId] = useState('');
   const [erasing, setErasing] = useState(false);
   const save = useMutation({
@@ -74,22 +75,28 @@ export function SettingsPage() {
     onSuccess: (data) => {
       client.setQueryData(['settings'], data);
       void client.invalidateQueries({ queryKey: ['meta'] });
-      setMessage('Saved.');
     },
-    onError: (e) => setMessage(errorText(e)),
   });
+  /** Saves part of the settings from one panel, and says how it went in that panel. */
+  const saveFrom = (panel: string, patch: Partial<Settings>, done?: () => void) => {
+    say(panel, '');
+    save.mutate(patch, {
+      onSuccess: () => {
+        say(panel, 'Saved.');
+        done?.();
+      },
+      onError: (e) => say(panel, errorText(e)),
+    });
+  };
 
-  if (gate.loading) return <Loading />;
-  if (!gate.allowed) return <NeedsDiscord title="Settings" />;
+  if (!gate.allowed && !gate.loading) return <NeedsDiscord title="Settings" />;
   const s = settings.data;
-  if (!s) {
-    return settings.error ? (
+  if (gate.loading || !s) {
+    return (
       <>
         <PageHead title="Settings" />
-        <ErrorNote error={settings.error} retry={() => void settings.refetch()} />
+        <QueryBody query={[{ isLoading: gate.loading, error: null }, settings]}>{null}</QueryBody>
       </>
-    ) : (
-      <Loading />
     );
   }
   const timezones = [...new Set([s.timezone, 'UTC', ...Intl.supportedValuesOf('timeZone')])];
@@ -97,28 +104,43 @@ export function SettingsPage() {
   const createKey = async (scope: 'ingest' | 'read') => {
     const name = window.prompt(`Label for the new ${scope} key`, scope === 'ingest' ? 'bot' : 'scripts');
     if (!name) return;
+    say('keys', '');
     try {
-      const res = await api<{ key: string }>('/v1/keys', { body: { scope, label: name } });
-      setNewKey(res.key);
+      const res = await api<{ id: string; key: string }>('/v1/keys', { body: { scope, label: name } });
+      setNewKey({ id: res.id, key: res.key });
       void client.invalidateQueries({ queryKey: ['keys'] });
     } catch (e) {
-      setMessage(errorText(e));
+      say('keys', errorText(e));
     }
+  };
+  const revokeKey = async (k: Key) => {
+    const name = k.label ? `“${k.label}”` : 'this key';
+    if (!window.confirm(`Revoke ${name}? Anything using it stops working immediately.`)) return;
+    say('keys', '');
+    try {
+      await api(`/v1/keys/${k.id}`, { method: 'DELETE', body: {} });
+      if (newKey?.id === k.id) setNewKey(undefined);
+      say('keys', `${k.label ? `“${k.label}”` : 'The key'} is revoked.`);
+    } catch (err) {
+      say('keys', errorText(err));
+    }
+    void client.invalidateQueries({ queryKey: ['keys'] });
   };
   const erase = async (e: FormEvent) => {
     e.preventDefault();
     if (erasing) return;
     const userId = eraseId.trim();
-    if (!isSnowflake(userId)) return setMessage('Enter a Discord user ID: 17 to 19 digits.');
+    if (!isSnowflake(userId)) return say('privacy', 'Enter a Discord user ID: 17 to 19 digits.');
     if (!window.confirm('Delete everything stored about this user? This cannot be undone.')) return;
+    say('privacy', '');
     setErasing(true);
     try {
       const res = await api<{ erased: number }>('/v1/privacy/erase', { body: { userId } });
-      setMessage(`Erased ${res.erased} records.`);
+      say('privacy', `Erased ${num(res.erased)} records.`);
       setEraseId('');
       void client.invalidateQueries({ queryKey: ['access-log'] });
     } catch (err) {
-      setMessage(errorText(err));
+      say('privacy', errorText(err));
     } finally {
       setErasing(false);
     }
@@ -130,30 +152,30 @@ export function SettingsPage() {
     const sku = String(f.get('sku')).trim();
     const amount = Number(f.get('amount'));
     const currency = String(f.get('currency')).trim().toUpperCase();
-    if (!isSnowflake(sku)) return setMessage('Enter the SKU ID from the Discord developer portal: 17 to 19 digits.');
-    if (!Number.isFinite(amount) || amount < 0) return setMessage('Enter a price of 0 or more.');
-    if (!/^[A-Z]{3}$/.test(currency)) return setMessage('Enter a three-letter currency code, such as USD or EUR.');
-    save.mutate({ skuPrices: { ...s.skuPrices, [sku]: { amount, currency } } }, { onSuccess: () => form.reset() });
+    if (!isSnowflake(sku)) return say('prices', 'Enter the SKU ID from the Discord developer portal: 17 to 19 digits.');
+    if (!Number.isFinite(amount) || amount < 0) return say('prices', 'Enter a price of 0 or more.');
+    if (!/^[A-Z]{3}$/.test(currency)) return say('prices', 'Enter a three-letter currency code, such as USD or EUR.');
+    saveFrom('prices', { skuPrices: { ...s.skuPrices, [sku]: { amount, currency } } }, () => form.reset());
   };
   const removePrice = (sku: string) => {
     const rest = { ...s.skuPrices };
     delete rest[sku];
-    save.mutate({ skuPrices: rest });
+    saveFrom('prices', { skuPrices: rest });
   };
   const origin = window.location.origin;
 
   return (
     <>
       <PageHead title="Settings" />
-      <StatusMessage message={message} />
       <div className="stack">
         <Panel title="General">
+          <StatusMessage message={messageFor('general')} />
           <form
             className="filters"
             onSubmit={(e) => {
               e.preventDefault();
               const f = new FormData(e.currentTarget);
-              save.mutate({ timezone: String(f.get('timezone')), rawRetentionDays: Number(f.get('raw')) });
+              saveFrom('general', { timezone: String(f.get('timezone')), rawRetentionDays: Number(f.get('raw')) });
             }}
           >
             <label>
@@ -166,14 +188,7 @@ export function SettingsPage() {
             </label>
             <label>
               Keep raw events (days)
-              <input
-                name="raw"
-                type="number"
-                min={7}
-                max={90}
-                defaultValue={s.rawRetentionDays}
-                style={{ width: 80 }}
-              />
+              <input name="raw" type="number" min={7} max={90} defaultValue={s.rawRetentionDays} className="narrow" />
             </label>
             <button type="submit">Save</button>
           </form>
@@ -183,7 +198,7 @@ export function SettingsPage() {
           title="User identity"
           subtitle="Choose whether users are hashed inside your bot, or identified so you can see who ran what."
         >
-          <p className="muted" style={{ marginTop: 0 }}>
+          <p className="muted">
             <strong>Hashed</strong> (privacy mode) never sends a user ID: you get counts of unique users, not people.{' '}
             <strong>Identified</strong> (audit mode) records the user ID, username and avatar of whoever ran each
             interaction, and nothing else about them. It is meant for support and abuse handling, needs{' '}
@@ -191,6 +206,7 @@ export function SettingsPage() {
             identities encrypted for at most 90 days and logs every view. Tell your users in your privacy policy if you
             turn it on.
           </p>
+          <StatusMessage message={messageFor('identity')} />
           <form
             className="filters"
             onSubmit={(e) => {
@@ -203,7 +219,7 @@ export function SettingsPage() {
                 !window.confirm('Identify users from now on? Their ID, username and avatar will be recorded.')
               )
                 return;
-              save.mutate({
+              saveFrom('identity', {
                 mode,
                 auditRetentionDays: Number(f.get('auditDays')),
                 saltPeriod: String(f.get('salt')) as Settings['saltPeriod'],
@@ -228,7 +244,7 @@ export function SettingsPage() {
                 min={1}
                 max={90}
                 defaultValue={s.auditRetentionDays}
-                style={{ width: 80 }}
+                className="narrow"
               />
             </label>
             <label>
@@ -244,12 +260,15 @@ export function SettingsPage() {
         </Panel>
 
         <Panel title="Permission health" subtitle="Servers where your bot lacks these permissions are flagged">
+          <StatusMessage message={messageFor('permissions')} />
           <form
             className="filters"
             onSubmit={(e) => {
               e.preventDefault();
               const v = String(new FormData(e.currentTarget).get('perms')).trim();
-              save.mutate({ requiredPermissions: v === '' ? null : v });
+              const problem = permissionBitsError(v);
+              if (problem) return say('permissions', problem);
+              saveFrom('permissions', { requiredPermissions: v === '' ? null : v });
             }}
           >
             <label>
@@ -267,12 +286,13 @@ export function SettingsPage() {
         </Panel>
 
         <Panel title="Public badges" subtitle="Opt-in SVG badges for READMEs and bot lists">
+          <StatusMessage message={messageFor('badges')} />
           <form
             className="filters"
             onSubmit={(e) => {
               e.preventDefault();
               const f = new FormData(e.currentTarget);
-              save.mutate({ badges: Object.keys(BADGES).filter((b) => f.get(b) === 'on') });
+              saveFrom('badges', { badges: Object.keys(BADGES).filter((b) => f.get(b) === 'on') });
             }}
           >
             {Object.entries(BADGES).map(([k, v]) => (
@@ -304,8 +324,7 @@ export function SettingsPage() {
                 key: 'price',
                 header: 'Per month',
                 numeric: true,
-                render: (r) =>
-                  new Intl.NumberFormat(undefined, { style: 'currency', currency: r.currency }).format(r.amount),
+                render: (r) => money(r.amount, r.currency),
               },
               {
                 key: 'remove',
@@ -319,18 +338,19 @@ export function SettingsPage() {
               },
             ]}
           />
-          <form className="filters" style={{ marginTop: 12 }} onSubmit={addPrice}>
+          <StatusMessage message={messageFor('prices')} />
+          <form className="filters" onSubmit={addPrice}>
             <label>
               SKU ID
               <input name="sku" inputMode="numeric" required />
             </label>
             <label>
               Price
-              <input name="amount" type="number" min={0} max={1_000_000} step="0.01" required style={{ width: 110 }} />
+              <input name="amount" type="number" min={0} max={1_000_000} step="0.01" required className="narrow" />
             </label>
             <label>
               Currency
-              <input name="currency" maxLength={3} placeholder="USD" required style={{ width: 70 }} />
+              <input name="currency" maxLength={3} placeholder="USD" required className="narrow" />
             </label>
             <button type="submit" disabled={save.isPending}>
               Save price
@@ -344,9 +364,10 @@ export function SettingsPage() {
         >
           {newKey ? (
             <div className="notice" role="status">
-              Copy this key now; it will not be shown again: <code>{newKey}</code>
+              Copy this key now; it will not be shown again: <code>{newKey.key}</code>
             </div>
           ) : null}
+          <StatusMessage message={messageFor('keys')} />
           <div className="filters">
             <button type="button" onClick={() => void createKey('ingest')}>
               New ingest key
@@ -361,7 +382,7 @@ export function SettingsPage() {
               rowKey={(k) => k.id}
               rows={keys.data?.rows ?? []}
               columns={[
-                { key: 'label', header: 'Label', render: (k) => k.label ?? '—' },
+                { key: 'label', header: 'Label', render: (k) => (k.label ? <Name>{k.label}</Name> : '—') },
                 { key: 'scope', header: 'Scope', render: (k) => k.scope },
                 { key: 'used', header: 'Last used', render: (k) => ago(k.lastUsedAt) },
                 { key: 'status', header: 'Status', render: (k) => (k.revokedAt ? 'Revoked' : 'Active') },
@@ -371,17 +392,7 @@ export function SettingsPage() {
                   hideHeader: true,
                   render: (k) =>
                     k.revokedAt ? null : (
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          const name = k.label ? `“${k.label}”` : 'this key';
-                          if (!window.confirm(`Revoke ${name}? Anything using it stops working immediately.`)) return;
-                          await api(`/v1/keys/${k.id}`, { method: 'DELETE', body: {} }).catch((err: unknown) =>
-                            setMessage(errorText(err)),
-                          );
-                          void client.invalidateQueries({ queryKey: ['keys'] });
-                        }}
-                      >
+                      <button type="button" onClick={() => void revokeKey(k)}>
                         Revoke
                       </button>
                     ),
@@ -392,6 +403,7 @@ export function SettingsPage() {
         </Panel>
 
         <Panel title="Privacy" subtitle="Right to erasure, and who looked at audit data">
+          <StatusMessage message={messageFor('privacy')} />
           <form className="filters" onSubmit={(e) => void erase(e)}>
             <label>
               Erase a user by Discord ID
@@ -404,8 +416,8 @@ export function SettingsPage() {
           <QueryBody query={access}>
             <DataTable
               caption="Audit access log"
-              rowKey={(r) => `${r.ts}-${r.action}`}
-              rows={access.data?.rows ?? []}
+              rowKey={(r) => String(r.n)}
+              rows={(access.data?.rows ?? []).map((row, n) => ({ ...row, n }))}
               columns={[
                 { key: 'ts', header: 'When', render: (r) => dateTime(r.ts, s.timezone) },
                 {

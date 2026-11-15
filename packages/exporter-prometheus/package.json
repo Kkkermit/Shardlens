@@ -9,7 +9,7 @@
     "url": "git+https://github.com/Kkkermit/Shardlens.git",
     "directory": "packages/exporter-prometheus"
   },
-  "homepage": "https://kkkermit.github.io/Shardlens/guides/grafana/",
+  "homepage": "https://kkkermit.github.io/Shardlens/self-hosting/exporter-only/",
   "bugs": "https://github.com/Kkkermit/Shardlens/issues",
   "keywords": [
     "shardlens",
@@ -17,7 +17,8 @@
     "discord.js",
     "prometheus",
     "metrics",
-    "grafana"
+    "grafana",
+    "observability"
   ],
   "sideEffects": false,
   "engines": {
@@ -59,7 +60,7 @@
     "@shardlens/core": "workspace:^"
   },
   "peerDependencies": {
-    "prom-client": "^15.0.0"
+    "prom-client": "^15.0.0 || ^0.16.0"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "catalog:",

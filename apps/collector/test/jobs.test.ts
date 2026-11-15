@@ -42,6 +42,25 @@ describe('job scheduler', () => {
     expect(claims).toBe(1);
     await jobs.stop();
   });
+
+  it('runs a job every 5 minutes when the election finished between two ticks', async () => {
+    vi.useFakeTimers();
+    let uniques = 0;
+    const query = async (sql: string) => {
+      if (sql.includes('pg_try_advisory_lock')) return { rows: [{ ok: true }] };
+      if (sql.includes('FROM salts') && sql.includes('$2::text IS NULL')) uniques++;
+      return { rows: [], rowCount: 0 };
+    };
+    const client = Object.assign(new EventEmitter(), { query, release: () => undefined });
+    // The lock connection takes 20 seconds, so the election's run is 20 seconds behind the minute ticks.
+    const connect = () => new Promise((resolve) => setTimeout(() => resolve(client), 20_000));
+    const jobs = startJobs({ query, connect } as unknown as Db, silent);
+    await vi.advanceTimersByTimeAsync(21_000);
+    expect(uniques).toBe(1);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(uniques).toBe(2);
+    await jobs.stop();
+  });
 });
 
 describe('live tiles subscription', () => {

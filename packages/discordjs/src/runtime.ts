@@ -3,7 +3,7 @@ import type { monitorEventLoopDelay } from 'node:perf_hooks';
 import { cutText, type SourceInfo, uuidv7 } from '@shardlens/core';
 import type { EventInput } from '@shardlens/schema';
 import { type Client, version as djsVersion, Routes } from 'discord.js';
-import { localShardCount, managerShardCount, shardIds, shardPings } from './gateway.js';
+import { shardIds, shardPings } from './gateway.js';
 import { shardOf } from './guilds.js';
 
 /** Shards (and cluster) this process owns: discord-hybrid-sharding, ShardingManager, or internal sharding. */
@@ -22,15 +22,6 @@ export function detectSource(client: Client, instance: string): SourceInfo {
 
 export function defaultInstance(): string {
   return `${hostname()}:${process.pid}`.slice(0, 128);
-}
-
-/** Total shard count across all processes, for `(guild_id >> 22) % count`. */
-export function totalShards(client: Client): number {
-  const fromShardUtil = client.shard?.count;
-  if (typeof fromShardUtil === 'number' && fromShardUtil > 0) return fromShardUtil;
-  const configured = (client.options as { shardCount?: unknown }).shardCount;
-  if (typeof configured === 'number' && configured > 0) return configured;
-  return managerShardCount(client) ?? Math.max(1, localShardCount(client));
 }
 
 export function ownsShardZero(client: Client): boolean {
@@ -69,7 +60,8 @@ export async function appInfo(client: Client<true>): Promise<EventInput> {
     : 'members' in owner
       ? [...owner.members.values()].filter((m) => Number(m.membershipState) === 2).map((m) => m.user.id)
       : [owner.id];
-  const skus = await app.fetchSKUs().catch(() => undefined);
+  // `fetchSKUs` is missing before discord.js 14.15; without it, the rest of the event still goes.
+  const skus = typeof app.fetchSKUs === 'function' ? await app.fetchSKUs().catch(() => undefined) : undefined;
   const gateway = (await client.rest.get(Routes.gatewayBot()).catch(() => undefined)) as
     { session_start_limit?: { remaining?: number; total?: number } } | undefined;
   const limit = gateway?.session_start_limit;

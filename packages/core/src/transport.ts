@@ -1,6 +1,10 @@
 /** Uses the Web-standard `CompressionStream`, so it works in Node, Bun, Deno and Workers. */
 export async function gzipJson(value: unknown): Promise<Uint8Array> {
-  const stream = new Blob([JSON.stringify(value)]).stream().pipeThrough(new CompressionStream('gzip'));
+  return gzip(new TextEncoder().encode(JSON.stringify(value)));
+}
+
+export async function gzip(bytes: Uint8Array): Promise<Uint8Array> {
+  const stream = new Blob([bytes as Uint8Array<ArrayBuffer>]).stream().pipeThrough(new CompressionStream('gzip'));
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 

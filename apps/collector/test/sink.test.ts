@@ -238,6 +238,28 @@ describe('sink mirror', () => {
     expect(rows.size).toBe(2);
   });
 
+  it('keeps everything while a sink without init is down, as in the custom sink example', async () => {
+    const rows = new Map<string, StoredEvent>();
+    let down = true;
+    const sink: EventSink = {
+      name: 'my-store',
+      write: async (events) => {
+        if (down) throw new Error('connect ECONNREFUSED');
+        for (const e of events) rows.set(e.id, e);
+      },
+      erase: async () => 0,
+      expire: async () => 0,
+      close: async () => undefined,
+    };
+    const mirror = new SinkMirror(sink);
+    mirror.push(ctx, [command(), command(), command()]);
+    for (let i = 0; i < 7; i++) await mirror.flush();
+    expect(mirror.dropped).toBe(0);
+    down = false;
+    await mirror.flush();
+    expect(rows.size).toBe(3);
+  });
+
   it('fails an erase while the database is unreachable, so the caller retries it', async () => {
     const { sink, state } = memorySink();
     state.failInit = true;

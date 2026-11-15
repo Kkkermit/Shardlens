@@ -1,4 +1,4 @@
-import { BatchEnvelope, ConfigResponse, ErrorResponse, Event, IngestAccepted } from '@shardlens/schema';
+import { batchJsonSchema, ConfigResponse, ErrorResponse, IngestAccepted } from '@shardlens/schema';
 import { z } from 'zod';
 import { QuerySpec } from './query/spec.js';
 import { AlertBody, SettingsPatch } from './routes/admin.js';
@@ -31,8 +31,6 @@ const auditLogFilters = Object.entries(
   (json(AuditLogFilters) as { properties: Record<string, object> }).properties,
 ).map(([name, schema]) => ({ name, in: 'query', required: false, schema }));
 
-/** The batch an SDK sends: the envelope, with `events` described by the event union. */
-const IngestBatch = BatchEnvelope.extend({ events: z.array(Event).min(1).max(500) });
 
 /**
  * OpenAPI 3.1 description of the collector's HTTP API, generated from the same zod schemas the routes validate with,
@@ -85,7 +83,8 @@ export function openApiDocument(version = '0.0.0'): Record<string, unknown> {
           description:
             'Gzipped JSON (`Content-Encoding: gzip`), at most 500 events, 1 MB compressed and 5 MB decompressed. Invalid events are rejected one by one; duplicates (retries) are counted, not stored twice.',
           security: [{ ingestKey: [] }],
-          requestBody: body(IngestBatch),
+          // The published batch schema, with the rules checked in code (no NUL, no `actor` in privacy mode).
+          requestBody: { required: true, content: { 'application/json': { schema: batchJsonSchema() } } },
           responses: {
             '202': ok('Accepted', IngestAccepted),
             '400': error('Invalid batch envelope, or audit data sent to a privacy-mode app'),

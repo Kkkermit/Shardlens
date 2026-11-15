@@ -3,7 +3,7 @@ import { updating, useMeta, useSpec } from '../api';
 import { pivot } from '../chart-data';
 import { BarList, TimeChart } from '../components/charts';
 import { DataTable } from '../components/DataTable';
-import { ErrorNote, PageHead, Panel, QueryBody, RangePicker, Tile } from '../components/ui';
+import { Name, PageHead, Panel, QueryBody, RangePicker, Tile } from '../components/ui';
 import { ago, dateTime, ms, num, pct } from '../format';
 import { useRange } from '../range';
 
@@ -115,9 +115,7 @@ export function ReliabilityPage() {
         description="Response times against Discord's 3-second deadline, REST health, rate limits and shards."
         actions={<RangePicker value={r.id} onChange={r.setId} />}
       />
-      {q.error ? (
-        <ErrorNote error={q.error} retry={() => void q.refetch()} />
-      ) : (
+      <QueryBody query={q}>
         <div className="stack" aria-busy={updating(q, p95, p99) || undefined}>
           <div className="grid tiles">
             <Tile label="p50 response" value={ms(t?.p50Ms)} />
@@ -149,7 +147,7 @@ export function ReliabilityPage() {
             />
           </div>
           <Panel title="Response time" subtitle={`Time to first response · ${tz}`}>
-            <QueryBody query={{ isLoading: p95.isLoading || p99.isLoading, error: p95.error ?? p99.error }}>
+            <QueryBody query={[p95, p99]}>
               <TimeChart
                 label="p95 and p99 time to first response"
                 x={latency.x}
@@ -285,7 +283,7 @@ export function ReliabilityPage() {
                   rowKey={(s) => s.instance}
                   rows={d.sdkInstances}
                   columns={[
-                    { key: 'instance', header: 'Instance', render: (s) => s.instance },
+                    { key: 'instance', header: 'Instance', render: (s) => <Name>{s.instance}</Name> },
                     { key: 'seen', header: 'Last seen', render: (s) => ago(s.ts) },
                     { key: 'queue', header: 'Queued', numeric: true, render: (s) => num(s.queueDepth) },
                     {
@@ -303,7 +301,7 @@ export function ReliabilityPage() {
             </Panel>
           </div>
         </div>
-      )}
+      </QueryBody>
     </>
   );
 }

@@ -1,8 +1,8 @@
 import { updating, useSpec } from '../api';
 import { BarList } from '../components/charts';
 import { DataTable } from '../components/DataTable';
-import { ErrorNote, Name, PageHead, Panel, RangePicker, Tile } from '../components/ui';
-import { num, pct } from '../format';
+import { Name, PageHead, Panel, QueryBody, RangePicker, Tile } from '../components/ui';
+import { money, num, pct } from '../format';
 import { useRange } from '../range';
 
 interface Premium {
@@ -27,7 +27,7 @@ export function PremiumPage() {
   const p = q.data;
   const activeSubs = (p?.subscriptions ?? []).reduce((a, s) => a + s.active + s.ending, 0);
   const revenue = Object.entries(p?.estimatedMonthlyRevenue ?? {})
-    .map(([currency, amount]) => new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(amount))
+    .map(([currency, amount]) => money(amount, currency))
     .join(' + ');
   return (
     <>
@@ -36,9 +36,7 @@ export function PremiumPage() {
         description="Entitlements and subscriptions from Discord's monetisation. Discord sends SKU IDs, not amounts."
         actions={<RangePicker value={r.id} onChange={r.setId} />}
       />
-      {q.error ? (
-        <ErrorNote error={q.error} retry={() => void q.refetch()} />
-      ) : (
+      <QueryBody query={q}>
         <div className="stack" aria-busy={updating(q) || undefined}>
           <div className="grid tiles">
             <Tile label="Active subscriptions" value={num(activeSubs)} />
@@ -66,7 +64,11 @@ export function PremiumPage() {
             <Panel title="Active entitlements">
               <BarList
                 label="Active entitlements by SKU"
-                rows={(p?.activeEntitlements ?? []).map((e) => ({ key: e.sku, name: e.name, value: e.active }))}
+                rows={(p?.activeEntitlements ?? []).map((e) => ({
+                  key: e.sku,
+                  name: <Name>{e.name}</Name>,
+                  value: e.active,
+                }))}
               />
             </Panel>
           </div>
@@ -84,7 +86,7 @@ export function PremiumPage() {
             />
           </Panel>
         </div>
-      )}
+      </QueryBody>
     </>
   );
 }

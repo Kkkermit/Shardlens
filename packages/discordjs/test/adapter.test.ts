@@ -721,8 +721,14 @@ describe('servers', () => {
     // Removed while the shard was away: discord.js keeps it in the cache.
     client.guilds.cache.set(GUILD_ID, Reflect.construct(Guild, [client, rawGuild()]) as Guild);
     const added = snowflake(Date.now(), 2);
-    client.emit(Events.Raw, { t: 'READY', d: { guilds: [{ id: added, unavailable: true }] } }, 0);
-    client.emit('shardReady', 0, new Set());
+    const guilds = [{ id: added, unavailable: true }];
+    // The nightly compat job runs this file against discord.js 15 too, where READY arrives on `client.ws`.
+    if ((Events as Record<string, unknown>).ShardReady !== undefined) {
+      client.emit('raw', { t: 'READY', d: { guilds } }, 0);
+      client.emit('shardReady', 0, new Set());
+    } else {
+      (client.ws as unknown as { emit(event: string, ...args: unknown[]): void }).emit('ready', { guilds }, 0);
+    }
     await lens.flush();
     expect(collector.events('guild_snapshot').at(-1)).toMatchObject({ shards: [0], guilds: [added] });
   });

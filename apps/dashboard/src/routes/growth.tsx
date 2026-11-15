@@ -3,7 +3,7 @@ import { updating, useMeta, useSpec } from '../api';
 import { dayX } from '../chart-data';
 import { BarList, TimeChart } from '../components/charts';
 import { DataTable } from '../components/DataTable';
-import { ErrorNote, Loading, PageHead, Panel, QueryBody, RangePicker, Tile } from '../components/ui';
+import { PageHead, Panel, QueryBody, RangePicker, Tile } from '../components/ui';
 import { num, pct } from '../format';
 import { useRange } from '../range';
 
@@ -77,15 +77,15 @@ export function GrowthPage() {
         description="Servers adding and removing your bot."
         actions={<RangePicker value={r.id} onChange={r.setId} />}
       />
-      {q.error ? <ErrorNote error={q.error} retry={() => void q.refetch()} /> : null}
-      {!q.error && g?.serverCount.warn ? (
-        <div className="notice" role="note">
-          Our server count ({num(g.serverCount.ours)}) differs from Discord's approximate count (
-          {num(g.serverCount.discord)}) by {pct(Math.abs(g.serverCount.drift ?? 0))}. Some shards may not be reporting.
-        </div>
-      ) : null}
-      {q.error ? null : (
+      <QueryBody query={q}>
         <div className="stack" aria-busy={updating(q, inst) || undefined}>
+          {g?.serverCount.warn ? (
+            <div className="notice" role="note">
+              Our server count ({num(g.serverCount.ours)}) differs from Discord's approximate count (
+              {num(g.serverCount.discord)}) by {pct(Math.abs(g.serverCount.drift ?? 0))}. Some shards may not be
+              reporting.
+            </div>
+          ) : null}
           <div className="grid tiles">
             <Tile label="Added" value={num(added)} />
             <Tile label="Removed" value={num(removed)} />
@@ -103,11 +103,7 @@ export function GrowthPage() {
             <Tile label="Found at startup" value={num(detected)} sub="Changes while the bot was offline" />
           </div>
           <Panel title="Servers added and removed" subtitle={`Per day · ${tz}`}>
-            {q.isLoading ? (
-              <Loading />
-            ) : (
-              <TimeChart label="Servers added and removed per day" x={chart.x} series={chart.series} timezone={tz} />
-            )}
+            <TimeChart label="Servers added and removed per day" x={chart.x} series={chart.series} timezone={tz} />
           </Panel>
           <div className="grid three">
             <Panel title="Size when added" subtitle="Members at install">
@@ -187,7 +183,7 @@ export function GrowthPage() {
             )}
           </Panel>
         </div>
-      )}
+      </QueryBody>
     </>
   );
 }

@@ -1,5 +1,5 @@
-import { type ReactNode, useState } from 'react';
-import { ApiError } from '../api';
+import { type ReactNode, useCallback, useEffect, useState } from 'react';
+import { ApiError, errorText } from '../api';
 import { finite, firstCharacters, initials, pct } from '../format';
 import { PRESETS, type PresetId } from '../range';
 
@@ -44,7 +44,15 @@ export function Tile(props: { label: string; value: ReactNode; sub?: ReactNode; 
   );
 }
 
+/** The browser tab's title, so tabs, history and screen readers name the page (WCAG 2.4.2). */
+export function useDocumentTitle(title: string) {
+  useEffect(() => {
+    document.title = title ? `${title} · Shardlens` : 'Shardlens';
+  }, [title]);
+}
+
 export function PageHead(props: { title: string; description?: ReactNode; actions?: ReactNode }) {
+  useDocumentTitle(props.title);
   return (
     <div className="page-head">
       <div>
@@ -91,17 +99,11 @@ export function Loading() {
   );
 }
 
-export function ErrorNote(props: { error: unknown; retry?: () => void }) {
+export function ErrorNote(props: { error: unknown; retry?: (() => void) | undefined }) {
   const error = props.error;
-  const reason =
-    error instanceof ApiError && error.status === 429
-      ? 'too many requests, wait a minute and try again'
-      : error instanceof Error
-        ? error.message
-        : 'unknown error';
   return (
     <div className="empty" role="alert">
-      Couldn't load this: {reason}
+      Couldn't load this. {errorText(error)}
       {error instanceof ApiError && error.requestId ? (
         <>
           {' '}
@@ -120,11 +122,60 @@ export function ErrorNote(props: { error: unknown; retry?: () => void }) {
   );
 }
 
-/** A panel's body: loading, the query's error, or the content. */
-export function QueryBody(props: { query: { isLoading: boolean; error: unknown }; children: ReactNode }) {
-  if (props.query.isLoading) return <Loading />;
-  if (props.query.error) return <ErrorNote error={props.query.error} />;
+interface QueryState {
+  isLoading: boolean;
+  error: unknown;
+  refetch?: () => unknown;
+}
+
+/**
+ * What a query's answer is shown in: loading, its error (with a retry), or the content. Never an empty state while the
+ * answer is on its way or failed. Several queries load and fail together.
+ */
+export function QueryBody(props: { query: QueryState | readonly QueryState[]; children: ReactNode }) {
+  const queries: readonly QueryState[] = Array.isArray(props.query) ? props.query : [props.query as QueryState];
+  if (queries.some((q) => q.isLoading)) return <Loading />;
+  const failed = queries.filter((q) => q.error);
+  if (failed.length > 0) {
+    const retry = failed.every((q) => q.refetch) ? () => failed.forEach((q) => void q.refetch?.()) : undefined;
+    return <ErrorNote error={failed[0]?.error} retry={retry} />;
+  }
   return <>{props.children}</>;
+}
+
+/** A page for an address that names nothing: what was not found, and the way back. */
+export function NotFoundPage(props: { title: string; back: ReactNode; children: ReactNode }) {
+  return (
+    <>
+      <PageHead title={props.title} description={props.back} />
+      <p className="muted">{props.children}</p>
+    </>
+  );
+}
+
+/**
+ * Paging buttons. One that can't be used is marked unavailable instead of disabled: a disabled button drops the
+ * keyboard focus when it was the one just pressed (the last page's Next).
+ */
+export function Pager(props: {
+  label: string;
+  status?: ReactNode;
+  buttons: readonly { label: string; onClick: (() => void) | undefined }[];
+}) {
+  return (
+    <nav className="pager" aria-label={props.label}>
+      {props.buttons.map((b) => (
+        <button key={b.label} type="button" aria-disabled={b.onClick ? undefined : true} onClick={() => b.onClick?.()}>
+          {b.label}
+        </button>
+      ))}
+      {props.status ? (
+        <span className="muted" role="status">
+          {props.status}
+        </span>
+      ) : null}
+    </nav>
+  );
 }
 
 /**
@@ -138,6 +189,17 @@ export function Name(props: { children: ReactNode }) {
 /** The result of an action. The live region is always there, so screen readers announce each new message. */
 export function StatusMessage(props: { message: string }) {
   return <div role="status">{props.message ? <p className="notice">{props.message}</p> : null}</div>;
+}
+
+/**
+ * One message at a time for a page of several forms, shown next to the form it is about (a message at the top of a
+ * long page is out of view of a form at the bottom). `say('', '')` clears it.
+ */
+export function usePanelStatus(): [(panel: string) => string, (panel: string, text: string) => void] {
+  const [status, setStatus] = useState({ panel: '', text: '' });
+  const messageFor = useCallback((panel: string) => (status.panel === panel ? status.text : ''), [status]);
+  const say = useCallback((panel: string, text: string) => setStatus({ panel, text }), []);
+  return [messageFor, say];
 }
 
 const CDN_HASH = /^(a_)?[0-9a-f]{32}$/;

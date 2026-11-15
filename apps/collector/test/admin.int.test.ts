@@ -228,6 +228,14 @@ describe('admin access', () => {
     expect(settings.json()).toMatchObject({ timezone: 'Europe/London' });
   });
 
+  it('refuses a sample rate whose events would carry a weight the wire refuses', async () => {
+    const save = (rate: number) =>
+      h.app.inject({ method: 'PUT', url: '/v1/settings', ...asAdmin(), payload: { sampling: { custom: rate } } });
+    expect((await save(0.00005)).statusCode).toBe(400);
+    expect((await save(0.0001)).statusCode).toBe(200);
+    expect((await save(1)).statusCode).toBe(200);
+  });
+
   it('refuses required permission bits a bigint cannot hold, and filters servers with any bits', async () => {
     const save = (requiredPermissions: string) =>
       h.app.inject({ method: 'PUT', url: '/v1/settings', ...asAdmin(), payload: { requiredPermissions } });

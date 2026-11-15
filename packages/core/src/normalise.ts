@@ -7,14 +7,14 @@ export const MAX_CUSTOM_ID_LENGTH = 100;
 const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
 
 /**
- * At most `max` UTF-16 units of `text`, cut so it never ends halfway through a character, with any lone surrogate
- * replaced: PostgreSQL refuses text that isn't well-formed, and with it the whole batch.
+ * At most `max` UTF-16 units of `text`, cut so it never ends halfway through a character, with NUL and any lone
+ * surrogate replaced by U+FFFD: PostgreSQL can't store either, so the collector refuses an event holding one.
  */
 export function cutText(text: string, max: number): string {
   let out = text.length > max ? text.slice(0, max) : text;
   const last = out.charCodeAt(out.length - 1);
   if (last >= 0xd800 && last <= 0xdbff) out = out.slice(0, -1);
-  return out.replace(LONE_SURROGATE, '\ufffd');
+  return out.replace(LONE_SURROGATE, '\ufffd').replaceAll('\0', '\ufffd');
 }
 
 /** Turns a custom ID into a pattern without IDs or numbers: `ticket:close:112233445566778899` → `ticket:close:*`. */

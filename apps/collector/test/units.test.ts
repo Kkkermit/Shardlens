@@ -69,6 +69,9 @@ describe('loadConfig', () => {
   });
 });
 
+/** Read by `docker-compose.yml` and its ClickHouse override, not by the collector. */
+const COMPOSE_ONLY = ['SHARDLENS_DOMAIN', 'POSTGRES_PASSWORD', 'SHARDLENS_IMAGE', 'CLICKHOUSE_PASSWORD'];
+
 describe('docs stay in step with the code', () => {
   it('documents every environment variable the collector reads', () => {
     const page = readFileSync(
@@ -77,6 +80,24 @@ describe('docs stay in step with the code', () => {
     );
     const missing = ENV_VARIABLES.filter((name) => !page.includes(`\`${name}\``));
     expect(missing).toEqual([]);
+    // And documents nothing it doesn't read, apart from the variables Docker Compose itself reads.
+    const listed = [...page.matchAll(/^\| `([A-Z][A-Z0-9_]*)`/gm)].map((m) => m[1] as string);
+    expect(listed.filter((name) => !ENV_VARIABLES.includes(name) && !COMPOSE_ONLY.includes(name))).toEqual([]);
+    expect(COMPOSE_ONLY.filter((name) => !listed.includes(name))).toEqual([]);
+  });
+
+  it('lists every environment variable in deploy/.env.example, and nothing else', () => {
+    const example = readFileSync(new URL('../../../deploy/.env.example', import.meta.url), 'utf8');
+    const names = [...example.matchAll(/^([A-Z][A-Z0-9_]*)=/gm)].map((m) => m[1] as string);
+    expect(ENV_VARIABLES.filter((name) => !names.includes(name))).toEqual([]);
+    expect(names.filter((name) => !ENV_VARIABLES.includes(name) && !COMPOSE_ONLY.includes(name))).toEqual([]);
+    // The values it suggests are valid, apart from the ones the operator has to fill in.
+    const filled: Record<string, string> = { ...base };
+    for (const line of example.split('\n')) {
+      const m = /^([A-Z][A-Z0-9_]*)=(.+)$/.exec(line);
+      if (m) filled[m[1] as string] = m[2] as string;
+    }
+    expect(() => loadConfig(filled)).not.toThrow();
   });
 
   it('describes every route in the OpenAPI document with valid security schemes', () => {

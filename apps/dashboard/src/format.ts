@@ -24,6 +24,12 @@ export function num(n: number | null | undefined, locale?: string): string {
     : numbers({ maximumFractionDigits: 0 }, locale).format(n);
 }
 
+/** A number as entered (a threshold): up to three decimals, never rounded to a whole one. */
+export function number(n: number | null | undefined, locale?: string): string {
+  if (!finite(n)) return '—';
+  return numbers({ maximumFractionDigits: 3 }, locale).format(n);
+}
+
 /** A number with exactly `digits` decimals. */
 export function decimal(n: number | null | undefined, digits: number, locale?: string): string {
   if (!finite(n)) return '—';
@@ -34,6 +40,15 @@ export function decimal(n: number | null | undefined, digits: number, locale?: s
 export function pct(n: number | null | undefined, digits = 1, locale?: string): string {
   if (!finite(n)) return '—';
   return numbers({ style: 'percent', minimumFractionDigits: digits, maximumFractionDigits: digits }, locale).format(n);
+}
+
+/** An amount of money in a currency named by its ISO code (`EUR`), with the code itself for one Intl doesn't know. */
+export function money(amount: number, currency: string, locale?: string): string {
+  try {
+    return numbers({ style: 'currency', currency }, locale).format(amount);
+  } catch {
+    return `${decimal(amount, 2, locale)} ${currency}`;
+  }
 }
 
 /** A duration in milliseconds: `412 ms`, `3.3 s`. */
@@ -79,6 +94,12 @@ export const date = (value: string | Date | null | undefined, timeZone = 'UTC') 
 
 export const dateTime = (value: string | Date | null | undefined, timeZone = 'UTC') =>
   formatDate(value, { dateStyle: 'medium', timeStyle: 'short', timeZone });
+
+/** A calendar day the collector sends as `YYYY-MM-DD` (a period's start), in the viewer's locale. */
+export const day = (value: string | null | undefined, locale?: string) => {
+  const d = value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? toDate(`${value}T00:00:00Z`) : undefined;
+  return d ? new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeZone: 'UTC' }).format(d) : value || '—';
+};
 
 export function ago(value: string | Date | null | undefined): string {
   if (!value) return 'never';

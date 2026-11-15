@@ -1,20 +1,21 @@
 import {
   ApplicationCommandOptionType,
   ApplicationCommandType,
-  ApplicationIntegrationType,
   type ChatInputCommandInteraction,
-  InteractionContextType,
   MessageFlags,
   type RESTPostAPIChatInputApplicationCommandsJSONBody,
 } from 'discord.js';
 import type { Shardlens } from './index.js';
 
+/** Options for {@link createPrivacyCommand}. */
 export interface PrivacyCommandOptions {
+  /** The command's name. Default `privacy`. */
   name?: string | undefined;
   /** Link to your bot's privacy policy, shown in `/privacy info`. */
   policyUrl?: string | undefined;
 }
 
+/** What {@link createPrivacyCommand} returns. */
 export interface PrivacyCommand {
   /** Command definition to register with Discord (`rest.put(Routes.applicationCommands(id), { body: [data] })`). */
   data: RESTPostAPIChatInputApplicationCommandsJSONBody;
@@ -39,8 +40,10 @@ export function createPrivacyCommand(lens: Shardlens, options: PrivacyCommandOpt
     type: ApplicationCommandType.ChatInput,
     name,
     description: 'How this bot handles your data',
-    contexts: [InteractionContextType.Guild, InteractionContextType.BotDM, InteractionContextType.PrivateChannel],
-    integration_types: [ApplicationIntegrationType.GuildInstall, ApplicationIntegrationType.UserInstall],
+    // Numbers, not `InteractionContextType` and `ApplicationIntegrationType`: some discord.js 14 releases don't export
+    // those enums, and importing a missing name stops an ES module from loading.
+    contexts: [0, 1, 2], // server, DM with the bot, other private channel
+    integration_types: [0, 1], // server install, user install
     options: [
       sub('info', 'What this bot records about you'),
       sub('optout', 'Stop recording your usage of this bot'),

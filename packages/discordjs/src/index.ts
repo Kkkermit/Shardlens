@@ -28,7 +28,7 @@ import {
   type Message,
   type Subscription,
 } from 'discord.js';
-import { listenShardEvents, shardIds } from './gateway.js';
+import { listenShardEvents, shardIds, totalShards } from './gateway.js';
 import {
   CountRefresher,
   guildAvailability,
@@ -43,15 +43,7 @@ import { InteractionTracker } from './interactions.js';
 import { describeMessageCommand, type MessageCommandInfo, type MessageCommandRun } from './message-commands.js';
 import type { MetricGroup, ShardlensOptions } from './options.js';
 import { installRestHooks, type RestHooks } from './rest.js';
-import {
-  appInfo,
-  commandRegistry,
-  defaultInstance,
-  detectSource,
-  gaugeWindow,
-  ownsShardZero,
-  totalShards,
-} from './runtime.js';
+import { appInfo, commandRegistry, defaultInstance, detectSource, gaugeWindow, ownsShardZero } from './runtime.js';
 import { FileSpool } from './spool.js';
 import { LruMap, SDK_NAME, SDK_VERSION } from './util.js';
 
@@ -76,7 +68,9 @@ function isInteraction(value: unknown): value is Interaction {
 
 /** Optional context for a custom event. The user ID is hashed in-process before it is sent. */
 export interface TrackContext {
+  /** Who did it. Hashed in your bot, so the event counts towards unique users and funnels. */
   userId?: string | undefined;
+  /** The server it happened in, if any. */
   guildId?: string | null | undefined;
 }
 
@@ -90,9 +84,11 @@ export interface HandlerResult {
 
 /** SDK health, including interactions still waiting for a response. */
 export interface ShardlensStats extends ClientStats {
+  /** Interactions waiting for their first response or their wrapped handler, sent after 10 seconds at most. */
   pendingInteractions: number;
 }
 
+/** What {@link createShardlens} returns. Its methods never throw; wrapped handlers re-throw only their own errors. */
 export interface Shardlens {
   /**
    * Records a custom event. Names are lower snake case; properties are limited to 2 KB of strings, numbers, booleans
@@ -131,20 +127,28 @@ export interface Shardlens {
   optOut(userId: string): void;
   /** Reverses {@link Shardlens.optOut}. */
   optIn(userId: string): void;
+  /** Whether {@link Shardlens.optOut} (or the `optedOut` option) covers this user in this process. */
   isOptedOut(userId: string): boolean;
   /**
    * Deletes everything the collector stored about a user (right to erasure). Does not opt them out of future
    * collection; call {@link Shardlens.optOut} as well if they asked for that. Never throws.
    */
   forgetUser(userId: string): Promise<{ erased: number } | undefined>;
+  /**
+   * Listens for failures the SDK caught and counted, named by where they happened (`'flush'`, `'interactionCreate'`,
+   * `'onOptOutChange'`…). Returns a function that removes the listener.
+   */
   on(event: 'error', listener: (name: string, error: unknown) => void): () => void;
+  /** Sends what is queued now instead of at the next interval. Never throws. */
   flush(): Promise<void>;
   /**
    * Removes all hooks and flushes, giving up after `timeoutMs` (default 2,000). A second call, such as SIGTERM from a
    * shard manager after SIGINT from the terminal, waits for the same flush. The SDK never handles signals.
    */
   shutdown(options?: { timeoutMs?: number }): Promise<void>;
+  /** Queue depth, drops by reason, failed sends and caught errors, for your own health checks. */
   stats(): ShardlensStats;
+  /** The underlying transport from `@shardlens/core`, for adapters and tools built on this one. */
   readonly client: ShardlensClient;
 }
 
@@ -212,13 +216,14 @@ function attach(client: Client, options: ShardlensOptions): Shardlens {
   });
 
   const count = (name: string, error?: unknown) => transport.count(name, error);
-  /** Every listener body runs through this: the SDK must never throw into the bot. */
+  /** Every listener body, and the bot's own callbacks, run through this: the SDK must never throw into the bot. */
   const safe =
-    <A extends unknown[]>(name: string, fn: (...args: A) => void | Promise<void>) =>
+    <A extends unknown[]>(name: string, fn: (...args: A) => void | PromiseLike<void>) =>
     (...args: A): void => {
       try {
-        const result = fn(...args);
-        if (result instanceof Promise) result.catch((error: unknown) => count(name, error));
+        const result = fn(...args) as PromiseLike<void> | undefined;
+        // Any thenable: database clients often return their own promise types.
+        if (typeof result?.then === 'function') result.then(undefined, (error: unknown) => count(name, error));
       } catch (error) {
         count(name, error);
       }
@@ -234,6 +239,8 @@ function attach(client: Client, options: ShardlensOptions): Shardlens {
 
   const listeners: [string, (...args: never[]) => void][] = [];
   const listen = <A extends unknown[]>(event: string, name: string, fn: (...args: A) => void | Promise<void>) => {
+    // An event this discord.js release doesn't have, such as `Events.SubscriptionCreate` before 14.17.
+    if (typeof event !== 'string') return;
     const handler = safe(name, fn);
     client.on(event, handler as (...args: unknown[]) => void);
     listeners.push([event, handler as unknown as (...args: never[]) => void]);
@@ -246,13 +253,10 @@ function attach(client: Client, options: ShardlensOptions): Shardlens {
     timers.push(t);
   };
 
-  const notifyOptOut = (userId: string, optedOut: boolean) => {
-    try {
-      options.onOptOutChange?.(userId, optedOut);
-    } catch (error) {
-      count('onOptOutChange', error);
-    }
-  };
+  // The callback is typed as returning void, as an async one does too: `safe` catches its rejection as well.
+  const notifyOptOut = safe('onOptOutChange', (userId: string, optedOut: boolean) =>
+    options.onOptOutChange?.(userId, optedOut),
+  );
 
   if (tracker) {
     listen(Events.InteractionCreate, 'interactionCreate', (interaction: Interaction) => tracker.observe(interaction));
@@ -273,6 +277,11 @@ function attach(client: Client, options: ShardlensOptions): Shardlens {
       count('installRest', error);
     }
   }
+  /** The REST calls since the last window, unless the hooks are only there for interactions. */
+  const sendRestWindow = () => {
+    const window = restHooks?.drain();
+    if (window && !disabled.has('rest')) enqueue(window, 1);
+  };
 
   const pacer = new ProfilePacer();
   let initialReady = false;
@@ -421,8 +430,7 @@ function attach(client: Client, options: ShardlensOptions): Shardlens {
   const flushIntervalMs = Number.isFinite(options.flushIntervalMs) ? (options.flushIntervalMs as number) : 5_000;
   const maxQueueSize = Number.isFinite(options.maxQueueSize) ? (options.maxQueueSize as number) : 10_000;
   every(Math.min(2 ** 31 - 1, Math.max(250, flushIntervalMs)), 'restWindow', () => {
-    const window = restHooks?.drain();
-    if (window && !disabled.has('rest')) enqueue(window, 1);
+    sendRestWindow();
     const room = maxQueueSize / 2 - transport.stats().queueDepth;
     pacer.tick(Math.min(PROFILES_PER_TICK, room), (id) => {
       const guild = client.guilds.cache.get(id);
@@ -466,6 +474,28 @@ function attach(client: Client, options: ShardlensOptions): Shardlens {
     }
   };
 
+  const handlerStart = (name: string, interaction: unknown) => {
+    try {
+      if (isInteraction(interaction)) tracker?.handlerStarted(interaction);
+    } catch (error) {
+      count(name, error);
+    }
+  };
+  /** `thrown` is set when the handler threw, even if what it threw was `undefined`. */
+  const handlerEnd = (name: string, interaction: unknown, ms: unknown, thrown?: { error: unknown }) => {
+    try {
+      if (!isInteraction(interaction)) return;
+      const code = thrown && errorCode(thrown.error);
+      tracker?.handlerFinished(
+        interaction,
+        typeof ms === 'number' && Number.isFinite(ms) ? Math.max(0, ms) : undefined,
+        thrown && { errorClass: errorClass(thrown.error), ...(code !== undefined ? { errorCode: code } : {}) },
+      );
+    } catch (error) {
+      count(name, error);
+    }
+  };
+
   let stopping: Promise<void> | undefined;
   async function stop(opts: { timeoutMs?: number }): Promise<void> {
     try {
@@ -474,8 +504,7 @@ function attach(client: Client, options: ShardlensOptions): Shardlens {
       unlistenShards?.();
       loop?.disable();
       tracker?.flushPending();
-      const window = restHooks?.drain();
-      if (window && !disabled.has('rest')) enqueue(window, 1);
+      sendRestWindow();
       restHooks?.uninstall();
     } catch (error) {
       count('shutdown', error);
@@ -517,60 +546,27 @@ function attach(client: Client, options: ShardlensOptions): Shardlens {
     wrap<A extends [BaseInteraction, ...unknown[]], R>(handler: (...args: A) => R | Promise<R>) {
       return async (...args: A): Promise<Awaited<R>> => {
         const started = performance.now();
-        // A handler shared by slash and prefix commands may get something else first; that is not recorded here.
-        let interaction: Interaction | undefined;
-        try {
-          interaction = isInteraction(args[0]) ? args[0] : undefined;
-          if (interaction) tracker?.handlerStarted(interaction);
-        } catch (error) {
-          count('wrap', error);
-        }
+        // A handler shared by slash and prefix commands may get a message first: only interactions are recorded.
+        handlerStart('wrap', args[0]);
         try {
           const result = (await handler(...args)) as Awaited<R>;
-          try {
-            if (interaction) tracker?.handlerFinished(interaction, performance.now() - started);
-          } catch (error) {
-            count('wrap', error);
-          }
+          handlerEnd('wrap', args[0], performance.now() - started);
           return result;
         } catch (error) {
-          try {
-            const code = errorCode(error);
-            if (interaction) {
-              tracker?.handlerFinished(interaction, performance.now() - started, {
-                errorClass: errorClass(error),
-                ...(code !== undefined ? { errorCode: code } : {}),
-              });
-            }
-          } catch (inner) {
-            count('wrap', inner);
-          }
+          handlerEnd('wrap', args[0], performance.now() - started, { error });
           throw error;
         }
       };
     },
 
     handlerStarted(interaction) {
-      try {
-        if (isInteraction(interaction)) tracker?.handlerStarted(interaction);
-      } catch (error) {
-        count('handlerStarted', error);
-      }
+      handlerStart('handlerStarted', interaction);
     },
 
-    handlerFinished(interaction, result = {}) {
+    handlerFinished(interaction, result) {
       try {
-        if (!isInteraction(interaction)) return;
-        const ms = result.durationMs;
-        const error = result.error;
-        const code = error === undefined ? undefined : errorCode(error);
-        tracker?.handlerFinished(
-          interaction,
-          typeof ms === 'number' && Number.isFinite(ms) ? Math.max(0, ms) : undefined,
-          error === undefined
-            ? undefined
-            : { errorClass: errorClass(error), ...(code !== undefined ? { errorCode: code } : {}) },
-        );
+        const error = result?.error;
+        handlerEnd('handlerFinished', interaction, result?.durationMs, error === undefined ? undefined : { error });
       } catch (error) {
         count('handlerFinished', error);
       }
@@ -622,8 +618,11 @@ function attach(client: Client, options: ShardlensOptions): Shardlens {
     },
 
     flush() {
-      const window = restHooks?.drain();
-      if (window && !disabled.has('rest')) enqueue(window, 1);
+      try {
+        sendRestWindow();
+      } catch (error) {
+        count('flush', error);
+      }
       return transport.flush();
     },
 

@@ -1,11 +1,17 @@
 // A small fake of Discord's gateway (v10, JSON, no compression) and REST API, enough to run an unmodified discord.js
 // bot against it: READY and GUILD_CREATE for three servers, then the scripted scenario SIM_BOT names. Interactions
-// are refused with 10062 once older than 3 seconds, like Discord. One gateway connection, shard [0, 1].
+// are refused with 10062 once older than 3 seconds, like Discord. SIM_SHARDS shards (default 1), one connection each,
+// with every server and its events on shard `(id >> 22) % SIM_SHARDS` and DMs on shard 0; the scenario starts once
+// every shard has identified. SIM_SCENARIOS names another scenarios module, for one-off runs.
 // Control endpoints: GET /_sim/status, POST /_sim/continue (resumes a scenario paused with `world.pause(name)`).
 import { randomBytes } from 'node:crypto';
 import http from 'node:http';
+import { pathToFileURL } from 'node:url';
 import { WebSocketServer } from 'ws';
-import { scenarios } from './scenarios.mjs';
+
+const { scenarios } = await import(
+  process.env.SIM_SCENARIOS ? pathToFileURL(process.env.SIM_SCENARIOS).href : './scenarios.mjs'
+);
 
 const PORT = Number(process.env.SIM_PORT);
 const BOT = process.env.SIM_BOT;
@@ -155,25 +161,46 @@ function member(user, guild) {
   };
 }
 
-let socket;
-let seq = 0;
-const send = (payload) => socket?.readyState === 1 && socket.send(JSON.stringify(payload));
-const dispatch = (t, d) => send({ op: 0, s: ++seq, t, d });
+const SHARDS = Number(process.env.SIM_SHARDS ?? 1);
+/** shard → its open connection; session ID → shard, for resumes. */
+const connections = new Map();
+const sessions = new Map();
 
-function onIdentify() {
-  dispatch('READY', {
-    v: 10,
-    user: botUser,
-    guilds: guilds.map((g) => ({ id: g.id, unavailable: true })),
-    session_id: hex(16),
-    resume_gateway_url: `ws://127.0.0.1:${PORT}/gateway`,
-    shard: [0, 1],
-    application: { id: APP_ID, flags: 0 },
-    private_channels: [],
-    _trace: ['sim'],
-  });
-  for (const g of guilds) setTimeout(() => dispatch('GUILD_CREATE', wire(g)), 20);
-  if (state.phase === 'waiting') {
+/** The shard a dispatch belongs on: its server's, or shard 0 for DMs, as Discord does it. */
+function shardFor(t, d) {
+  const guildId = t === 'GUILD_CREATE' || t === 'GUILD_DELETE' ? d.id : d.guild_id;
+  return guildId ? Number((BigInt(guildId) >> 22n) % BigInt(SHARDS)) : 0;
+}
+
+function dispatch(t, d, shard = shardFor(t, d)) {
+  const connection = connections.get(shard);
+  if (connection?.ws.readyState === 1) connection.ws.send(JSON.stringify({ op: 0, s: ++connection.seq, t, d }));
+}
+
+function onIdentify(connection, identify) {
+  const [shard = 0, count = 1] = Array.isArray(identify?.shard) ? identify.shard : [];
+  connections.set(shard, connection);
+  connection.shard = shard;
+  const sessionId = hex(16);
+  sessions.set(sessionId, shard);
+  const own = guilds.filter((g) => shardFor('GUILD_CREATE', g) === shard);
+  dispatch(
+    'READY',
+    {
+      v: 10,
+      user: botUser,
+      guilds: own.map((g) => ({ id: g.id, unavailable: true })),
+      session_id: sessionId,
+      resume_gateway_url: `ws://127.0.0.1:${PORT}/gateway`,
+      shard: [shard, count],
+      application: { id: APP_ID, flags: 0 },
+      private_channels: [],
+      _trace: ['sim'],
+    },
+    shard,
+  );
+  for (const g of own) setTimeout(() => dispatch('GUILD_CREATE', wire(g), shard), 20);
+  if (state.phase === 'waiting' && connections.size >= SHARDS) {
     state.phase = 'connected';
     setTimeout(() => void runScenario(), Number(process.env.SIM_START_DELAY ?? 6000));
   }
@@ -281,7 +308,7 @@ const routes = [
       200,
       {
         url: `ws://127.0.0.1:${PORT}/gateway`,
-        shards: 1,
+        shards: SHARDS,
         session_start_limit: { total: 1000, remaining: 996, reset_after: 80_000_000, max_concurrency: 1 },
       },
     ],
@@ -505,7 +532,8 @@ const world = {
       edited_timestamp: null,
       tts: false,
       mention_everyone: false,
-      mentions: [],
+      // Like Discord, every user mentioned as <@id> or <@!id>, the bot included.
+      mentions: [botUser, ...users].filter((u) => new RegExp(`<@!?${u.id}>`).test(content)),
       mention_roles: [],
       attachments: [],
       embeds: [],
@@ -578,14 +606,20 @@ const wss = new WebSocketServer({ noServer: true });
 server.on('upgrade', (req, sock, head) => {
   if (!req.url?.startsWith('/gateway')) return sock.destroy();
   wss.handleUpgrade(req, sock, head, (ws) => {
-    socket = ws;
-    seq = 0;
-    send({ op: 10, d: { heartbeat_interval: 41_250 } });
+    const connection = { ws, seq: 0, shard: undefined };
+    ws.send(JSON.stringify({ op: 10, d: { heartbeat_interval: 41_250 } }));
     ws.on('message', (raw) => {
       const p = JSON.parse(String(raw));
-      if (p.op === 1) send({ op: 11 });
-      else if (p.op === 2) onIdentify();
-      else if (p.op === 6) dispatch('RESUMED', {});
+      if (p.op === 1) ws.send(JSON.stringify({ op: 11 }));
+      else if (p.op === 2) onIdentify(connection, p.d);
+      else if (p.op === 6) {
+        connection.shard = sessions.get(p.d?.session_id) ?? 0;
+        connections.set(connection.shard, connection);
+        dispatch('RESUMED', {}, connection.shard);
+      }
+    });
+    ws.on('close', () => {
+      if (connections.get(connection.shard) === connection) connections.delete(connection.shard);
     });
   });
 });

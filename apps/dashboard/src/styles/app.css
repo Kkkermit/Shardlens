@@ -67,10 +67,13 @@ h3 {
   top: 12px;
 }
 
-/* Text from Discord or the bot: isolated (see Name) and allowed to break inside a long word. */
+/*
+ * Text from Discord or the bot: isolated (see Name), and broken inside a word only when the word can't fit. Not
+ * `anywhere`: that would let a table squeeze a name column to one letter per line on a phone.
+ */
 .ext,
 td code {
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 /* Shows the previous range's numbers while the new ones load. */
@@ -121,6 +124,12 @@ td code {
 .brand img {
   width: 26px;
   height: 26px;
+  flex: none;
+}
+/* The bot's name, from Discord: a long one wraps inside the sidebar. */
+.brand .ext {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .nav a {
   display: block;
@@ -293,6 +302,10 @@ button.primary,
   border-color: var(--accent-fill);
   color: var(--accent-ink);
 }
+button[aria-disabled='true'] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 button.ghost {
   border-color: transparent;
   background: transparent;
@@ -353,6 +366,23 @@ select {
   max-width: 100%;
 }
 
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+/* The activity log beside its top users; one above the other where there is no room. */
+.grid.log {
+  grid-template-columns: minmax(0, 3fr) minmax(240px, 1fr);
+}
+@media (max-width: 1100px) {
+  .grid.log {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .table-wrap {
   /* Positioned, so visually hidden (absolutely positioned) header text is clipped here and can't widen the page. */
   position: relative;
@@ -392,6 +422,11 @@ th.num {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
+td.table-empty {
+  text-align: center;
+  padding: 20px 10px;
+  color: var(--text-muted);
+}
 tr.clickable {
   cursor: pointer;
 }
@@ -413,11 +448,23 @@ tr.clickable:hover td {
   position: relative;
   width: 100%;
 }
+/* A chart's legend or key, and its table toggle at the right. */
+.chart-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.chart-bar > button {
+  margin-left: auto;
+}
 .chart-legend {
   display: flex;
   flex-wrap: wrap;
   gap: 14px;
-  margin: 0 0 8px;
+  margin: 0;
   padding: 0;
   list-style: none;
   color: var(--text-secondary);
@@ -483,6 +530,7 @@ tr.clickable:hover td {
   background: transparent;
 }
 .bars .fill {
+  display: block;
   height: 100%;
   min-width: 2px;
   border-radius: 0 4px 4px 0;
@@ -559,6 +607,12 @@ tr.clickable:hover td {
   gap: 8px;
   min-width: 0;
 }
+/* A server or user name in a table: a readable width first, then breaks anywhere, so a 100-letter name still fits. */
+td .guild > .ext,
+td .guild > span:last-child {
+  min-width: 8em;
+  overflow-wrap: anywhere;
+}
 .guild img,
 .guild .initials {
   width: 24px;
@@ -569,6 +623,8 @@ tr.clickable:hover td {
 .guild .initials {
   display: inline-grid;
   place-items: center;
+  overflow: hidden;
+  white-space: nowrap;
   background: var(--surface-2);
   color: var(--text-secondary);
   font-size: 10px;
@@ -618,6 +674,27 @@ code {
   gap: 14px;
   padding: 28px;
 }
+.login .brand {
+  padding: 0;
+}
+.login p {
+  margin: 0;
+}
+.login form {
+  display: grid;
+  gap: 8px;
+}
+.login .button {
+  justify-content: center;
+}
+.form-error {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--critical-text);
+  font-weight: 600;
+}
 .dl {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
@@ -632,4 +709,35 @@ code {
   min-width: 0;
   overflow-wrap: anywhere;
   font-variant-numeric: tabular-nums;
+}
+/* A heading inside a panel, above a second table. */
+.panel h3 {
+  margin: 16px 0 8px;
+}
+/* Fields sized for what they hold. */
+.narrow {
+  width: 90px;
+}
+.wide-field {
+  flex: 1 1 320px;
+}
+.wide-field input {
+  flex: 1;
+}
+.stack > .notice {
+  margin-bottom: 0;
+}
+/* A button that reads as a link: selecting a row's item (an event) in place. */
+button.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--link);
+  font-weight: 400;
+  text-align: left;
+}
+button.link[aria-pressed='true'] {
+  background: none;
+  color: var(--text-primary);
+  font-weight: 650;
 }

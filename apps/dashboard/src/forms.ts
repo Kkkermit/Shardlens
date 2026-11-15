@@ -11,3 +11,22 @@ export function changedFields<T extends object>(current: T, next: Partial<T>): P
   }
   return changed;
 }
+
+/** Why the activity log's filters can't be applied, or `''`: IDs are checked here, before the collector refuses them. */
+export function activityFilterError(filters: { command: string; guild: string; user: string }): string {
+  const guild = filters.guild.trim();
+  const user = filters.user.trim();
+  if (filters.command.trim().length > 32) return 'A command name is at most 32 characters.';
+  if (guild !== '' && !isSnowflake(guild)) return 'A server ID is 17 to 19 digits.';
+  if (user !== '' && !isSnowflake(user)) return 'A user ID is 17 to 19 digits.';
+  return '';
+}
+
+/** Why a required-permissions value can't be saved, or `''`. Empty clears it. */
+export function permissionBitsError(value: string): string {
+  if (value === '') return '';
+  if (!/^\d{1,19}$/.test(value) || BigInt(value) >= 2n ** 63n) {
+    return 'Enter the permission bits as one whole number, as the Discord developer portal shows it.';
+  }
+  return '';
+}

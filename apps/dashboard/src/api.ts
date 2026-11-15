@@ -3,13 +3,19 @@ import { useEffect, useRef, useState } from 'react';
 
 export class ApiError extends Error {
   readonly status: number;
+  /** The collector's error code (`invalid_request`, `not_found`), or `http_<status>` when the answer had none. */
+  readonly code: string;
+  /** The collector's own explanation, when it gave one (a webhook that Discord refused, a missing audit key). */
+  readonly detail: string | undefined;
   /** The collector's ID for a request it failed on, to quote when reporting the problem. */
   readonly requestId: string | undefined;
   /** The fields an `invalid_request` answer names. */
   readonly fields: string[];
-  constructor(status: number, message: string, details: { requestId?: string; fields?: string[] } = {}) {
-    super(message);
+  constructor(status: number, code: string, details: { detail?: string; requestId?: string; fields?: string[] } = {}) {
+    super(details.detail ?? code);
     this.status = status;
+    this.code = code;
+    this.detail = details.detail;
     this.requestId = details.requestId;
     this.fields = details.fields ?? [];
   }
@@ -29,19 +35,40 @@ const FIELD_NAMES: Record<string, string> = {
   userId: 'the user ID',
   hour: 'the hour',
   weekday: 'the weekday',
+  guild: 'the server ID',
+  user: 'the user ID',
+  command: 'the command',
+};
+
+/** Codes the collector answers with no explanation of its own, in words. */
+const CODES: Record<string, string> = {
+  internal: 'The collector ran into an error.',
+  busy: 'The collector is busy. Try again in a few seconds.',
+  not_found: 'It no longer exists. Reload the page to see what is there now.',
+  unauthorized: 'Your session has ended. Sign in again.',
+  discord_login_required: 'This needs a Discord sign-in.',
+  not_a_team_member: 'Only the app owner and its team members can do this.',
+  csrf: 'The request was refused. Reload the page and try again.',
+  audit_mode_off: 'Audit mode is off.',
 };
 
 /** A message for a failed request that is safe to show as text. */
 export function errorText(error: unknown): string {
+  // fetch rejects with a TypeError when there is no answer at all (offline, collector down, connection reset).
+  if (error instanceof TypeError) return "Couldn't reach the collector. Check your connection and try again.";
   if (!(error instanceof ApiError)) return 'Something went wrong.';
   if (error.status === 429) return 'Too many attempts. Wait a minute and try again.';
-  if (error.message === 'invalid_request') {
+  if (error.code === 'invalid_request') {
     const names = [...new Set(error.fields.map((f) => (Object.hasOwn(FIELD_NAMES, f) ? FIELD_NAMES[f] : f)))];
     return names.length > 0
       ? `Please check ${names.join(', ')} and try again.`
       : 'Please check the values and try again.';
   }
-  return error.message;
+  if (error.detail) return error.detail;
+  if (Object.hasOwn(CODES, error.code)) return CODES[error.code] as string;
+  // A proxy in front of the collector answers with a page, not a code.
+  if (error.status >= 500) return CODES.internal as string;
+  return `The request failed (${error.code}).`;
 }
 
 let unauthorized: (() => void) | undefined;
@@ -51,11 +78,14 @@ export function onUnauthorized(handler: () => void): void {
   unauthorized = handler;
 }
 
-/** Same-origin JSON request. State-changing requests carry the CSRF header the collector requires. */
-export async function api<T>(
+/**
+ * Same-origin request. State-changing requests carry the CSRF header the collector requires. An answer other than 2xx
+ * is thrown as an {@link ApiError}.
+ */
+export async function request(
   path: string,
-  init: { method?: string; body?: unknown; signal?: AbortSignal } = {},
-): Promise<T> {
+  init: { method?: string; body?: unknown; signal?: AbortSignal; headers?: Record<string, string> } = {},
+): Promise<Response> {
   const method = init.method ?? (init.body === undefined ? 'GET' : 'POST');
   const res = await fetch(path, {
     method,
@@ -64,14 +94,15 @@ export async function api<T>(
       accept: 'application/json',
       ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
       ...(method !== 'GET' ? { 'x-shardlens-csrf': '1' } : {}),
+      ...init.headers,
     },
     ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
     ...(init.signal ? { signal: init.signal } : {}),
   });
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as {
-      error?: string;
-      message?: string;
+      error?: unknown;
+      message?: unknown;
       requestId?: unknown;
       issues?: { path?: unknown[] }[];
     };
@@ -80,12 +111,21 @@ export async function api<T>(
     const fields = (Array.isArray(body.issues) ? body.issues : [])
       .map((issue) => issue.path?.[0])
       .filter((f): f is string => typeof f === 'string');
-    throw new ApiError(res.status, body.message ?? body.error ?? res.statusText, {
+    throw new ApiError(res.status, typeof body.error === 'string' ? body.error : `http_${res.status}`, {
+      ...(typeof body.message === 'string' ? { detail: body.message } : {}),
       ...(typeof body.requestId === 'string' ? { requestId: body.requestId } : {}),
       fields,
     });
   }
-  return (await res.json()) as T;
+  return res;
+}
+
+/** A same-origin JSON request (see {@link request}). */
+export async function api<T>(
+  path: string,
+  init: { method?: string; body?: unknown; signal?: AbortSignal } = {},
+): Promise<T> {
+  return (await (await request(path, init)).json()) as T;
 }
 
 export interface Me {

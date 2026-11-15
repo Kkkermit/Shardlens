@@ -3,6 +3,7 @@ import type { Logger, SaltPeriod, ShardlensExporter } from '@shardlens/core';
 /** Metric groups that can be switched off with {@link ShardlensOptions.disable}. */
 export type MetricGroup = 'interactions' | 'guilds' | 'rest' | 'gateway' | 'process' | 'premium' | 'app';
 
+/** Options for `createShardlens(client, options)`. Every one is optional. */
 export interface ShardlensOptions {
   /**
    * Your collector's URL, for example `https://stats.example.com`. HTTPS, or HTTP to localhost only. Leave out with
@@ -28,8 +29,10 @@ export interface ShardlensOptions {
    */
   auditIncludeProfile?: boolean | undefined;
   /**
-   * Informational: the collector decides the salt period. If this differs from the collector's setting, a warning is
-   * logged and the collector's value is used. Default `'month'`.
+   * Has no effect: the collector decides the salt period (dashboard **Settings → User identity**), and the SDK hashes
+   * with the salts it is given. Still accepted so configurations that set it keep working.
+   *
+   * @deprecated Set the salt period on the collector.
    */
   saltPeriod?: SaltPeriod | undefined;
   /** Memory ceiling, in events. Default 10,000. */
@@ -63,7 +66,10 @@ export interface ShardlensOptions {
    * IDs, as some database clients return them, are accepted.
    */
   optedOut?: Iterable<string | bigint> | undefined;
-  /** Called when a user opts out or back in, so you can persist the choice. */
+  /**
+   * Called when a user opts out or back in, so you can persist the choice. It may be async: if it throws or its
+   * promise rejects, the failure is counted (see `lens.on('error')`), never thrown into your bot.
+   */
   onOptOutChange?: ((userId: string, optedOut: boolean) => void) | undefined;
   /**
    * Keep events on disk during long collector outages and across restarts: `{ dir: './shardlens-spool' }`. Used when

@@ -23,7 +23,8 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgres://shardlens:${POSTGRES_PASSWORD}@postgres:5432/shardlens
-      SHARDLENS_TRUST_PROXY: '1'
+      # Caddy is the one proxy in front. Set SHARDLENS_TRUST_PROXY in .env if another one (a CDN) sits before it.
+      SHARDLENS_TRUST_PROXY: ${SHARDLENS_TRUST_PROXY:-1}
       HOST: 0.0.0.0
       PORT: '8080'
     read_only: true
@@ -36,6 +37,8 @@ services:
     healthcheck:
       test: ['CMD', 'node', 'dist/healthcheck.js']
       interval: 30s
+      # Migrations run before the collector listens; after an upgrade of a large database they can take minutes.
+      start_period: 2m
 
   postgres:
     image: postgres:17

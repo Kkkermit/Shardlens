@@ -96,6 +96,19 @@ export function withoutCredentials(text: string): string {
   return text.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]*@/gi, '$1***@');
 }
 
+/** Loads a sink's module, saying which package to install when its database driver is missing. */
+async function withDriver<T>(driver: string, load: () => Promise<T>): Promise<T> {
+  try {
+    return await load();
+  } catch (error) {
+    const code = (error as { code?: unknown } | null)?.code;
+    if (code === 'ERR_MODULE_NOT_FOUND' && String((error as Error).message).includes(`'${driver}'`)) {
+      throw new Error(`This sink needs the ${driver} package: npm install ${driver}`, { cause: error });
+    }
+    throw error;
+  }
+}
+
 /** Opens the built-in sink for a connection URL. Drivers load only when their scheme is used. */
 export async function createSink(url: string, table = DEFAULT_SINK_TABLE): Promise<EventSink> {
   if (!SINK_TABLE.test(table)) throw new Error('sink table must be a plain identifier (letters, digits, underscores)');
@@ -103,10 +116,12 @@ export async function createSink(url: string, table = DEFAULT_SINK_TABLE): Promi
   switch (scheme) {
     case 'mongodb':
     case 'mongodb+srv':
-      return new (await import('./sinks/mongodb.js')).MongoSink(url, table);
+      return new (await withDriver('mongodb', () => import('./sinks/mongodb.js'))).MongoSink(url, table);
     case 'mysql':
-    case 'mariadb':
-      return new (await import('./sinks/mysql.js')).MysqlSink(url.replace(/^mariadb:/i, 'mysql:'), table);
+    case 'mariadb': {
+      const { MysqlSink } = await withDriver('mysql2', () => import('./sinks/mysql.js'));
+      return new MysqlSink(url.replace(/^mariadb:/i, 'mysql:'), table);
+    }
     case 'postgres':
     case 'postgresql':
       return new (await import('./sinks/postgres.js')).PostgresSink(url, table);
@@ -279,8 +294,7 @@ export class SinkMirror {
         // and drop only those it refuses, so one bad row can't hold up everything behind it.
         if (++this.#failures >= POISON_AFTER) {
           this.#failures = 0;
-          await this.#writeEach(batch);
-          continue;
+          if (await this.#writeEach(batch)) continue;
         }
         // Back to the front, oldest first, as far as the buffer allows; the rest is dropped and counted.
         const room = Math.max(0, MAX_BUFFER - this.#buffer.length);
@@ -298,7 +312,11 @@ export class SinkMirror {
     return writing;
   }
 
-  async #writeEach(batch: readonly StoredEvent[]): Promise<void> {
+  /**
+   * Writes a batch row by row and drops the rows refused. Returns `false`, dropping nothing, when no row got through
+   * and the sink has no `init` to show its database answers: a sink of your own that is down refuses every row too.
+   */
+  async #writeEach(batch: readonly StoredEvent[]): Promise<boolean> {
     let refused = 0;
     for (const event of batch) {
       try {
@@ -307,10 +325,12 @@ export class SinkMirror {
         refused++;
       }
     }
-    if (refused === 0) return;
+    if (refused === 0) return true;
+    if (refused === batch.length && !this.#sink.init) return false;
     this.dropped += refused;
     this.#warnedAt = 0;
     this.#report('write', new Error(`dropped ${refused} copies the database refused`));
+    return true;
   }
 
   #report(what: string, error: unknown): void {
