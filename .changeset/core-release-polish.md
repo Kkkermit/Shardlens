@@ -19,7 +19,8 @@ values, rejects events and sends broken replies, across salt-period boundaries a
   in a `202` reply are counted once each, never the health event; so are events whose builder throws, and user events
   still waiting for a salt at shutdown, whose raw IDs are then released.
 - A spooled batch that can't be sent (not a list, or holding `null`) is dropped instead of blocking every later send. A
-  dry run never sends events spooled by an earlier run.
+  spooled batch answered with `413` is split in two and tried again, as batches from memory already were, instead of
+  being dropped whole. A dry run never sends events spooled by an earlier run.
 - A client that can't send (no `apiKey`, or an endpoint that isn't allowed) queues nothing instead of holding up to
   `maxQueueSize` events.
 - `flush()` after `shutdown()` sends nothing, and a request given up at the end of shutdown is not reported as an
