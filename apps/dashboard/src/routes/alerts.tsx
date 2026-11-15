@@ -3,8 +3,8 @@ import { useState } from 'react';
 import { api, errorText, useMeta } from '../api';
 import { NeedsDiscord, useAdminGate } from '../components/AdminGate';
 import { DataTable } from '../components/DataTable';
-import { Loading, PageHead, Panel, StatusMessage } from '../components/ui';
-import { ago, dateTime } from '../format';
+import { ErrorNote, Loading, Name, PageHead, Panel, QueryBody, StatusMessage } from '../components/ui';
+import { ago, dateTime, decimal } from '../format';
 
 interface AlertRule {
   id: string;
@@ -82,7 +82,7 @@ export function AlertsPage() {
   };
 
   if (gate.loading) return <Loading />;
-  if (!gate.allowed) return <NeedsDiscord />;
+  if (!gate.allowed) return <NeedsDiscord title="Alerts" />;
   return (
     <>
       <PageHead
@@ -94,13 +94,15 @@ export function AlertsPage() {
         <Panel title="Rules">
           {alerts.isLoading ? (
             <Loading />
+          ) : alerts.error ? (
+            <ErrorNote error={alerts.error} retry={() => void alerts.refetch()} />
           ) : (
             <DataTable
               caption="Alert rules"
               rowKey={(r) => r.id}
               rows={alerts.data?.rules ?? []}
               columns={[
-                { key: 'name', header: 'Name', render: (r) => r.name },
+                { key: 'name', header: 'Name', render: (r) => <Name>{r.name}</Name> },
                 {
                   key: 'rule',
                   header: 'Rule',
@@ -220,21 +222,28 @@ export function AlertsPage() {
           </form>
         </Panel>
         <Panel title="History">
-          <DataTable
-            caption="Alert history"
-            rowKey={(h) => `${h.ts}-${h.name}`}
-            rows={alerts.data?.history ?? []}
-            columns={[
-              { key: 'ts', header: 'When', render: (h) => dateTime(h.ts, tz) },
-              { key: 'name', header: 'Rule', render: (h) => h.name },
-              { key: 'value', header: 'Value', numeric: true, render: (h) => Number(h.value).toFixed(2) },
-              {
-                key: 'delivered',
-                header: 'Delivered',
-                render: (h) => (h.delivered ? 'Yes' : `No (${h.error ?? 'error'})`),
-              },
-            ]}
-          />
+          <QueryBody query={alerts}>
+            <DataTable
+              caption="Alert history"
+              rowKey={(h) => `${h.ts}-${h.name}`}
+              rows={alerts.data?.history ?? []}
+              columns={[
+                { key: 'ts', header: 'When', render: (h) => dateTime(h.ts, tz) },
+                { key: 'name', header: 'Rule', render: (h) => <Name>{h.name}</Name> },
+                {
+                  key: 'value',
+                  header: 'Value',
+                  numeric: true,
+                  render: (h) => decimal(Number(h.value), 2),
+                },
+                {
+                  key: 'delivered',
+                  header: 'Delivered',
+                  render: (h) => (h.delivered ? 'Yes' : `No (${h.error ?? 'error'})`),
+                },
+              ]}
+            />
+          </QueryBody>
         </Panel>
       </div>
     </>

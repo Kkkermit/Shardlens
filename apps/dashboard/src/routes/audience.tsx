@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { useSpec } from '../api';
+import { updating, useSpec } from '../api';
 import { dayX } from '../chart-data';
 import { BarList, TimeChart } from '../components/charts';
 import { ErrorNote, Loading, PageHead, Panel, RangePicker, Tile } from '../components/ui';
@@ -40,45 +40,48 @@ export function AudiencePage() {
         description="Counts only. Users are pseudonymous hashes that cannot be linked across salt periods."
         actions={<RangePicker value={r.id} onChange={r.setId} />}
       />
-      {q.error ? <ErrorNote error={q.error} /> : null}
-      <div className="stack">
-        <div className="grid tiles">
-          <Tile label="Daily users (latest)" value={num(a?.daily.at(-1)?.users)} />
-          <Tile
-            label="Weekly users"
-            value={num(latestWeek?.users)}
-            sub={latestWeek ? `Week of ${latestWeek.week}` : undefined}
-          />
-          <Tile
-            label="Users this period"
-            value={num(latestPeriod?.users)}
-            sub={latestPeriod ? `Since ${latestPeriod.period}` : undefined}
-          />
-          <Tile label="Stickiness" value={pct(a?.stickiness)} sub="Average daily ÷ period users" />
-          <Tile label="Premium share" value={pct(a?.premiumShare)} sub="Of runs" />
+      {q.error ? (
+        <ErrorNote error={q.error} retry={() => void q.refetch()} />
+      ) : (
+        <div className="stack" aria-busy={updating(q) || undefined}>
+          <div className="grid tiles">
+            <Tile label="Daily users (latest)" value={num(a?.daily.at(-1)?.users)} />
+            <Tile
+              label="Weekly users"
+              value={num(latestWeek?.users)}
+              sub={latestWeek ? `Week of ${latestWeek.week}` : undefined}
+            />
+            <Tile
+              label="Users this period"
+              value={num(latestPeriod?.users)}
+              sub={latestPeriod ? `Since ${latestPeriod.period}` : undefined}
+            />
+            <Tile label="Stickiness" value={pct(a?.stickiness)} sub="Average daily ÷ period users" />
+            <Tile label="Premium share" value={pct(a?.premiumShare)} sub="Of runs" />
+          </div>
+          <Panel title="Daily users" subtitle="New = first seen in the current salt period · UTC days">
+            {q.isLoading ? (
+              <Loading />
+            ) : (
+              <TimeChart label="Daily new and returning users" x={dau.x} series={dau.series} />
+            )}
+          </Panel>
+          <div className="grid two">
+            <Panel title="Languages" subtitle="Discord app language, not location">
+              <BarList label="Runs by language" rows={split('locale')} />
+            </Panel>
+            <Panel title="Install type">
+              <BarList label="Runs by install type" rows={split('install')} />
+            </Panel>
+            <Panel title="Where commands run">
+              <BarList label="Runs by context" rows={split('context')} />
+            </Panel>
+            <Panel title="Member tier">
+              <BarList label="Runs by member tier" rows={split('tier')} />
+            </Panel>
+          </div>
         </div>
-        <Panel title="Daily users" subtitle="New = first seen in the current salt period · UTC days">
-          {q.isLoading ? (
-            <Loading />
-          ) : (
-            <TimeChart label="Daily new and returning users" x={dau.x} series={dau.series} />
-          )}
-        </Panel>
-        <div className="grid two">
-          <Panel title="Languages" subtitle="Discord app language, not location">
-            <BarList label="Runs by language" rows={split('locale')} />
-          </Panel>
-          <Panel title="Install type">
-            <BarList label="Runs by install type" rows={split('install')} />
-          </Panel>
-          <Panel title="Where commands run">
-            <BarList label="Runs by context" rows={split('context')} />
-          </Panel>
-          <Panel title="Member tier">
-            <BarList label="Runs by member tier" rows={split('tier')} />
-          </Panel>
-        </div>
-      </div>
+      )}
     </>
   );
 }

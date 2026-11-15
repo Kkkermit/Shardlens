@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { Link, Outlet } from '@tanstack/react-router';
-import { type FormEvent, useState } from 'react';
-import { ApiError, api, useMe, useMeta } from '../api';
+import { Link, Outlet, useRouter, useRouterState } from '@tanstack/react-router';
+import { type FormEvent, useEffect, useRef, useState } from 'react';
+import { ApiError, api, errorText, useMe, useMeta } from '../api';
 import { ErrorNote, Loading, PageHead } from '../components/ui';
 import { type Theme, useTheme } from '../theme';
 
@@ -41,21 +41,58 @@ export function NotFound() {
 export function Root() {
   const me = useMe();
   if (me.isLoading) return <Loading />;
-  if (me.error && !(me.error instanceof ApiError)) return <ErrorNote error={me.error} />;
+  // Only an answer that there is no session means signed out: a collector that is down is not a sign-in problem.
+  if (!me.data && !(me.error instanceof ApiError && me.error.status === 401)) {
+    return (
+      <div className="login">
+        <main className="panel">
+          <ErrorNote error={me.error} retry={() => void me.refetch()} />
+        </main>
+      </div>
+    );
+  }
   if (!me.data?.authenticated) return <Login discordLogin={me.data?.discordLogin ?? false} />;
   return <Shell demo={me.data.method === 'demo'} />;
+}
+
+/** After navigating, focus the new page's heading, so screen readers announce it and Tab starts from the content. */
+function useFocusOnNavigate() {
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const previous = useRef(pathname);
+  useEffect(() => {
+    if (previous.current === pathname) return;
+    previous.current = pathname;
+    const target = document.querySelector<HTMLElement>('#main h1') ?? document.getElementById('main');
+    if (!target) return;
+    target.tabIndex = -1;
+    target.focus();
+  }, [pathname]);
 }
 
 function Shell(props: { demo: boolean }) {
   const meta = useMeta();
   const [theme, setTheme] = useTheme();
   const client = useQueryClient();
+  const [signOutError, setSignOutError] = useState('');
+  useFocusOnNavigate();
   const logout = async () => {
-    await api('/auth/logout', { method: 'POST', body: {} }).catch(() => undefined);
+    setSignOutError('');
+    try {
+      await api('/auth/logout', { method: 'POST', body: {} });
+    } catch (error) {
+      // 401: the session had already ended, which is what signing out wanted.
+      if (!(error instanceof ApiError && error.status === 401)) {
+        setSignOutError(`Couldn't sign out: ${errorText(error)}`);
+        return;
+      }
+    }
     await client.invalidateQueries();
   };
   return (
     <div className="shell">
+      <a className="skip-link" href="#main">
+        Skip to content
+      </a>
       <nav className="nav" aria-label="Main">
         <div className="brand">
           <img src="/favicon.svg" alt="" />
@@ -82,7 +119,12 @@ function Shell(props: { demo: boolean }) {
           </button>
         )}
       </nav>
-      <main className="main" id="main">
+      <main className="main" id="main" tabIndex={-1}>
+        {signOutError ? (
+          <p className="notice" role="alert">
+            {signOutError}
+          </p>
+        ) : null}
         {props.demo ? (
           <div className="notice" role="note">
             <strong>Public demo.</strong> Every number here is fictional seeded data. Settings, keys and alerts need a
@@ -109,22 +151,37 @@ const LOGIN_ERRORS: Record<string, string> = {
   discord_error: 'Discord sign-in failed. Please try again.',
 };
 
+/** The message for an `?error=` code from the sign-in redirect. Only known codes: the URL is anyone's to write. */
+export function loginError(code: string | null): string {
+  if (!code) return '';
+  return Object.hasOwn(LOGIN_ERRORS, code) ? (LOGIN_ERRORS[code] as string) : 'Sign-in failed.';
+}
+
 function Login(props: { discordLogin: boolean }) {
   const client = useQueryClient();
+  const router = useRouter();
   const [key, setKey] = useState('');
-  const [error, setError] = useState<string>(() => {
-    const code = new URLSearchParams(window.location.search).get('error');
-    return code ? (LOGIN_ERRORS[code] ?? 'Sign-in failed.') : '';
-  });
+  const [error, setError] = useState<string>(() =>
+    loginError(new URLSearchParams(window.location.search).get('error')),
+  );
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
     try {
       await api('/auth/read-key', { body: { key } });
-      window.history.replaceState(null, '', '/');
+      // Stay on the page that was asked for (a deep link), without the sign-in error in its address.
+      const here = new URL(window.location.href);
+      here.searchParams.delete('error');
+      router.history.replace(here.pathname === '/login' ? '/' : `${here.pathname}${here.search}${here.hash}`);
       await client.invalidateQueries();
     } catch (err) {
-      setError(err instanceof ApiError && err.status === 401 ? 'That read key was not accepted.' : 'Sign-in failed.');
+      setError(
+        err instanceof ApiError && err.status === 401
+          ? 'That read key was not accepted.'
+          : err instanceof ApiError && err.status === 429
+            ? 'Too many sign-in attempts. Wait a minute and try again.'
+            : 'Sign-in failed.',
+      );
     }
   };
   return (

@@ -1,10 +1,18 @@
 import { type ReactNode, useState } from 'react';
-import { finite } from '../format';
+import { ApiError } from '../api';
+import { finite, firstCharacters, initials, pct } from '../format';
 import { PRESETS, type PresetId } from '../range';
 
-export function Panel(props: { title: string; subtitle?: ReactNode; actions?: ReactNode; children: ReactNode }) {
+export function Panel(props: {
+  title: string;
+  subtitle?: ReactNode;
+  actions?: ReactNode;
+  /** The content shows the previous answer while a new one loads. */
+  busy?: boolean;
+  children: ReactNode;
+}) {
   return (
-    <section className="panel" aria-label={props.title}>
+    <section className="panel" aria-label={props.title} aria-busy={props.busy || undefined}>
       <div className="panel-head">
         <div>
           <h2>{props.title}</h2>
@@ -83,12 +91,48 @@ export function Loading() {
   );
 }
 
-export function ErrorNote(props: { error: unknown }) {
+export function ErrorNote(props: { error: unknown; retry?: () => void }) {
+  const error = props.error;
+  const reason =
+    error instanceof ApiError && error.status === 429
+      ? 'too many requests, wait a minute and try again'
+      : error instanceof Error
+        ? error.message
+        : 'unknown error';
   return (
     <div className="empty" role="alert">
-      Couldn't load this: {props.error instanceof Error ? props.error.message : 'unknown error'}
+      Couldn't load this: {reason}
+      {error instanceof ApiError && error.requestId ? (
+        <>
+          {' '}
+          (request <code>{error.requestId}</code>)
+        </>
+      ) : null}
+      {props.retry ? (
+        <>
+          {' '}
+          <button type="button" onClick={props.retry}>
+            Try again
+          </button>
+        </>
+      ) : null}
     </div>
   );
+}
+
+/** A panel's body: loading, the query's error, or the content. */
+export function QueryBody(props: { query: { isLoading: boolean; error: unknown }; children: ReactNode }) {
+  if (props.query.isLoading) return <Loading />;
+  if (props.query.error) return <ErrorNote error={props.query.error} />;
+  return <>{props.children}</>;
+}
+
+/**
+ * Text that came from Discord or a bot (a server, user, command or event name). Isolated, so a right-to-left override
+ * in it can't reorder the text around it, and allowed to break anywhere, so one long name can't widen a table.
+ */
+export function Name(props: { children: ReactNode }) {
+  return <bdi className="ext">{props.children}</bdi>;
 }
 
 /** The result of an action. The live region is always there, so screen readers announce each new message. */
@@ -132,10 +176,14 @@ export function UserTag(props: { id: string | null; username: string | null; ava
         path="avatars"
         id={props.id}
         hash={props.avatar}
-        initials={(props.username ?? '?').slice(0, 2).toUpperCase()}
+        initials={firstCharacters(props.username ?? '?', 2).toUpperCase()}
       />
       <span>
-        {props.username ? `${props.username} ` : ''}
+        {props.username ? (
+          <>
+            <Name>{props.username}</Name>{' '}
+          </>
+        ) : null}
         <code>{props.id}</code>
       </span>
     </span>
@@ -144,16 +192,10 @@ export function UserTag(props: { id: string | null; username: string | null; ava
 
 export function GuildIcon(props: { id: string; icon: string | null | undefined; name: string | null | undefined }) {
   const name = props.name || 'Unknown server';
-  const initials = name
-    .split(/\s+/)
-    .map((w) => w[0] ?? '')
-    .join('')
-    .slice(0, 3)
-    .toUpperCase();
   return (
     <span className="guild">
-      <CdnImage path="icons" id={props.id} hash={props.icon} initials={initials} />
-      <span>{name}</span>
+      <CdnImage path="icons" id={props.id} hash={props.icon} initials={initials(name, 3)} />
+      <Name>{name}</Name>
     </span>
   );
 }
@@ -165,7 +207,7 @@ export function Delta(props: { pct: number | null | undefined }) {
   const up = props.pct > 0;
   return (
     <span className={up ? 'delta-up' : 'delta-down'}>
-      <span aria-hidden="true">{up ? '▲' : '▼'}</span> {Math.abs(props.pct).toFixed(1)}%
+      <span aria-hidden="true">{up ? '▲' : '▼'}</span> {pct(Math.abs(props.pct) / 100)}
       <span className="visually-hidden">{up ? ' increase' : ' decrease'}</span>
     </span>
   );

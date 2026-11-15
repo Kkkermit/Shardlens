@@ -99,37 +99,71 @@ const UPSERT = `ON CONFLICT (app_id, metric, dims_hash, bucket) DO UPDATE
 type Grain = 'minute' | 'hour' | 'day';
 const GRAIN_TABLE: Record<Grain, string> = { minute: 'rollup_1m', hour: 'rollup_1h', day: 'rollup_1d' };
 
-async function rollupFromRaw(db: Db, grain: Grain, from: Date, to: Date): Promise<void> {
-  for (const source of MINUTE_SOURCES) {
-    await db.query(
-      `INSERT INTO ${GRAIN_TABLE[grain]} (app_id, bucket, metric, dims_hash, dims, count, sum, min, max, hist)
-       SELECT s.app_id, s.bucket, s.metric, sha256(convert_to(s.dims::text, 'UTF8')), s.dims,
-              s.count, s.sum, s.min, s.max, s.hist
-         FROM (${source}) AS s(app_id, bucket, metric, dims, count, sum, min, max, hist)
-       ${UPSERT}`,
-      [from, to, grain],
+/** Statements that failed on their data, as `metric grain from–to`. */
+type Skipped = string[];
+
+/**
+ * Runs one rollup statement. A row the database can't aggregate (a sum that overflows, say) skips that statement and
+ * is reported, instead of stopping every metric after it, for every app, on every run. Other errors (the database is
+ * down) still fail the run.
+ */
+async function isolated(skipped: Skipped | undefined, what: string, run: () => Promise<unknown>): Promise<void> {
+  try {
+    await run();
+  } catch (error) {
+    const code = (error as { code?: unknown } | null)?.code;
+    if (!skipped || typeof code !== 'string' || !code.startsWith('22')) throw error;
+    skipped.push(what);
+  }
+}
+
+const span = (from: Date, to: Date) => `${from.toISOString()}–${to.toISOString()}`;
+
+async function rollupFromRaw(db: Db, grain: Grain, from: Date, to: Date, skipped?: Skipped): Promise<void> {
+  for (const [i, source] of MINUTE_SOURCES.entries()) {
+    await isolated(skipped, `source ${i} by ${grain} ${span(from, to)}`, () =>
+      db.query(
+        `INSERT INTO ${GRAIN_TABLE[grain]} (app_id, bucket, metric, dims_hash, dims, count, sum, min, max, hist)
+         SELECT s.app_id, s.bucket, s.metric, sha256(convert_to(s.dims::text, 'UTF8')), s.dims,
+                s.count, s.sum, s.min, s.max, s.hist
+           FROM (${source}) AS s(app_id, bucket, metric, dims, count, sum, min, max, hist)
+         ${UPSERT}`,
+        [from, to, grain],
+      ),
     );
   }
 }
 
-async function cascade(db: Db, grain: 'hour' | 'day', from: Date, to: Date): Promise<void> {
+async function cascade(db: Db, grain: 'hour' | 'day', from: Date, to: Date, skipped?: Skipped): Promise<void> {
   const table = grain === 'hour' ? 'rollup_1h' : 'rollup_1d';
-  await db.query(
-    `INSERT INTO ${table} (app_id, bucket, metric, dims_hash, dims, count, sum, min, max, hist)
-     SELECT app_id, date_trunc('${grain}', bucket), metric, dims_hash, (array_agg(dims))[1],
-            sum(count), sum(sum), min(min), max(max), shardlens_hist_sum(hist)
-       FROM rollup_1m WHERE bucket >= $1 AND bucket < $2
-      GROUP BY app_id, date_trunc('${grain}', bucket), metric, dims_hash
-     ${UPSERT}`,
-    [from, to],
+  await isolated(skipped, `minutes into ${grain}s ${span(from, to)}`, () =>
+    db.query(
+      `INSERT INTO ${table} (app_id, bucket, metric, dims_hash, dims, count, sum, min, max, hist)
+       SELECT app_id, date_trunc('${grain}', bucket), metric, dims_hash, (array_agg(dims))[1],
+              sum(count), sum(sum), min(min), max(max), shardlens_hist_sum(hist)
+         FROM rollup_1m WHERE bucket >= $1 AND bucket < $2
+        GROUP BY app_id, date_trunc('${grain}', bucket), metric, dims_hash
+       ${UPSERT}`,
+      [from, to],
+    ),
   );
 }
 
 const floorTo = (ms: number, step: number) => Math.floor(ms / step) * step;
+const MINUTE = 60_000;
 const HOUR = 3_600_000;
 const DAY = 86_400_000;
 /** Most late-event history one run recomputes; the rest stays dirty for the next run. */
 const MAX_DIRTY_SPAN_MS = 6 * HOUR;
+/**
+ * Ingest marks an event's minute dirty only when it arrives more than 2 minutes late (`LATE_MS` in ingest/write.ts).
+ * Anything newer must be inside the next run's recent window, however long after its arrival that run starts.
+ */
+const NOT_MARKED_MS = 2 * MINUTE;
+/** Every run recomputes at least this much recent history, whether or not anything was marked. */
+const RECENT_MS = 5 * MINUTE;
+/** A recent window never reaches further back than this; older history relies on dirty marks. */
+const MAX_RECENT_MS = HOUR;
 
 function mergeWindows(windows: [number, number][]): [number, number][] {
   const sorted = [...windows].sort((a, b) => a[0] - b[0]);
@@ -156,57 +190,93 @@ export async function rawRetentionDays(db: Db): Promise<number> {
  * hour and day either from those minutes or, for older periods, straight from raw rows while they are retained.
  * Periods older than raw retention are left alone, so a recompute never shrinks a rollup.
  */
-export async function backfillRollups(db: Db, from: Date, to: Date, now = new Date(), rawDays?: number): Promise<void> {
+export async function backfillRollups(
+  db: Db,
+  from: Date,
+  to: Date,
+  now = new Date(),
+  rawDays?: number,
+  skipped?: Skipped,
+): Promise<void> {
   const keepRaw = rawDays ?? (await rawRetentionDays(db));
   const minuteFloor = floorTo(now.getTime(), DAY) - MINUTE_RETENTION_DAYS * DAY;
   const rawFloor = floorTo(now.getTime(), DAY) - (keepRaw - 1) * DAY;
   const start = from.getTime();
   const end = to.getTime();
-  if (end > minuteFloor) await rollupFromRaw(db, 'minute', new Date(Math.max(start, minuteFloor)), to);
+  if (end > minuteFloor) await rollupFromRaw(db, 'minute', new Date(Math.max(start, minuteFloor)), to, skipped);
   const hourFrom = floorTo(start, HOUR);
   const hourTo = floorTo(end - 1, HOUR) + HOUR;
-  if (hourTo > minuteFloor) await cascade(db, 'hour', new Date(Math.max(hourFrom, minuteFloor)), new Date(hourTo));
+  if (hourTo > minuteFloor) {
+    await cascade(db, 'hour', new Date(Math.max(hourFrom, minuteFloor)), new Date(hourTo), skipped);
+  }
   if (hourFrom < minuteFloor && Math.min(hourTo, minuteFloor) > rawFloor) {
-    await rollupFromRaw(db, 'hour', new Date(Math.max(hourFrom, rawFloor)), new Date(Math.min(hourTo, minuteFloor)));
+    const window = [new Date(Math.max(hourFrom, rawFloor)), new Date(Math.min(hourTo, minuteFloor))] as const;
+    await rollupFromRaw(db, 'hour', ...window, skipped);
   }
   const dayFrom = floorTo(start, DAY);
   const dayTo = floorTo(end - 1, DAY) + DAY;
-  if (dayTo > minuteFloor) await cascade(db, 'day', new Date(Math.max(dayFrom, minuteFloor)), new Date(dayTo));
+  if (dayTo > minuteFloor) await cascade(db, 'day', new Date(Math.max(dayFrom, minuteFloor)), new Date(dayTo), skipped);
   if (dayFrom < minuteFloor && Math.min(dayTo, minuteFloor) > rawFloor) {
-    await rollupFromRaw(db, 'day', new Date(Math.max(dayFrom, rawFloor)), new Date(Math.min(dayTo, minuteFloor)));
+    const window = [new Date(Math.max(dayFrom, rawFloor)), new Date(Math.min(dayTo, minuteFloor))] as const;
+    await rollupFromRaw(db, 'day', ...window, skipped);
   }
 }
 
 /**
- * The every-minute rollup run: the last 3 minutes plus minutes marked dirty by late events (merged into ranges and
- * capped per run), then the hours and days they belong to, so hourly and daily charts are at most a minute behind.
+ * The every-minute rollup run: recent minutes plus minutes marked dirty by late events (merged into ranges and capped
+ * per run), then the hours and days they belong to, so hourly and daily charts are at most a minute behind.
+ *
+ * The recent window reaches back to before the previous run started (`since`), less the age at which ingest starts
+ * marking events late, so an event that wasn't marked is always inside some run's window, even when runs fall behind.
+ * Dirty marks are taken at the start: a late event committed while this run works marks its minute again for the
+ * next run, instead of having its mark deleted by this one. Marks of a run that fails are put back.
  */
-export async function runRollups(db: Db, now = new Date()): Promise<{ windows: number }> {
-  const end = floorTo(now.getTime(), 60_000) + 60_000;
-  const recentFrom = end - 3 * 60_000;
-  const dirty = await db.query<{ bucket: Date }>(
-    'SELECT bucket FROM dirty_buckets WHERE bucket < $1 ORDER BY bucket LIMIT 50000',
-    [new Date(recentFrom)],
+export async function runRollups(
+  db: Db,
+  now = new Date(),
+  opts: { since?: Date | undefined } = {},
+): Promise<{ windows: number; skipped: string[] }> {
+  const end = floorTo(now.getTime(), MINUTE) + MINUTE;
+  const sinceFrom = opts.since ? floorTo(opts.since.getTime() - NOT_MARKED_MS, MINUTE) : end;
+  const recentFrom = Math.max(end - MAX_RECENT_MS, Math.min(end - RECENT_MS, sinceFrom));
+  const claimed = await db.query<{ app_id: string; bucket: Date }>(
+    `DELETE FROM dirty_buckets WHERE bucket IN (
+       SELECT DISTINCT bucket FROM dirty_buckets WHERE bucket < $1 ORDER BY bucket LIMIT $2
+     ) RETURNING app_id, bucket`,
+    [new Date(recentFrom), MAX_DIRTY_SPAN_MS / MINUTE],
   );
-  const late: [number, number][] = [];
-  const done: Date[] = [];
-  for (const { bucket } of dirty.rows) {
-    if (done.length * 60_000 >= MAX_DIRTY_SPAN_MS) break;
-    const start = floorTo(bucket.getTime(), 60_000);
-    late.push([start, start + 60_000]);
-    done.push(bucket);
+  const late: [number, number][] = claimed.rows.map(({ bucket }) => {
+    const start = floorTo(bucket.getTime(), MINUTE);
+    return [start, start + MINUTE];
+  });
+  // Newest first: what the dashboard shows now doesn't wait behind old history.
+  const windows = mergeWindows([[recentFrom, end], ...late]).reverse();
+  const skipped: string[] = [];
+  try {
+    const rawDays = await rawRetentionDays(db);
+    for (const [from, to] of windows) await backfillRollups(db, new Date(from), new Date(to), now, rawDays, skipped);
+  } catch (error) {
+    if (claimed.rows.length > 0) {
+      await db
+        .query(
+          `INSERT INTO dirty_buckets (app_id, bucket) SELECT * FROM unnest($1::bigint[], $2::timestamptz[])
+           ON CONFLICT DO NOTHING`,
+          [claimed.rows.map((r) => r.app_id), claimed.rows.map((r) => r.bucket)],
+        )
+        .catch(() => undefined);
+    }
+    throw error;
   }
-  const windows = mergeWindows([[recentFrom, end], ...late]);
-  const rawDays = await rawRetentionDays(db);
-  for (const [from, to] of windows) await backfillRollups(db, new Date(from), new Date(to), now, rawDays);
-  if (done.length > 0) await db.query('DELETE FROM dirty_buckets WHERE bucket = ANY($1::timestamptz[])', [done]);
-  return { windows: windows.length };
+  return { windows: windows.length, skipped };
 }
 
 /**
- * Unique-user counts for every live salt period: daily counts and new users per scope, ISO-week counts
- * within the period, and the whole-period count. Rows are rewritten each run until the salt is destroyed, when the
- * last run marks them final.
+ * Unique-user counts for every live salt period: daily counts and new users per scope, counts for the ISO weeks that
+ * lie wholly inside the period, and the whole-period count. Rows are rewritten each run until the salt is destroyed,
+ * when the last run marks them final; a final row is never written again.
+ *
+ * A week that spans two periods gets no count: the same person has a different hash in each, so the users of the two
+ * parts can't be told apart, and writing each part in turn left whichever came last.
  */
 export async function runUniques(db: Db, appId?: string, onlyPeriod?: string, final = false): Promise<void> {
   const periods = await db.query<{ app_id: string; period: string }>(
@@ -231,18 +301,23 @@ export async function runUniques(db: Db, appId?: string, onlyPeriod?: string, fi
         WHERE u.app_id = $1 AND u.period = $2 AND u.scope IN ('global', 'command')
         GROUP BY u.app_id, u.day, u.scope, u.scope_key
        ON CONFLICT (app_id, grain, start_day, scope, scope_key) DO UPDATE
-         SET users = EXCLUDED.users, new_users = EXCLUDED.new_users, final = EXCLUDED.final`,
+         SET users = EXCLUDED.users, new_users = EXCLUDED.new_users, final = EXCLUDED.final
+         WHERE NOT unique_counts.final`,
       params,
     );
-    // ISO weeks inside the period (global only).
+    const start = new Date(bounds.start).toISOString().slice(0, 10);
+    const end = new Date(bounds.end).toISOString().slice(0, 10);
+    // ISO weeks wholly inside the period (global only).
     await db.query(
       `INSERT INTO unique_counts (app_id, grain, start_day, scope, scope_key, users, new_users, final)
        SELECT app_id, 'week', date_trunc('week', day)::date, scope, scope_key, count(DISTINCT user_hash), 0, $3
          FROM uniques WHERE app_id = $1 AND period = $2 AND scope = 'global'
         GROUP BY app_id, date_trunc('week', day), scope, scope_key
+       HAVING date_trunc('week', day)::date >= $4::date AND date_trunc('week', day)::date + 7 <= $5::date
        ON CONFLICT (app_id, grain, start_day, scope, scope_key) DO UPDATE
-         SET users = EXCLUDED.users, final = EXCLUDED.final`,
-      params,
+         SET users = EXCLUDED.users, final = EXCLUDED.final
+         WHERE NOT unique_counts.final`,
+      [...params, start, end],
     );
     // Whole period, every scope (start_day = first day of the period).
     await db.query(
@@ -251,8 +326,9 @@ export async function runUniques(db: Db, appId?: string, onlyPeriod?: string, fi
          FROM uniques WHERE app_id = $1 AND period = $2
         GROUP BY app_id, scope, scope_key
        ON CONFLICT (app_id, grain, start_day, scope, scope_key) DO UPDATE
-         SET users = EXCLUDED.users, final = EXCLUDED.final`,
-      [...params, new Date(bounds.start).toISOString().slice(0, 10)],
+         SET users = EXCLUDED.users, final = EXCLUDED.final
+         WHERE NOT unique_counts.final`,
+      [...params, start],
     );
   }
 }

@@ -219,7 +219,7 @@ describe('admin access', () => {
     }
     expect((await save('Europe/London')).statusCode).toBe(200);
     // A save that leaves the zone out keeps it.
-    await h.app.inject({ method: 'PUT', url: '/v1/settings', ...asAdmin(), payload: { badges: ['servers'] } });
+    await h.app.inject({ method: 'PUT', url: '/v1/settings', ...asAdmin(), payload: { rawRetentionDays: 35 } });
     const settings = await h.app.inject({
       method: 'GET',
       url: '/v1/settings',
@@ -614,6 +614,34 @@ describe('audit mode', () => {
         expect.objectContaining({ userId: USER, kind: 'message_command', command: 'warn', outcome: 'ok' }),
       ]),
     );
+  });
+
+  it('pages through rows recorded in the same millisecond without skipping any', async () => {
+    const { hasher, period } = await sdkHasher(h.app);
+    const user = (await hasher.hash(USER, period))!;
+    const ts = Date.now() - 60_000;
+    const runs = [1, 2, 3].map(() => ({
+      id: uuidv7(ts),
+      ts,
+      type: 'message_command',
+      command: 'paged',
+      user,
+      outcome: 'ok',
+      actor: { userId: USER },
+    }));
+    expect((await ingest(h.app, envelope(runs, { mode: 'audit' }))).json()).toMatchObject({ accepted: 3 });
+    const page = (before?: string) =>
+      h.app.inject({
+        method: 'GET',
+        url: `/v1/audit/log?command=paged&limit=2${before ? `&before=${encodeURIComponent(before)}` : ''}`,
+        cookies: { shardlens_session: adminCookie },
+      });
+    const first = (await page()).json() as { rows: { interactionId: string }[]; nextBefore: string };
+    expect(first.rows).toHaveLength(2);
+    const second = (await page(first.nextBefore)).json() as { rows: { interactionId: string }[] };
+    expect(second.rows).toHaveLength(1);
+    const seen = [...first.rows, ...second.rows].map((r) => r.interactionId).sort();
+    expect(seen).toEqual(runs.map((r) => r.id.toLowerCase()).sort());
   });
 
   it('refuses a filter it does not know, instead of ignoring it and showing every row', async () => {

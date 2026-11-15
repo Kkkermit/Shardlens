@@ -4,7 +4,7 @@ import {
   createUpcomingSalts,
   destroyExpiredSalts,
   dropExpiredPartitions,
-  ensurePartitions,
+  ensurePartitionsPatiently,
 } from '../storage/maintenance.js';
 import { runAlerts } from './alerts.js';
 import { runReports } from './reports.js';
@@ -35,7 +35,6 @@ async function retentionSettings(db: Db): Promise<{ rawDays: number; auditDays: 
 }
 
 export async function runRetention(db: Db, now: Date): Promise<void> {
-  await dropExpiredPartitions(db, now, await retentionSettings(db));
   await db.query("DELETE FROM rollup_1h WHERE bucket < $1::timestamptz - interval '13 months'", [now]);
   await db.query("DELETE FROM guilds WHERE left_at < $1::timestamptz - interval '90 days'", [now]);
   await db.query('DELETE FROM sessions WHERE expires_at < $1', [now]);
@@ -44,6 +43,9 @@ export async function runRetention(db: Db, now: Date): Promise<void> {
   await db.query("DELETE FROM snapshot_pending WHERE ts < $1::timestamptz - interval '1 day'", [now]);
   // One row per bot process, and a restarted process is a new one.
   await db.query("DELETE FROM sdk_health WHERE ts < $1::timestamptz - interval '30 days'", [now]);
+  // Last, and failing the job when a partition was busy, so it runs again in a minute rather than tomorrow.
+  const { busy } = await dropExpiredPartitions(db, now, await retentionSettings(db));
+  if (busy.length > 0) throw new Error(`partitions in use, dropped on a later run: ${busy.join(', ')}`);
 }
 
 export async function runSalts(db: Db, now: Date): Promise<string[]> {
@@ -62,38 +64,55 @@ export function startJobs(db: Db, log: JobLogger, opts?: { settingsKey: string; 
   let running: Promise<void> = Promise.resolve();
   const timers: ReturnType<typeof setInterval>[] = [];
   const lastRun = new Map<string, number>();
+  /** Jobs queued or running. A tick skips them, so a run that takes longer than a minute never builds a backlog. */
+  const pending = new Set<string>();
+  let lastRollups: Date | undefined;
 
   const serial = (name: string, fn: () => Promise<unknown>) => {
+    if (pending.has(name)) return running;
+    pending.add(name);
     // Stamped when queued. Stamped when finished, a job due every 5 minutes runs every 6: at the fifth tick it is
     // still a few seconds short.
     lastRun.set(name, Date.now());
     running = running.then(async () => {
-      if (stopped || !leader) return;
-      const started = Date.now();
       try {
-        await fn();
-      } catch (error) {
-        // Not stamped, so the next tick tries again.
-        lastRun.delete(name);
-        log.error({ job: name, err: error }, 'job failed');
+        if (stopped || !leader) return;
+        const started = Date.now();
+        try {
+          await fn();
+        } catch (error) {
+          // Not stamped, so the next tick tries again.
+          lastRun.delete(name);
+          log.error({ job: name, err: error }, 'job failed');
+        } finally {
+          const ms = Date.now() - started;
+          if (ms > 10_000) log.info({ job: name, ms }, 'slow job');
+        }
       } finally {
-        const ms = Date.now() - started;
-        if (ms > 10_000) log.info({ job: name, ms }, 'slow job');
+        pending.delete(name);
       }
     });
     return running;
+  };
+
+  const rollups = async () => {
+    const started = new Date();
+    const { skipped } = await runRollups(db, started, { since: lastRollups });
+    lastRollups = started;
+    if (skipped.length > 0)
+      log.error({ job: 'rollups', skipped }, 'rows the database could not aggregate were skipped');
   };
 
   const due = (name: string, every: number) => Date.now() - (lastRun.get(name) ?? 0) >= every;
 
   const tick = () => {
     if (!leader) return;
-    void serial('rollups', () => runRollups(db));
+    void serial('rollups', rollups);
     if (opts) void serial('alerts', () => runAlerts(db, opts));
     if (opts && due('reports', 5 * MINUTE)) void serial('reports', () => runReports(db, opts));
     if (due('uniques', 5 * MINUTE)) void serial('uniques', () => runUniques(db));
     if (due('partitions', HOUR)) {
-      void serial('partitions', async () => ensurePartitions(db, new Date(), await retentionSettings(db)));
+      void serial('partitions', async () => ensurePartitionsPatiently(db, new Date(), await retentionSettings(db)));
     }
     if (due('salts', HOUR)) void serial('salts', () => runSalts(db, new Date()));
     if (due('retention', 24 * HOUR)) void serial('retention', () => runRetention(db, new Date()));

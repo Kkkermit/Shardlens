@@ -3,8 +3,9 @@ import { type FormEvent, useState } from 'react';
 import { api, errorText } from '../api';
 import { NeedsDiscord, useAdminGate } from '../components/AdminGate';
 import { DataTable } from '../components/DataTable';
-import { ErrorNote, Loading, PageHead, Panel, StatusMessage } from '../components/ui';
+import { ErrorNote, Loading, PageHead, Panel, QueryBody, StatusMessage } from '../components/ui';
 import { ago, dateTime } from '../format';
+import { changedFields, isSnowflake } from '../forms';
 
 interface Settings {
   timezone: string;
@@ -62,8 +63,14 @@ export function SettingsPage() {
   const [message, setMessage] = useState('');
   const [newKey, setNewKey] = useState<string>('');
   const [eraseId, setEraseId] = useState('');
+  const [erasing, setErasing] = useState(false);
   const save = useMutation({
-    mutationFn: (patch: Partial<Settings>) => api<Settings>('/v1/settings', { method: 'PUT', body: patch }),
+    // Only what was changed, so a form can't put back a value it didn't show (a time zone this browser doesn't list).
+    mutationFn: (patch: Partial<Settings>) =>
+      api<Settings>('/v1/settings', {
+        method: 'PUT',
+        body: settings.data ? changedFields(settings.data, patch) : patch,
+      }),
     onSuccess: (data) => {
       client.setQueryData(['settings'], data);
       void client.invalidateQueries({ queryKey: ['meta'] });
@@ -73,9 +80,19 @@ export function SettingsPage() {
   });
 
   if (gate.loading) return <Loading />;
-  if (!gate.allowed) return <NeedsDiscord />;
+  if (!gate.allowed) return <NeedsDiscord title="Settings" />;
   const s = settings.data;
-  if (!s) return settings.error ? <ErrorNote error={settings.error} /> : <Loading />;
+  if (!s) {
+    return settings.error ? (
+      <>
+        <PageHead title="Settings" />
+        <ErrorNote error={settings.error} retry={() => void settings.refetch()} />
+      </>
+    ) : (
+      <Loading />
+    );
+  }
+  const timezones = [...new Set([s.timezone, 'UTC', ...Intl.supportedValuesOf('timeZone')])];
 
   const createKey = async (scope: 'ingest' | 'read') => {
     const name = window.prompt(`Label for the new ${scope} key`, scope === 'ingest' ? 'bot' : 'scripts');
@@ -90,16 +107,38 @@ export function SettingsPage() {
   };
   const erase = async (e: FormEvent) => {
     e.preventDefault();
-    if (!/^\d{17,20}$/.test(eraseId)) return setMessage('Enter a Discord user ID (17–20 digits).');
+    if (erasing) return;
+    const userId = eraseId.trim();
+    if (!isSnowflake(userId)) return setMessage('Enter a Discord user ID: 17 to 19 digits.');
     if (!window.confirm('Delete everything stored about this user? This cannot be undone.')) return;
+    setErasing(true);
     try {
-      const res = await api<{ erased: number }>('/v1/privacy/erase', { body: { userId: eraseId } });
+      const res = await api<{ erased: number }>('/v1/privacy/erase', { body: { userId } });
       setMessage(`Erased ${res.erased} records.`);
       setEraseId('');
       void client.invalidateQueries({ queryKey: ['access-log'] });
     } catch (err) {
       setMessage(errorText(err));
+    } finally {
+      setErasing(false);
     }
+  };
+  const addPrice = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const form = e.currentTarget;
+    const f = new FormData(form);
+    const sku = String(f.get('sku')).trim();
+    const amount = Number(f.get('amount'));
+    const currency = String(f.get('currency')).trim().toUpperCase();
+    if (!isSnowflake(sku)) return setMessage('Enter the SKU ID from the Discord developer portal: 17 to 19 digits.');
+    if (!Number.isFinite(amount) || amount < 0) return setMessage('Enter a price of 0 or more.');
+    if (!/^[A-Z]{3}$/.test(currency)) return setMessage('Enter a three-letter currency code, such as USD or EUR.');
+    save.mutate({ skuPrices: { ...s.skuPrices, [sku]: { amount, currency } } }, { onSuccess: () => form.reset() });
+  };
+  const removePrice = (sku: string) => {
+    const rest = { ...s.skuPrices };
+    delete rest[sku];
+    save.mutate({ skuPrices: rest });
   };
   const origin = window.location.origin;
 
@@ -120,7 +159,7 @@ export function SettingsPage() {
             <label>
               Time zone
               <select name="timezone" defaultValue={s.timezone}>
-                {['UTC', ...Intl.supportedValuesOf('timeZone')].map((tz) => (
+                {timezones.map((tz) => (
                   <option key={tz}>{tz}</option>
                 ))}
               </select>
@@ -251,6 +290,55 @@ export function SettingsPage() {
         </Panel>
 
         <Panel
+          title="SKU prices"
+          subtitle="The monthly price of each subscription SKU, for the estimated revenue on the Premium page. Discord sends SKU IDs, not amounts."
+        >
+          <DataTable
+            caption="SKU prices"
+            rowKey={(r) => r.sku}
+            rows={Object.entries(s.skuPrices).map(([sku, price]) => ({ sku, ...price }))}
+            empty="No prices yet."
+            columns={[
+              { key: 'sku', header: 'SKU ID', render: (r) => <code>{r.sku}</code> },
+              {
+                key: 'price',
+                header: 'Per month',
+                numeric: true,
+                render: (r) =>
+                  new Intl.NumberFormat(undefined, { style: 'currency', currency: r.currency }).format(r.amount),
+              },
+              {
+                key: 'remove',
+                header: 'Actions',
+                hideHeader: true,
+                render: (r) => (
+                  <button type="button" disabled={save.isPending} onClick={() => removePrice(r.sku)}>
+                    Remove
+                  </button>
+                ),
+              },
+            ]}
+          />
+          <form className="filters" style={{ marginTop: 12 }} onSubmit={addPrice}>
+            <label>
+              SKU ID
+              <input name="sku" inputMode="numeric" required />
+            </label>
+            <label>
+              Price
+              <input name="amount" type="number" min={0} max={1_000_000} step="0.01" required style={{ width: 110 }} />
+            </label>
+            <label>
+              Currency
+              <input name="currency" maxLength={3} placeholder="USD" required style={{ width: 70 }} />
+            </label>
+            <button type="submit" disabled={save.isPending}>
+              Save price
+            </button>
+          </form>
+        </Panel>
+
+        <Panel
           title="API keys"
           subtitle="Ingest keys are for your bot; read keys for scripts and read-only dashboard access"
         >
@@ -267,38 +355,40 @@ export function SettingsPage() {
               New read key
             </button>
           </div>
-          <DataTable
-            caption="API keys"
-            rowKey={(k) => k.id}
-            rows={keys.data?.rows ?? []}
-            columns={[
-              { key: 'label', header: 'Label', render: (k) => k.label ?? '—' },
-              { key: 'scope', header: 'Scope', render: (k) => k.scope },
-              { key: 'used', header: 'Last used', render: (k) => ago(k.lastUsedAt) },
-              { key: 'status', header: 'Status', render: (k) => (k.revokedAt ? 'Revoked' : 'Active') },
-              {
-                key: 'revoke',
-                header: 'Actions',
-                hideHeader: true,
-                render: (k) =>
-                  k.revokedAt ? null : (
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        const name = k.label ? `“${k.label}”` : 'this key';
-                        if (!window.confirm(`Revoke ${name}? Anything using it stops working immediately.`)) return;
-                        await api(`/v1/keys/${k.id}`, { method: 'DELETE', body: {} }).catch((err: unknown) =>
-                          setMessage(errorText(err)),
-                        );
-                        void client.invalidateQueries({ queryKey: ['keys'] });
-                      }}
-                    >
-                      Revoke
-                    </button>
-                  ),
-              },
-            ]}
-          />
+          <QueryBody query={keys}>
+            <DataTable
+              caption="API keys"
+              rowKey={(k) => k.id}
+              rows={keys.data?.rows ?? []}
+              columns={[
+                { key: 'label', header: 'Label', render: (k) => k.label ?? '—' },
+                { key: 'scope', header: 'Scope', render: (k) => k.scope },
+                { key: 'used', header: 'Last used', render: (k) => ago(k.lastUsedAt) },
+                { key: 'status', header: 'Status', render: (k) => (k.revokedAt ? 'Revoked' : 'Active') },
+                {
+                  key: 'revoke',
+                  header: 'Actions',
+                  hideHeader: true,
+                  render: (k) =>
+                    k.revokedAt ? null : (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const name = k.label ? `“${k.label}”` : 'this key';
+                          if (!window.confirm(`Revoke ${name}? Anything using it stops working immediately.`)) return;
+                          await api(`/v1/keys/${k.id}`, { method: 'DELETE', body: {} }).catch((err: unknown) =>
+                            setMessage(errorText(err)),
+                          );
+                          void client.invalidateQueries({ queryKey: ['keys'] });
+                        }}
+                      >
+                        Revoke
+                      </button>
+                    ),
+                },
+              ]}
+            />
+          </QueryBody>
         </Panel>
 
         <Panel title="Privacy" subtitle="Right to erasure, and who looked at audit data">
@@ -307,23 +397,27 @@ export function SettingsPage() {
               Erase a user by Discord ID
               <input value={eraseId} onChange={(e) => setEraseId(e.target.value)} inputMode="numeric" />
             </label>
-            <button type="submit">Erase</button>
+            <button type="submit" disabled={erasing}>
+              {erasing ? 'Erasing…' : 'Erase'}
+            </button>
           </form>
-          <DataTable
-            caption="Audit access log"
-            rowKey={(r) => `${r.ts}-${r.action}`}
-            rows={access.data?.rows ?? []}
-            columns={[
-              { key: 'ts', header: 'When', render: (r) => dateTime(r.ts, s.timezone) },
-              {
-                key: 'who',
-                header: 'Viewer',
-                render: (r) => (r.viewerUserId === '0' ? 'SDK' : <code>{r.viewerUserId}</code>),
-              },
-              { key: 'action', header: 'Action', render: (r) => r.action },
-              { key: 'details', header: 'Details', render: (r) => <code>{describeDetails(r.details)}</code> },
-            ]}
-          />
+          <QueryBody query={access}>
+            <DataTable
+              caption="Audit access log"
+              rowKey={(r) => `${r.ts}-${r.action}`}
+              rows={access.data?.rows ?? []}
+              columns={[
+                { key: 'ts', header: 'When', render: (r) => dateTime(r.ts, s.timezone) },
+                {
+                  key: 'who',
+                  header: 'Viewer',
+                  render: (r) => (r.viewerUserId === '0' ? 'SDK' : <code>{r.viewerUserId}</code>),
+                },
+                { key: 'action', header: 'Action', render: (r) => r.action },
+                { key: 'details', header: 'Details', render: (r) => <code>{describeDetails(r.details)}</code> },
+              ]}
+            />
+          </QueryBody>
         </Panel>
       </div>
     </>

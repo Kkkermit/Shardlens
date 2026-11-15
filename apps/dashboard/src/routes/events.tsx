@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react';
-import { useMeta, useSpec } from '../api';
+import { updating, useMeta, useSpec } from '../api';
 import { BarList } from '../components/charts';
 import { DataTable } from '../components/DataTable';
-import { ErrorNote, Loading, PageHead, Panel, RangePicker, Segmented } from '../components/ui';
-import { ago, num, pct } from '../format';
+import { ErrorNote, Loading, Name, PageHead, Panel, QueryBody, RangePicker, Segmented } from '../components/ui';
+import { ago, commandLabel, decimal, num, pct } from '../format';
 import { useRange } from '../range';
 
 interface EventRow {
@@ -50,7 +50,7 @@ function duration(seconds: number | null): string {
   if (seconds < 60) return `${Math.round(seconds)}s`;
   if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
   if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h ${Math.round((seconds % 3600) / 60)}m`;
-  return `${(seconds / 86_400).toFixed(1)}d`;
+  return `${decimal(seconds / 86_400, 1)}d`;
 }
 
 function StepSelect(props: {
@@ -59,7 +59,7 @@ function StepSelect(props: {
   value: StepValue;
   onChange: (v: StepValue) => void;
   events: string[];
-  commands: string[];
+  commands: { name: string; label: string }[];
   allowAny?: boolean;
 }) {
   return (
@@ -76,8 +76,8 @@ function StepSelect(props: {
         </optgroup>
         <optgroup label="Commands">
           {props.commands.map((c) => (
-            <option key={`command:${c}`} value={`command:${c}`}>
-              /{c}
+            <option key={`command:${c.name}`} value={`command:${c.name}`}>
+              {c.label}
             </option>
           ))}
         </optgroup>
@@ -91,14 +91,27 @@ export function EventsPage() {
   const meta = useMeta();
   const tz = meta.data?.timezone ?? 'UTC';
   const list = useSpec<{ rows: EventRow[] }>({ kind: 'events', range: r.range });
-  const commandList = useSpec<{ rows: { command: string; runs: number }[] }>({ kind: 'commands', range: r.range });
+  const commandList = useSpec<{ rows: { command: string; runs: number; kinds: string[] }[] }>({
+    kind: 'commands',
+    range: r.range,
+  });
   const events = useMemo(() => (list.data?.rows ?? []).map((e) => e.name), [list.data]);
   const commands = useMemo(
-    () => (commandList.data?.rows ?? []).filter((c) => c.runs > 0).map((c) => c.command),
+    () =>
+      (commandList.data?.rows ?? [])
+        .filter((c) => c.runs > 0)
+        .map((c) => ({ name: c.command, label: commandLabel(c.command, c.kinds) })),
     [commandList.data],
   );
+  /** A step as the person picked it: the command as it is typed (`/ping`, `ping`), the event name as it is. */
+  const stepName = (step: StepValue | undefined) => {
+    if (!step || step === 'any') return 'any activity';
+    const [type, ...rest] = step.split(':');
+    const name = rest.join(':');
+    return type === 'command' ? (commands.find((c) => c.name === name)?.label ?? `/${name}`) : name;
+  };
   const options = useMemo(
-    () => [...events.map((e) => `event:${e}`), ...commands.map((c) => `command:${c}`)],
+    () => [...events.map((e) => `event:${e}`), ...commands.map((c) => `command:${c.name}`)],
     [events, commands],
   );
 
@@ -156,7 +169,7 @@ export function EventsPage() {
         Funnels and cohorts match a person's steps by their salted hash inside the collector; only counts leave it. A
         journey that crosses into a new salt period counts as a new person, and only raw-retention days are covered.
       </div>
-      <div className="stack">
+      <div className="stack" aria-busy={updating(list, keys, values, funnel, retention) || undefined}>
         <Panel title="Events" subtitle="Select one to see its properties">
           {list.error ? (
             <ErrorNote error={list.error} />
@@ -174,7 +187,14 @@ export function EventsPage() {
                 {
                   key: 'name',
                   header: 'Event',
-                  render: (e) => (e.name === current ? <strong>{e.name}</strong> : e.name),
+                  render: (e) =>
+                    e.name === current ? (
+                      <strong>
+                        <Name>{e.name}</Name>
+                      </strong>
+                    ) : (
+                      <Name>{e.name}</Name>
+                    ),
                   sort: (e) => e.name,
                 },
                 { key: 'count', header: 'Count', numeric: true, render: (e) => num(e.count), sort: (e) => e.count },
@@ -188,15 +208,17 @@ export function EventsPage() {
         {current ? (
           <div className="grid two">
             <Panel title={`Properties of ${current}`} subtitle="How often each key is set">
-              {keys.isLoading ? (
-                <Loading />
-              ) : (
+              <QueryBody query={keys}>
                 <BarList
                   label={`Properties of ${current}`}
-                  rows={(keys.data?.keys ?? []).map((k) => ({ key: k.key, name: k.key, value: k.count }))}
+                  rows={(keys.data?.keys ?? []).map((k) => ({
+                    key: k.key,
+                    name: <Name>{k.key}</Name>,
+                    value: k.count,
+                  }))}
                   empty="This event has no properties."
                 />
-              )}
+              </QueryBody>
             </Panel>
             <Panel
               title="Values"
@@ -215,15 +237,17 @@ export function EventsPage() {
                 ) : null
               }
             >
-              {values.isLoading ? (
-                <Loading />
-              ) : (
+              <QueryBody query={values}>
                 <BarList
                   label={`Values of ${currentProp ?? ''}`}
-                  rows={(values.data?.values ?? []).map((v) => ({ key: v.value, name: v.value, value: v.count }))}
+                  rows={(values.data?.values ?? []).map((v) => ({
+                    key: v.value,
+                    name: <Name>{v.value}</Name>,
+                    value: v.count,
+                  }))}
                   empty="Pick an event with properties."
                 />
-              )}
+              </QueryBody>
             </Panel>
           </div>
         ) : null}
@@ -236,7 +260,7 @@ export function EventsPage() {
               <div className="filters">
                 {steps.map((s, i) => (
                   // biome-ignore lint/suspicious/noArrayIndexKey: a step is its position, as the same event can appear twice
-                  <span key={i} style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+                  <span key={i} className="funnel-step">
                     <StepSelect
                       id={`funnel-step-${i}`}
                       label={`Step ${i + 1}`}
@@ -287,7 +311,11 @@ export function EventsPage() {
                     label="Funnel"
                     rows={funnel.data.steps.map((s, i) => ({
                       key: String(i),
-                      name: `${i + 1}. ${s.label}`,
+                      name: (
+                        <>
+                          {i + 1}. <Name>{funnel.isPlaceholderData ? s.label : stepName(steps[i])}</Name>
+                        </>
+                      ),
                       value: s.users,
                     }))}
                     format={(v) => `${num(v)}${first > 0 ? ` · ${pct(v / first, 0)}` : ''}`}
@@ -297,7 +325,15 @@ export function EventsPage() {
                     rowKey={(s) => String(s.i)}
                     rows={funnel.data.steps.map((s, i) => ({ ...s, i }))}
                     columns={[
-                      { key: 'step', header: 'Step', render: (s) => `${s.i + 1}. ${s.label}` },
+                      {
+                        key: 'step',
+                        header: 'Step',
+                        render: (s) => (
+                          <>
+                            {s.i + 1}. <Name>{funnel.isPlaceholderData ? s.label : stepName(steps[s.i])}</Name>
+                          </>
+                        ),
+                      },
                       { key: 'users', header: 'People', numeric: true, render: (s) => num(s.users) },
                       {
                         key: 'total',

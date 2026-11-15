@@ -155,6 +155,8 @@ export class SinkMirror {
   #ready = false;
   #preparing: Promise<boolean> | undefined;
   #flushing: Promise<void> | undefined;
+  /** The write in progress, settled either way. */
+  #writing: Promise<unknown> | undefined;
   #timers: ReturnType<typeof setInterval>[] = [];
   #warn: (message: string) => void = () => undefined;
   #warnedAt = 0;
@@ -226,8 +228,10 @@ export class SinkMirror {
       return before - this.#buffer.length;
     };
     let removed = unbuffer();
-    // A batch being written now either lands (and the delete below removes it) or comes back to the buffer.
-    await this.#flushing?.catch(() => undefined);
+    // A batch being written now either lands (and the delete below removes it) or comes back to the buffer. Only that
+    // batch is waited for: under steady load the buffer never empties, and waiting for it would hang the request.
+    // The batch after it was taken from the buffer once it held none of this person's copies.
+    await this.#writing;
     removed += unbuffer();
     if (!(await this.#init())) throw new Error(`${this.#sink.name} sink is unreachable; erase it again later`);
     return removed + (await this.#sink.erase(appId, [...hex]));
@@ -267,7 +271,7 @@ export class SinkMirror {
     while (this.#buffer.length > 0) {
       const batch = this.#buffer.splice(0, BATCH);
       try {
-        await this.#sink.write(batch);
+        await this.#write(batch);
         this.#failures = 0;
       } catch (error) {
         this.#report('write', error);
@@ -288,11 +292,17 @@ export class SinkMirror {
     }
   }
 
+  #write(batch: StoredEvent[]): Promise<void> {
+    const writing = this.#sink.write(batch);
+    this.#writing = writing.catch(() => undefined);
+    return writing;
+  }
+
   async #writeEach(batch: readonly StoredEvent[]): Promise<void> {
     let refused = 0;
     for (const event of batch) {
       try {
-        await this.#sink.write([event]);
+        await this.#write([event]);
       } catch {
         refused++;
       }

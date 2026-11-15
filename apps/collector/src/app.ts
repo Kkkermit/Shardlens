@@ -105,8 +105,9 @@ export async function startCollector(
     if (config.demo) {
       app.log.warn('Demo mode: anyone can view this dashboard without signing in. Use it only with demo data.');
     }
+    live.onWarning((message) => app.log.warn({ component: 'live' }, message));
     if (!liveShared) {
-      app.log.warn('Live tiles are not shared between collector instances: LISTEN failed on PostgreSQL.');
+      app.log.warn('Live tiles are not shared between collector instances yet: LISTEN failed on PostgreSQL. Retrying.');
     }
     jobs = startJobs(db, app.log, { settingsKey: config.settingsKey, publicUrl: config.publicUrl });
     const address = await app.listen({ port: config.port, host: config.host });

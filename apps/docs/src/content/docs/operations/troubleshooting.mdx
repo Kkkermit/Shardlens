@@ -87,7 +87,8 @@ The collector writes one JSON object per line (`docker compose logs collector`).
 | `Server listening at …`               | info    | The address the collector accepts connections on.                                                                         |
 | `shutting down`                       | info    | The collector received `SIGTERM` or `SIGINT` and is finishing what it was doing.                                          |
 | `Demo mode: …`                        | warning | `SHARDLENS_DEMO` is on: the dashboard is open to anyone. For demo data only.                                              |
-| `Live tiles are not shared …`         | warning | PostgreSQL refused `LISTEN`, so with several collectors each one's live tiles show only its own traffic.                   |
+| `Live tiles are not shared …`         | warning | PostgreSQL refused `LISTEN` at startup, so with several collectors each one's live tiles show only its own traffic until a retry in the background succeeds. |
+| `Live tiles lost their LISTEN connection …` | warning | The connection that shares live tiles broke (a database restart, say). The collector subscribes again, waiting up to 30 seconds between tries. |
 | `this collector is now the job leader` | info   | This instance runs the background jobs (rollups, alerts, retention). Exactly one instance does.                           |
 | `events rejected`                     | warning | A batch was accepted but some events were dropped. `reasons` counts them: `too_old` (older than your raw-data retention, 35 days by default), `in_future` (more than a day ahead), `unknown_salt_period`, `invalid_event`. |
 | `input refused by the database`       | warning | A request carried a value PostgreSQL would not store. It was answered with `400`; nothing was saved from it.              |
@@ -100,7 +101,8 @@ The collector writes one JSON object per line (`docker compose logs collector`).
 | `live update failed`                  | warning | The live tiles could not read the database. Logged once per open dashboard.                                               |
 | `slow job`                            | info    | A background job took more than 10 seconds. Frequent on a healthy database means it needs more resources.                 |
 | `request failed`                      | error   | A request hit an unexpected error. `reqId` matches the `requestId` in the `500` response the caller received.             |
-| `job failed`                          | error   | A background job threw. `job` names it; it runs again on its next schedule.                                               |
+| `job failed`                          | error   | A background job threw. `job` names it; it runs again on its next schedule. `partitions in use` means a long query kept a table locked for 2 seconds while retention dropped old data: it tries again a minute later instead of holding ingest up. |
+| `rows the database could not aggregate were skipped` | error | A rollup statement refused its data (a sum out of range). `skipped` names the statement and window; every other metric was still rolled up. |
 | `webhook event processing failed`     | error   | A Discord webhook event was acknowledged but could not be stored.                                                         |
 | `leader election failed`              | error   | This instance could not check the job lock. It retries every 30 seconds.                                                  |
 

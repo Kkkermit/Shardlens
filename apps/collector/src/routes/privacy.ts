@@ -26,8 +26,10 @@ export const AuditLogFilters = z
   .object({
     from: z.iso.datetime({ offset: true }).optional(),
     to: z.iso.datetime({ offset: true }).optional(),
-    /** Paging: `nextBefore` from the previous page. */
-    before: z.iso.datetime({ offset: true }).optional(),
+    /** Paging: `nextBefore` from the previous page (a time, then `~` and the last row's ID), or a time. */
+    before: z
+      .union([z.iso.datetime({ offset: true }), z.string().regex(/^[\dT:.+-]{20,35}Z?~[0-9a-f-]{36}$/i)])
+      .optional(),
     command: z.string().max(32).optional(),
     guild: Snowflake.optional(),
     user: Snowflake.optional(),
@@ -172,7 +174,14 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
     };
     if (f.from) add('a.ts >= ?', f.from);
     if (f.to) add('a.ts < ?', f.to);
-    if (f.before) add('a.ts < ?', f.before);
+    if (f.before) {
+      // The row ID breaks ties, so rows sharing the last time on a page aren't skipped.
+      const [at, id] = f.before.split('~');
+      if (id) {
+        params.push(at, id);
+        where.push(`(a.ts, a.interaction_id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`);
+      } else add('a.ts < ?', at);
+    }
     if (f.command) add('a.command = ?', f.command);
     if (f.guild) add('a.guild_id = ?', f.guild);
     if (f.user && cipher) add('a.actor_lookup = ?', cipher.lookupHash(f.user));
@@ -195,7 +204,7 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
               a.outcome, a.ack_ms, a.actor_enc, a.names_enc
          FROM audit_log a LEFT JOIN guilds g ON g.app_id = a.app_id AND g.guild_id = a.guild_id
         WHERE ${where.join(' AND ')}
-        ORDER BY a.ts DESC LIMIT $${params.length}`,
+        ORDER BY a.ts DESC, a.interaction_id DESC LIMIT $${params.length}`,
       params,
     );
     return res.rows.map((r) => {
@@ -231,7 +240,8 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
       user: f.user && cipher ? cipher.lookupHash(f.user).toString('hex') : null,
       rows: rows.length,
     });
-    return { rows, nextBefore: rows.length === f.limit ? rows.at(-1)?.ts : null };
+    const last = rows.length === f.limit ? rows.at(-1) : undefined;
+    return { rows, nextBefore: last ? `${last.ts.toISOString()}~${last.interactionId}` : null };
   });
 
   app.get('/v1/audit/top-users', async (req, reply) => {

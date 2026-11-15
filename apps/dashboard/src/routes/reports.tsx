@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { api, errorText } from '../api';
 import { NeedsDiscord, useAdminGate } from '../components/AdminGate';
 import { DataTable } from '../components/DataTable';
-import { Loading, PageHead, Panel, StatusMessage } from '../components/ui';
+import { ErrorNote, Loading, Name, PageHead, Panel, StatusMessage } from '../components/ui';
 import { ago } from '../format';
 
 interface Report {
@@ -66,7 +66,7 @@ export function ReportsPage() {
   };
 
   if (gate.loading) return <Loading />;
-  if (!gate.allowed) return <NeedsDiscord />;
+  if (!gate.allowed) return <NeedsDiscord title="Reports" />;
   const timezone = reports.data?.timezone ?? 'UTC';
   return (
     <>
@@ -79,6 +79,8 @@ export function ReportsPage() {
         <Panel title="Scheduled reports" subtitle={`Times are in ${timezone}, the time zone from Settings`}>
           {reports.isLoading ? (
             <Loading />
+          ) : reports.error ? (
+            <ErrorNote error={reports.error} retry={() => void reports.refetch()} />
           ) : (
             <DataTable
               caption="Scheduled reports"
@@ -86,7 +88,7 @@ export function ReportsPage() {
               rows={reports.data?.reports ?? []}
               empty="No reports yet. Create one below."
               columns={[
-                { key: 'name', header: 'Name', render: (r) => r.name },
+                { key: 'name', header: 'Name', render: (r) => <Name>{r.name}</Name> },
                 { key: 'when', header: 'Sent', render: when },
                 { key: 'webhook', header: 'Webhook', render: (r) => <code>{r.webhook}</code> },
                 {

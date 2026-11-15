@@ -7,6 +7,9 @@ const WINDOW_S = 15 * 60;
 /** Seconds per notification: PostgreSQL refuses a `NOTIFY` payload of 8,000 bytes or more. */
 const SECONDS_PER_NOTIFY = 100;
 
+const RETRY_FIRST_MS = 1_000;
+const RETRY_MAX_MS = 30_000;
+
 const slot = (second: number) => ((second % WINDOW_S) + WINDOW_S) % WINDOW_S;
 
 interface Ring {
@@ -27,29 +30,36 @@ export class LiveHub {
   #pending = new Map<string, { s: number; n: number; e: number }[]>();
   #listener: pg.PoolClient | undefined;
   #timer: ReturnType<typeof setInterval> | undefined;
+  #retry: ReturnType<typeof setTimeout> | undefined;
+  #retryMs = RETRY_FIRST_MS;
+  #stopped = false;
+  #warned = false;
+  #warn: (message: string) => void = () => undefined;
 
   constructor(db: Db) {
     this.#db = db;
   }
 
-  /** Resolves `false` when this instance could not subscribe: its tiles then only count its own traffic. */
+  /** Where to report a lost subscription (once per outage). */
+  onWarning(warn: (message: string) => void): void {
+    this.#warn = warn;
+  }
+
+  /**
+   * Resolves `false` when this instance could not subscribe: its tiles then only count its own traffic until a retry
+   * in the background succeeds.
+   */
   async start(): Promise<boolean> {
-    try {
-      const client = await this.#db.connect();
-      this.#listener = client;
-      client.on('notification', (msg) => this.#onNotify(msg.payload));
-      client.on('error', () => this.#release(client, true));
-      await client.query(`LISTEN ${CHANNEL}`);
-    } catch {
-      if (this.#listener) this.#release(this.#listener, true);
-    }
+    const subscribed = await this.#subscribe();
     this.#timer = setInterval(() => void this.#publish(), 1_000);
     this.#timer.unref();
-    return this.#listener !== undefined;
+    return subscribed;
   }
 
   async stop(): Promise<void> {
+    this.#stopped = true;
     if (this.#timer) clearInterval(this.#timer);
+    if (this.#retry) clearTimeout(this.#retry);
     const listener = this.#listener;
     if (listener) {
       await listener.query(`UNLISTEN ${CHANNEL}`).catch(() => undefined);
@@ -88,6 +98,50 @@ export class LiveHub {
       }
     }
     return { perMinute: Math.round(perMinute), errors15m: Math.round(errors15m), perSecond };
+  }
+
+  async #subscribe(): Promise<boolean> {
+    let client: pg.PoolClient | undefined;
+    try {
+      client = await this.#db.connect();
+      if (this.#stopped) {
+        client.release();
+        return false;
+      }
+      const subscribed = client;
+      this.#listener = subscribed;
+      subscribed.on('notification', (msg) => this.#onNotify(msg.payload));
+      subscribed.on('error', () => this.#lost(subscribed));
+      await subscribed.query(`LISTEN ${CHANNEL}`);
+      this.#retryMs = RETRY_FIRST_MS;
+      this.#warned = false;
+      return true;
+    } catch {
+      if (client) this.#lost(client);
+      else this.#retryLater();
+      return false;
+    }
+  }
+
+  /** The listening connection broke (the database restarted, say): subscribe again, backing off up to 30 seconds. */
+  #lost(client: pg.PoolClient): void {
+    if (this.#listener !== client) return;
+    this.#release(client, true);
+    if (!this.#warned) {
+      this.#warned = true;
+      this.#warn('Live tiles lost their LISTEN connection to PostgreSQL; subscribing again.');
+    }
+    this.#retryLater();
+  }
+
+  #retryLater(): void {
+    if (this.#stopped || this.#retry) return;
+    this.#retry = setTimeout(() => {
+      this.#retry = undefined;
+      void this.#subscribe();
+    }, this.#retryMs);
+    this.#retry.unref();
+    this.#retryMs = Math.min(RETRY_MAX_MS, this.#retryMs * 2);
   }
 
   /** Returns the listening connection to the pool once. A broken one is destroyed: until then it holds a pool slot. */

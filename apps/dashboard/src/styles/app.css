@@ -35,6 +35,13 @@ h3 {
 h1 {
   font-size: 22px;
   font-weight: 650;
+  /* A page titled with a server or command name: a long one wraps instead of widening the page. */
+  overflow-wrap: anywhere;
+}
+/* Focused by script after navigating (for screen readers), not a control: no ring. */
+h1[tabindex='-1']:focus,
+main[tabindex='-1']:focus {
+  outline: none;
 }
 h2 {
   font-size: 15px;
@@ -44,6 +51,37 @@ h3 {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-secondary);
+}
+
+.skip-link {
+  position: absolute;
+  left: 12px;
+  top: -48px;
+  z-index: 10;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+}
+.skip-link:focus {
+  top: 12px;
+}
+
+/* Text from Discord or the bot: isolated (see Name) and allowed to break inside a long word. */
+.ext,
+td code {
+  overflow-wrap: anywhere;
+}
+
+/* Shows the previous range's numbers while the new ones load. */
+[aria-busy='true'] {
+  opacity: 0.6;
+  transition: opacity 0.2s;
+}
+@media (prefers-reduced-motion: reduce) {
+  [aria-busy='true'] {
+    transition: none;
+  }
 }
 
 .visually-hidden {
@@ -182,10 +220,15 @@ h3 {
 }
 .panel-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
   margin-bottom: 12px;
+}
+.panel-head > * {
+  min-width: 0;
+  max-width: 100%;
 }
 .panel-head p {
   margin: 2px 0 0;
@@ -292,13 +335,22 @@ select {
   align-items: center;
   margin-bottom: 16px;
 }
-.filters label {
+.filters label,
+.inline-field {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
   max-width: 100%;
   color: var(--text-secondary);
+}
+/* A funnel step and its remove button: as narrow as the row allows, so a long option can't widen the page. */
+.funnel-step {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .table-wrap {
@@ -568,7 +620,7 @@ code {
 }
 .dl {
   display: grid;
-  grid-template-columns: max-content 1fr;
+  grid-template-columns: max-content minmax(0, 1fr);
   gap: 6px 16px;
   margin: 0;
 }
@@ -577,5 +629,7 @@ code {
 }
 .dl dd {
   margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-variant-numeric: tabular-nums;
 }

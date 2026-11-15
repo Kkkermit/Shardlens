@@ -1,12 +1,14 @@
-import { Link, useNavigate, useParams } from '@tanstack/react-router';
-import { useMemo, useState } from 'react';
-import { useMeta, useSpec } from '../api';
+import { Link, useNavigate, useParams, useSearch } from '@tanstack/react-router';
+import { useMemo } from 'react';
+import { ApiError, updating, useMeta, useSpec } from '../api';
 import { pivot } from '../chart-data';
 import { BarList, TimeChart } from '../components/charts';
 import { DataTable } from '../components/DataTable';
-import { ErrorNote, GuildIcon, Loading, PageHead, Panel, RangePicker, Tile } from '../components/ui';
+import { ErrorNote, GuildIcon, Loading, Name, PageHead, Panel, RangePicker, Tile } from '../components/ui';
 import { ago, date, dateTime, label, num } from '../format';
+import { isSnowflake } from '../forms';
 import { useRange } from '../range';
+import { parseServerListSearch, type ServerListSearch, SIZES } from '../server-list';
 
 interface ServerRow {
   id: string;
@@ -25,18 +27,21 @@ interface ServerRow {
 }
 
 const PAGE = 50;
-
 export function ServersPage() {
   const navigate = useNavigate();
   const meta = useMeta();
   const tz = meta.data?.timezone ?? 'UTC';
-  const [search, setSearch] = useState('');
-  const [status, setStatus] = useState<'active' | 'left' | 'all'>('active');
-  const [size, setSize] = useState('');
-  const [inactive, setInactive] = useState(false);
-  const [missing, setMissing] = useState(false);
-  const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'members', dir: 'desc' });
-  const [page, setPage] = useState(0);
+  const search = useSearch({ from: '/servers' });
+  const status = search.status ?? 'active';
+  const sort = { key: search.sort ?? 'members', dir: search.dir ?? 'desc' } as const;
+  const page = (search.page ?? 1) - 1;
+  /** Changes the list's state in the address; any change other than paging goes back to the first page. */
+  const update = (patch: Partial<Record<keyof ServerListSearch, unknown>>) =>
+    void navigate({
+      to: '/servers',
+      search: (prev) => parseServerListSearch({ ...prev, page: undefined, ...patch }),
+      replace: true,
+    });
   const spec = {
     kind: 'servers',
     status,
@@ -44,14 +49,13 @@ export function ServersPage() {
     order: sort.dir,
     limit: PAGE,
     offset: page * PAGE,
-    ...(search.trim() ? { search: search.trim() } : {}),
-    ...(size ? { size } : {}),
-    ...(inactive ? { inactive: true } : {}),
-    ...(missing ? { missingPermissions: true } : {}),
+    ...(search.q?.trim() ? { search: search.q.trim() } : {}),
+    ...(search.size ? { size: search.size } : {}),
+    ...(search.inactive ? { inactive: true } : {}),
+    ...(search.missing ? { missingPermissions: true } : {}),
   };
   const q = useSpec<{ total: number; rows: ServerRow[] }>(spec);
   const total = q.data?.total ?? 0;
-  const reset = () => setPage(0);
 
   return (
     <>
@@ -62,22 +66,13 @@ export function ServersPage() {
           <input
             type="search"
             placeholder="Search names"
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              reset();
-            }}
+            value={search.q ?? ''}
+            onChange={(e) => update({ q: e.target.value })}
           />
         </label>
         <label>
           Status
-          <select
-            value={status}
-            onChange={(e) => {
-              setStatus(e.target.value as typeof status);
-              reset();
-            }}
-          >
+          <select value={status} onChange={(e) => update({ status: e.target.value })}>
             <option value="active">Installed</option>
             <option value="left">Removed</option>
             <option value="all">All</option>
@@ -85,15 +80,9 @@ export function ServersPage() {
         </label>
         <label>
           Size
-          <select
-            value={size}
-            onChange={(e) => {
-              setSize(e.target.value);
-              reset();
-            }}
-          >
+          <select value={search.size ?? ''} onChange={(e) => update({ size: e.target.value })}>
             <option value="">Any</option>
-            {['1-10', '11-100', '101-1k', '1k-10k', '10k+'].map((s) => (
+            {SIZES.map((s) => (
               <option key={s} value={s}>
                 {s} members
               </option>
@@ -103,27 +92,21 @@ export function ServersPage() {
         <label>
           <input
             type="checkbox"
-            checked={inactive}
-            onChange={(e) => {
-              setInactive(e.target.checked);
-              reset();
-            }}
+            checked={search.inactive === true}
+            onChange={(e) => update({ inactive: e.target.checked })}
           />
           No commands in 30 days
         </label>
         <label>
           <input
             type="checkbox"
-            checked={missing}
-            onChange={(e) => {
-              setMissing(e.target.checked);
-              reset();
-            }}
+            checked={search.missing === true}
+            onChange={(e) => update({ missing: e.target.checked })}
           />
           Missing permissions
         </label>
       </search>
-      <Panel title="Server list" subtitle="Runs are the last 30 days">
+      <Panel title="Server list" subtitle="Runs are the last 30 days" busy={updating(q)}>
         {q.isLoading ? (
           <Loading />
         ) : q.error ? (
@@ -135,10 +118,7 @@ export function ServersPage() {
               rows={q.data?.rows ?? []}
               rowKey={(row) => row.id}
               initialSort={sort}
-              onSort={(key, dir) => {
-                setSort({ key, dir });
-                reset();
-              }}
+              onSort={(key, dir) => update({ sort: key, dir })}
               onRowClick={(row) => void navigate({ to: '/servers/$id', params: { id: row.id } })}
               columns={[
                 {
@@ -174,13 +154,13 @@ export function ServersPage() {
               ]}
             />
             <div className="filters" style={{ marginTop: 12, marginBottom: 0 }}>
-              <button type="button" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>
+              <button type="button" disabled={page === 0} onClick={() => update({ page: page })}>
                 Previous
               </button>
               <span className="muted">
                 Page {page + 1} of {Math.max(1, Math.ceil(total / PAGE))}
               </span>
-              <button type="button" disabled={(page + 1) * PAGE >= total} onClick={() => setPage((p) => p + 1)}>
+              <button type="button" disabled={(page + 1) * PAGE >= total} onClick={() => update({ page: page + 2 })}>
                 Next
               </button>
             </div>
@@ -234,8 +214,22 @@ const CHANNEL_TYPES: Record<string, string> = {
   '16': 'Media',
 };
 
+function ServerNotFound() {
+  return (
+    <>
+      <PageHead title="Server not found" description={<Link to="/servers">← All servers</Link>} />
+      <p className="muted">There is no server with this ID in your bot's data.</p>
+    </>
+  );
+}
+
 export function ServerPage() {
   const { id } = useParams({ from: '/servers/$id' });
+  return isSnowflake(id) ? <ServerDetailPage id={id} /> : <ServerNotFound />;
+}
+
+function ServerDetailPage(props: { id: string }) {
+  const id = props.id;
   const r = useRange();
   const meta = useMeta();
   const tz = meta.data?.timezone ?? 'UTC';
@@ -268,10 +262,16 @@ export function ServerPage() {
   const p = detail.data?.profile;
 
   if (detail.isLoading) return <Loading />;
-  if (detail.error) return <ErrorNote error={detail.error} />;
-  if (!detail.data?.found || !p) {
-    return <PageHead title="Server not found" description={<Link to="/servers">← All servers</Link>} />;
+  if (detail.error instanceof ApiError && detail.error.status === 400) return <ServerNotFound />;
+  if (detail.error) {
+    return (
+      <>
+        <PageHead title="Server" description={<Link to="/servers">← All servers</Link>} />
+        <ErrorNote error={detail.error} retry={() => void detail.refetch()} />
+      </>
+    );
   }
+  if (!detail.data?.found || !p) return <ServerNotFound />;
   return (
     <>
       <PageHead
@@ -279,7 +279,7 @@ export function ServerPage() {
         description={<Link to="/servers">← All servers</Link>}
         actions={<RangePicker value={r.id} onChange={r.setId} />}
       />
-      <div className="stack">
+      <div className="stack" aria-busy={updating(series, commands, outcomes) || undefined}>
         <div className="grid tiles">
           <Tile
             label="Members"
@@ -317,7 +317,11 @@ export function ServerPage() {
           <Panel title="Top commands">
             <BarList
               label="Top commands"
-              rows={(commands.data?.rows ?? []).map((c) => ({ key: c.key, name: c.key, value: c.count }))}
+              rows={(commands.data?.rows ?? []).map((c) => ({
+                key: c.key,
+                name: <Name>{c.key}</Name>,
+                value: c.count,
+              }))}
             />
           </Panel>
           <Panel title="Outcomes">

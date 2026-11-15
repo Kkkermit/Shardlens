@@ -49,7 +49,11 @@ export function DataTable<T>(props: {
   };
 
   return (
-    <div className="table-wrap">
+    // Focusable, so a table wider than its panel can be scrolled from the keyboard, and named for when it gets focus.
+    // A group, not a region: a landmark per table would repeat its panel's name.
+    // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrolling area must be reachable without a mouse (WCAG 2.1.1)
+    // biome-ignore lint/a11y/useSemanticElements: a fieldset is for form controls, and its min-width stops the scrolling
+    <div className="table-wrap" role="group" aria-label={props.caption} tabIndex={0}>
       <table>
         <caption className="visually-hidden">{props.caption}</caption>
         <thead>

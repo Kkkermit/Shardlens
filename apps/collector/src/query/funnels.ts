@@ -29,7 +29,8 @@ function stepSource(step: Step | 'any', params: unknown[], from: string, to: str
            WHERE app_id = $1 AND command = ${name} AND kind IN ${COMMAND_KINDS_SQL} AND ts >= ${from} AND ts < ${to}`;
 }
 
-const label = (step: Step) => (step.type === 'command' ? `/${step.name}` : step.name);
+// The bare name: a command may be a prefix command, which the dashboard writes without a slash.
+const label = (step: Step) => step.name;
 
 /**
  * Conversion through 2–5 steps (custom events or commands), each within `windowHours` of entering the funnel, in

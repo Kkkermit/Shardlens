@@ -1,25 +1,67 @@
-const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 });
-const whole = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
+const formats = new Map<string, Intl.NumberFormat>();
+
+/** One cached formatter per locale and options. Every number on a page goes through these, so separators agree. */
+function numbers(options: Intl.NumberFormatOptions, locale?: string): Intl.NumberFormat {
+  const key = `${locale ?? ''}|${JSON.stringify(options)}`;
+  let format = formats.get(key);
+  if (!format) {
+    format = new Intl.NumberFormat(locale, options);
+    formats.set(key, format);
+  }
+  return format;
+}
 
 /** A number that can be shown: not `null`, `undefined`, `NaN` or infinite. */
 export const finite = (n: number | null | undefined): n is number => typeof n === 'number' && Number.isFinite(n);
 
 /** A whole number in full, for chart axes and bars. */
-export const count = (n: number) => whole.format(n);
+export const count = (n: number) => numbers({ maximumFractionDigits: 0 }).format(n);
 
-export function num(n: number | null | undefined): string {
+export function num(n: number | null | undefined, locale?: string): string {
   if (!finite(n)) return '—';
-  return Math.abs(n) >= 100_000 ? compact.format(n) : whole.format(n);
+  return Math.abs(n) >= 100_000
+    ? numbers({ notation: 'compact', maximumFractionDigits: 1 }, locale).format(n)
+    : numbers({ maximumFractionDigits: 0 }, locale).format(n);
 }
 
-export function pct(n: number | null | undefined, digits = 1): string {
+/** A number with exactly `digits` decimals. */
+export function decimal(n: number | null | undefined, digits: number, locale?: string): string {
   if (!finite(n)) return '—';
-  return `${(n * 100).toFixed(digits)}%`;
+  return numbers({ minimumFractionDigits: digits, maximumFractionDigits: digits }, locale).format(n);
 }
 
-export function ms(n: number | null | undefined): string {
+/** A share (`0.042` is 4.2%). */
+export function pct(n: number | null | undefined, digits = 1, locale?: string): string {
   if (!finite(n)) return '—';
-  return n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)} s` : `${Math.round(n)} ms`;
+  return numbers({ style: 'percent', minimumFractionDigits: digits, maximumFractionDigits: digits }, locale).format(n);
+}
+
+/** A duration in milliseconds: `412 ms`, `3.3 s`. */
+export function ms(n: number | null | undefined, locale?: string): string {
+  if (!finite(n)) return '—';
+  if (n < 1000) return `${numbers({ maximumFractionDigits: 0 }, locale).format(n)} ms`;
+  const digits = n >= 10_000 ? 0 : 1;
+  return `${numbers({ minimumFractionDigits: digits, maximumFractionDigits: digits }, locale).format(n / 1000)} s`;
+}
+
+/** Whole characters as people see them: an emoji or a flag is one, never half of a surrogate pair. */
+function graphemes(text: string): string[] {
+  if (typeof Intl.Segmenter !== 'function') return Array.from(text);
+  return Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text), (s) => s.segment);
+}
+
+/** The first `max` characters of `text`, for an avatar placeholder. */
+export const firstCharacters = (text: string, max: number) => graphemes(text).slice(0, max).join('');
+
+/** Up to `max` initials of a name: the first character of each word. */
+export function initials(name: string, max: number): string {
+  return name
+    .split(/\s+/)
+    .map((word) => graphemes(word)[0] ?? '')
+    .filter((first) => first !== '')
+    .slice(0, max)
+    .join('')
+    .toUpperCase();
 }
 
 function toDate(value: string | Date): Date | undefined {

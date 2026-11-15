@@ -1,10 +1,21 @@
 import { Link, useNavigate, useParams } from '@tanstack/react-router';
 import { useMemo } from 'react';
-import { useMeta, useSpec } from '../api';
+import { updating, useMeta, useSpec } from '../api';
 import { pivot } from '../chart-data';
 import { BarList, Heatmap, TimeChart } from '../components/charts';
 import { DataTable } from '../components/DataTable';
-import { Delta, ErrorNote, GuildIcon, Loading, PageHead, Panel, RangePicker, Tile } from '../components/ui';
+import {
+  Delta,
+  ErrorNote,
+  GuildIcon,
+  Loading,
+  Name,
+  PageHead,
+  Panel,
+  QueryBody,
+  RangePicker,
+  Tile,
+} from '../components/ui';
 import { agoHour, commandLabel, label, ms, num, pct } from '../format';
 import { useRange } from '../range';
 
@@ -43,6 +54,7 @@ export function CommandsPage() {
         actions={<RangePicker value={r.id} onChange={r.setId} />}
       />
       <Panel
+        busy={updating(q)}
         title="All commands"
         subtitle={q.data ? `Unique users count since ${q.data.periodStart} (current salt period)` : undefined}
       >
@@ -65,7 +77,7 @@ export function CommandsPage() {
                 render: (row) => (
                   <>
                     <Link to="/commands/$name" params={{ name: row.command }}>
-                      {commandLabel(row.command, row.kinds)}
+                      <Name>{commandLabel(row.command, row.kinds)}</Name>
                     </Link>{' '}
                     {row.kinds
                       .filter((kind) => OTHER_KINDS[kind])
@@ -204,170 +216,178 @@ export function CommandPage() {
         description={<Link to="/commands">← All commands</Link>}
         actions={<RangePicker value={r.id} onChange={r.setId} />}
       />
-      {detail.error ? <ErrorNote error={detail.error} /> : null}
-      <div className="stack">
-        <div className="grid tiles">
-          <Tile
-            label="Runs"
-            value={num(runs)}
-            sub={d && Date.parse(d.from) > Date.parse(r.range.from) ? 'Detail covers the last 35 days' : undefined}
-          />
-          <Tile
-            label="Failed"
-            value={pct(runs ? ((t?.error ?? 0) + (t?.timeout ?? 0) + (t?.noResponse ?? 0)) / runs : null)}
-          />
-          <Tile label="Over 3 s" value={pct(t?.over3sRate)} />
-          <Tile label="Deferred" value={pct(t?.deferRate)} />
-          <Tile label="Ephemeral" value={pct(t?.ephemeralRate)} />
-          <Tile label="Premium users" value={pct(t?.premiumShare)} />
-          <Tile label="Handler p95" value={ms(t?.handlerP95Ms)} sub="Wrapped handlers only" />
-        </div>
-        <Panel title="Runs over time" subtitle={`Top subcommands · ${tz}`}>
-          {series.isLoading ? (
-            <Loading />
-          ) : (
-            <TimeChart
-              label={`Runs of /${name} over time by subcommand`}
-              x={chart.x}
-              series={chart.series}
-              withTime={r.interval === 'hour'}
-              timezone={tz}
+      {detail.error ? (
+        <ErrorNote error={detail.error} retry={() => void detail.refetch()} />
+      ) : (
+        <div className="stack" aria-busy={updating(detail, series, heat) || undefined}>
+          {d && runs === 0 ? <p className="notice">No runs of {title} in this range.</p> : null}
+          <div className="grid tiles">
+            <Tile
+              label="Runs"
+              value={num(runs)}
+              sub={d && Date.parse(d.from) > Date.parse(r.range.from) ? 'Detail covers the last 35 days' : undefined}
             />
-          )}
-        </Panel>
-        <div className="grid three">
-          <Panel title="Outcomes">
-            <BarList
-              label="Outcomes"
-              rows={[
-                { key: 'ok', name: label('outcome', 'ok'), value: t?.ok ?? 0 },
-                { key: 'error', name: label('outcome', 'error'), value: t?.error ?? 0 },
-                { key: 'timeout', name: label('outcome', 'timeout'), value: t?.timeout ?? 0 },
-                { key: 'no_response', name: label('outcome', 'no_response'), value: t?.noResponse ?? 0 },
-              ].filter((x) => x.value > 0)}
+            <Tile
+              label="Failed"
+              value={pct(runs ? ((t?.error ?? 0) + (t?.timeout ?? 0) + (t?.noResponse ?? 0)) / runs : null)}
             />
+            <Tile label="Over 3 s" value={pct(t?.over3sRate)} />
+            <Tile label="Deferred" value={pct(t?.deferRate)} />
+            <Tile label="Ephemeral" value={pct(t?.ephemeralRate)} />
+            <Tile label="Premium users" value={pct(t?.premiumShare)} />
+            <Tile label="Handler p95" value={ms(t?.handlerP95Ms)} sub="Wrapped handlers only" />
+          </div>
+          <Panel title="Runs over time" subtitle={`Top subcommands · ${tz}`}>
+            <QueryBody query={series}>
+              <TimeChart
+                label={`Runs of ${title} over time by subcommand`}
+                x={chart.x}
+                series={chart.series}
+                withTime={r.interval === 'hour'}
+                timezone={tz}
+              />
+            </QueryBody>
           </Panel>
-          <Panel title="Response time" subtitle="Time to first response, log-scale buckets">
-            <BarList label="Response time distribution" rows={latency} limit={40} />
-          </Panel>
-          <Panel title="Subcommands">
-            <BarList
-              label="Subcommands"
-              rows={(d?.subcommands ?? []).map((s) => ({ key: s.key, name: s.key || '(none)', value: s.value }))}
-            />
-          </Panel>
-          <Panel title="Options used" subtitle="Names only, unless allow-listed">
-            <BarList
-              label="Options used"
-              rows={(d?.options ?? []).map((o) => ({ key: o.key, name: o.key, value: o.value }))}
-            />
-          </Panel>
-          <Panel title="Who runs it">
-            <BarList
-              label="Member tiers"
-              rows={(d?.memberTiers ?? []).map((x) => ({
-                key: String(x.key),
-                name: label('tier', x.key),
-                value: x.value,
-              }))}
-            />
-          </Panel>
-          <Panel title="Install type and context">
-            <BarList
-              label="Install type and context"
-              rows={[
-                ...(d?.installs ?? []).map((x) => ({
-                  key: `i${x.key}`,
-                  name: label('install', x.key),
+          <div className="grid three">
+            <Panel title="Outcomes">
+              <BarList
+                label="Outcomes"
+                rows={[
+                  { key: 'ok', name: label('outcome', 'ok'), value: t?.ok ?? 0 },
+                  { key: 'error', name: label('outcome', 'error'), value: t?.error ?? 0 },
+                  { key: 'timeout', name: label('outcome', 'timeout'), value: t?.timeout ?? 0 },
+                  { key: 'no_response', name: label('outcome', 'no_response'), value: t?.noResponse ?? 0 },
+                ].filter((x) => x.value > 0)}
+              />
+            </Panel>
+            <Panel title="Response time" subtitle="Time to first response, log-scale buckets">
+              <BarList label="Response time distribution" rows={latency} limit={40} />
+            </Panel>
+            <Panel title="Subcommands">
+              <BarList
+                label="Subcommands"
+                rows={(d?.subcommands ?? []).map((s) => ({ key: s.key, name: s.key || '(none)', value: s.value }))}
+              />
+            </Panel>
+            <Panel title="Options used" subtitle="Names only, unless allow-listed">
+              <BarList
+                label="Options used"
+                rows={(d?.options ?? []).map((o) => ({ key: o.key, name: o.key, value: o.value }))}
+              />
+            </Panel>
+            <Panel title="Who runs it">
+              <BarList
+                label="Member tiers"
+                rows={(d?.memberTiers ?? []).map((x) => ({
+                  key: String(x.key),
+                  name: label('tier', x.key),
                   value: x.value,
-                })),
-                ...(d?.contexts ?? []).map((x) => ({
-                  key: `c${x.key}`,
-                  name: label('context', x.key),
+                }))}
+              />
+            </Panel>
+            <Panel title="Install type and context">
+              <BarList
+                label="Install type and context"
+                rows={[
+                  ...(d?.installs ?? []).map((x) => ({
+                    key: `i${x.key}`,
+                    name: label('install', x.key),
+                    value: x.value,
+                  })),
+                  ...(d?.contexts ?? []).map((x) => ({
+                    key: `c${x.key}`,
+                    name: label('context', x.key),
+                    value: x.value,
+                  })),
+                ]}
+              />
+            </Panel>
+            <Panel title="Channel types" subtitle="The kind of channel it was run in, never which channel">
+              <BarList
+                label="Channel types"
+                rows={(d?.channelTypes ?? []).map((x) => ({
+                  key: x.key,
+                  name: label('channel', x.key),
                   value: x.value,
-                })),
-              ]}
-            />
-          </Panel>
-          <Panel title="Channel types" subtitle="The kind of channel it was run in, never which channel">
-            <BarList
-              label="Channel types"
-              rows={(d?.channelTypes ?? []).map((x) => ({
-                key: x.key,
-                name: label('channel', x.key),
-                value: x.value,
-              }))}
-            />
-          </Panel>
-          <Panel title="Languages" subtitle="Discord app language, not location">
-            <BarList
-              label="Languages"
-              rows={(d?.locales ?? []).map((x) => ({ key: x.key, name: x.key, value: x.value }))}
-            />
-          </Panel>
-          <Panel title="Top servers">
-            <BarList
-              label="Top servers"
-              rows={(d?.topServers ?? []).map((s) => ({
-                key: s.key,
-                name: (
-                  <Link to="/servers/$id" params={{ id: s.key }}>
-                    <GuildIcon id={s.key} icon={s.icon} name={s.name ?? s.key} />
-                  </Link>
-                ),
-                value: s.value,
-              }))}
-            />
-          </Panel>
-          <Panel title="Components from this command" subtitle="Buttons and selects on its messages">
-            <BarList
-              label="Components"
-              rows={(d?.components ?? []).map((c) => ({
-                key: `${c.kind}:${c.key}`,
-                name: `${label('kind', c.kind)} ${c.key}`,
-                value: c.value,
-              }))}
-            />
+                }))}
+              />
+            </Panel>
+            <Panel title="Languages" subtitle="Discord app language, not location">
+              <BarList
+                label="Languages"
+                rows={(d?.locales ?? []).map((x) => ({ key: x.key, name: x.key, value: x.value }))}
+              />
+            </Panel>
+            <Panel title="Top servers">
+              <BarList
+                label="Top servers"
+                rows={(d?.topServers ?? []).map((s) => ({
+                  key: s.key,
+                  name: (
+                    <Link to="/servers/$id" params={{ id: s.key }}>
+                      <GuildIcon id={s.key} icon={s.icon} name={s.name ?? s.key} />
+                    </Link>
+                  ),
+                  value: s.value,
+                }))}
+              />
+            </Panel>
+            <Panel title="Components from this command" subtitle="Buttons and selects on its messages">
+              <BarList
+                label="Components"
+                rows={(d?.components ?? []).map((c) => ({
+                  key: `${c.kind}:${c.key}`,
+                  name: (
+                    <>
+                      {label('kind', c.kind)} <Name>{c.key}</Name>
+                    </>
+                  ),
+                  value: c.value,
+                }))}
+              />
+            </Panel>
+          </div>
+          {d && d.optionValues.length > 0 ? (
+            <Panel title="Option values" subtitle="Allow-listed options only">
+              <DataTable
+                caption="Option values"
+                rowKey={(v) => `${v.option}=${v.value}`}
+                rows={d.optionValues}
+                columns={[
+                  { key: 'option', header: 'Option', render: (v) => <Name>{v.option}</Name> },
+                  { key: 'value', header: 'Value', render: (v) => <Name>{v.value}</Name> },
+                  { key: 'runs', header: 'Runs', numeric: true, sort: (v) => v.runs, render: (v) => num(v.runs) },
+                ]}
+              />
+            </Panel>
+          ) : null}
+          {d && d.modals.length > 0 ? (
+            <Panel title="Modal completion" subtitle="Submitted ÷ shown">
+              <DataTable
+                caption="Modal completion"
+                rowKey={(m) => m.customId}
+                rows={d.modals}
+                columns={[
+                  { key: 'id', header: 'Modal', render: (m) => <Name>{m.customId}</Name> },
+                  { key: 'shown', header: 'Shown', numeric: true, render: (m) => num(m.shown) },
+                  { key: 'submitted', header: 'Submitted', numeric: true, render: (m) => num(m.submitted) },
+                  {
+                    key: 'rate',
+                    header: 'Completion',
+                    numeric: true,
+                    render: (m) => pct(m.shown ? m.submitted / m.shown : null),
+                  },
+                ]}
+              />
+            </Panel>
+          ) : null}
+          <Panel title="Peak hours" subtitle={`Runs by hour and weekday · ${tz}`}>
+            <QueryBody query={heat}>
+              <Heatmap label={`Runs of ${title} by hour of day and weekday`} cells={heat.data?.cells ?? []} />
+            </QueryBody>
           </Panel>
         </div>
-        {d && d.optionValues.length > 0 ? (
-          <Panel title="Option values" subtitle="Allow-listed options only">
-            <DataTable
-              caption="Option values"
-              rowKey={(v) => `${v.option}=${v.value}`}
-              rows={d.optionValues}
-              columns={[
-                { key: 'option', header: 'Option', render: (v) => v.option },
-                { key: 'value', header: 'Value', render: (v) => v.value },
-                { key: 'runs', header: 'Runs', numeric: true, sort: (v) => v.runs, render: (v) => num(v.runs) },
-              ]}
-            />
-          </Panel>
-        ) : null}
-        {d && d.modals.length > 0 ? (
-          <Panel title="Modal completion" subtitle="Submitted ÷ shown">
-            <DataTable
-              caption="Modal completion"
-              rowKey={(m) => m.customId}
-              rows={d.modals}
-              columns={[
-                { key: 'id', header: 'Modal', render: (m) => m.customId },
-                { key: 'shown', header: 'Shown', numeric: true, render: (m) => num(m.shown) },
-                { key: 'submitted', header: 'Submitted', numeric: true, render: (m) => num(m.submitted) },
-                {
-                  key: 'rate',
-                  header: 'Completion',
-                  numeric: true,
-                  render: (m) => pct(m.shown ? m.submitted / m.shown : null),
-                },
-              ]}
-            />
-          </Panel>
-        ) : null}
-        <Panel title="Peak hours" subtitle={`Runs by hour and weekday · ${tz}`}>
-          <Heatmap label={`Runs of /${name} by hour of day and weekday`} cells={heat.data?.cells ?? []} />
-        </Panel>
-      </div>
+      )}
     </>
   );
 }
