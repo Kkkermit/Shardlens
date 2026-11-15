@@ -12,7 +12,8 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    sourcemap: true,
+    // The collector ships this build without source maps, so the bundle must not point at one (it would 404).
+    sourcemap: false,
     // No inline scripts or styles: the collector serves a strict CSP (script-src 'self'; style-src 'self').
     assetsInlineLimit: 0,
   },

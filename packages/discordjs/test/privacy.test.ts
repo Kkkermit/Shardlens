@@ -183,6 +183,29 @@ describe('/privacy command', () => {
     expect(collector.events('interaction')).toEqual([]);
   });
 
+  it('erase replies with what the bot could reach, not that everything is gone', async () => {
+    const collector = fakeCollector();
+    const edits: string[] = [];
+    const { client } = makeDiscordClient((url, init) => {
+      if (url.includes('/messages/')) edits.push(String(init.body));
+      return new Response(null, { status: 204 });
+    });
+    const lens = createShardlens(client, {
+      endpoint: 'https://collector.test',
+      apiKey: 'slk_ingest_test',
+      fetch: collector.fetch,
+      flushIntervalMs: 60_000,
+      logger: { warn: () => undefined },
+    });
+    lenses.push(lens);
+    clients.push(client);
+    await settle();
+    await createPrivacyCommand(lens).handle(privacyInteraction(client, 'erase'));
+    // With a daily salt, days before yesterday are beyond the hashes the bot can compute.
+    expect(edits.join('\n')).toContain('this bot can link to you has been deleted');
+    expect(edits.join('\n')).not.toMatch(/everything|all (of )?your/i);
+  });
+
   it('ignores other commands', async () => {
     const { client, lens } = setup();
     const other = Reflect.construct(ChatInputCommandInteraction, [

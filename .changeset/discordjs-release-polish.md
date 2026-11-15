@@ -16,6 +16,10 @@ Runs on every discord.js release it claims, and keeps events whole when values a
   custom event's server ID must be a valid snowflake (a 20-digit one is left out instead of losing the event).
 - An `async` `onOptOutChange` (or one returning any thenable) that rejects is counted, not left as an unhandled
   rejection that could stop the bot.
+- Events the disk spool deletes at its size cap are counted, in `stats().dropped.spool_evicted` (and as
+  `spool_evicted` in SDK health): until now they stayed in `spooled` and were never reported as lost.
+- `/privacy erase` no longer says everything was deleted: in privacy mode an erasure reaches the salt periods the bot
+  still holds (the current and the previous one), and the reply and the `forgetUser()` documentation now say so.
 - `CustomEvents` is exported, so typed custom events can be declared on `@shardlens/discordjs`, which also works with
   pnpm, where `@shardlens/core` isn't resolvable from the bot's code.
 - `saltPeriod` is documented as having no effect (the collector decides) and marked deprecated. The published files no

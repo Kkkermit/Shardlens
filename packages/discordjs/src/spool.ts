@@ -32,10 +32,13 @@ export class FileSpool implements EventSpool {
   #seq = Math.floor(Math.random() * 1_000_000);
   /** Segments the collector accepted that couldn't be deleted (a read-only volume): never handed out again. */
   readonly #acked = new Set<string>();
+  readonly #onEvict: ((events: number) => void) | undefined;
 
-  constructor(dir: string, maxBytes = DEFAULT_MAX_BYTES) {
+  /** `onEvict` hears how many unsent events each batch evicted at the size cap held: they are lost. */
+  constructor(dir: string, maxBytes = DEFAULT_MAX_BYTES, onEvict?: (events: number) => void) {
     this.#dir = dir;
     this.#maxBytes = Number.isFinite(maxBytes) ? Math.max(1024, maxBytes) : DEFAULT_MAX_BYTES;
+    this.#onEvict = onEvict;
   }
 
   async write(events: readonly WireEvent[]): Promise<boolean> {
@@ -49,11 +52,16 @@ export class FileSpool implements EventSpool {
     // Make room by evicting the oldest batches: recent data matters most once the collector is back.
     for (const segment of segments) {
       if (bytes + size <= this.#maxBytes) break;
-      const removed = await unlink(join(this.#dir, segment.name)).then(
-        () => true,
-        (error: unknown) => (error as { code?: unknown }).code === 'ENOENT', // another process took it
+      const path = join(this.#dir, segment.name);
+      // Read before deleting, to count what is lost. Not a batch the collector already has.
+      const text = this.#acked.has(segment.name) ? undefined : await readFile(path, 'utf8').catch(() => undefined);
+      const outcome = await unlink(path).then(
+        () => 'evicted' as const,
+        // ENOENT: another process replayed or evicted it first.
+        (error: unknown) => ((error as { code?: unknown }).code === 'ENOENT' ? ('gone' as const) : ('kept' as const)),
       );
-      if (removed) bytes -= segment.size;
+      if (outcome !== 'kept') bytes -= segment.size;
+      if (outcome === 'evicted' && text !== undefined) this.#onEvict?.(parse(text).length);
     }
     if (bytes + size > this.#maxBytes) return false;
     const ms = String(Date.now()).padStart(13, '0');

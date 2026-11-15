@@ -75,6 +75,22 @@ describe('FileSpool', () => {
     expect((oldest?.events[0] as (WireEvent & { name: string }) | undefined)?.name).not.toBe('batch_0');
   });
 
+  it('reports how many unsent events each eviction lost', async () => {
+    const dir = join(tempDir(), 'spool');
+    let evicted = 0;
+    const spool = new FileSpool(dir, 2048, (events) => {
+      evicted += events;
+    });
+    for (let i = 0; i < 20; i++) await spool.write([ev(`batch_${i}`), ev(`batch_${i}`)]);
+    let left = 0;
+    for (let batch = await spool.next(); batch; batch = await spool.next()) {
+      left += batch.events.length;
+      await spool.ack(batch.id);
+    }
+    expect(evicted).toBeGreaterThan(0);
+    expect(evicted + left).toBe(40);
+  });
+
   it('never lets two processes sharing a folder replace each other’s batches', async () => {
     const dir = join(tempDir(), 'spool');
     const now = vi.spyOn(Date, 'now').mockReturnValue(1_763_052_121_000);
@@ -214,14 +230,15 @@ describe('disk spool end to end', () => {
     };
   }
 
-  async function bot(url: string, dir: string) {
+  async function bot(url: string, dir: string, limits: { maxBytes?: number; maxBatchSize?: number } = {}) {
     const { client } = makeDiscordClient(() => new Response(null, { status: 204 }));
     const lens = createShardlens(client, {
       endpoint: url,
       apiKey: 'slk_ingest_spool',
       flushIntervalMs: 60_000,
       disable: ['process'],
-      spool: { dir },
+      spool: { dir, maxBytes: limits.maxBytes },
+      maxBatchSize: limits.maxBatchSize,
       logger: { warn: () => undefined },
     });
     for (let i = 0; i < 50 && !lens.client.ready; i++) await new Promise((r) => setTimeout(r, 10));
@@ -251,6 +268,27 @@ describe('disk spool end to end', () => {
     expect(collector.stored.size).toBe(21);
     expect(readdirSync(dir)).toEqual([]);
     expect(second.lens.stats().replayed).toBe(20);
+  });
+
+  it('counts what the spool evicts at its size cap as dropped', async () => {
+    const collector = await flakyCollector();
+    const dir = join(tempDir(), 'spool');
+    const { client, lens } = await bot(collector.url, dir, { maxBytes: 1024, maxBatchSize: 5 });
+    for (let i = 0; i < 60; i++) lens.track('ticket_opened', { i });
+    await lens.flush();
+    await lens.shutdown({ timeoutMs: 500 });
+    client.removeAllListeners();
+
+    let onDisk = 0;
+    const spool = new FileSpool(dir, 1024);
+    for (let batch = await spool.next(); batch; batch = await spool.next()) {
+      onDisk += batch.events.length;
+      await spool.ack(batch.id);
+    }
+    const stats = lens.stats();
+    expect(stats.dropped.spool_evicted).toBeGreaterThan(0);
+    expect(stats.spooled).toBe(onDisk + (stats.dropped.spool_evicted ?? 0));
+    expect(stats.internalErrors.spool_evicted).toBeGreaterThan(0);
   });
 });
 

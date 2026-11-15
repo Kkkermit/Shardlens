@@ -84,7 +84,10 @@ export interface HandlerResult {
   error?: unknown;
 }
 
-/** SDK health, including interactions still waiting for a response. */
+/**
+ * SDK health, including interactions still waiting for a response. `dropped.spool_evicted` counts spooled events the
+ * disk spool dropped at its size cap, which `spooled` still includes.
+ */
 export interface ShardlensStats extends ClientStats {
   /** Interactions waiting for their first response or their wrapped handler, sent after 10 seconds at most. */
   pendingInteractions: number;
@@ -132,8 +135,10 @@ export interface Shardlens {
   /** Whether {@link Shardlens.optOut} (or the `optedOut` option) covers this user in this process. */
   isOptedOut(userId: string): boolean;
   /**
-   * Deletes everything the collector stored about a user (right to erasure). Does not opt them out of future
-   * collection; call {@link Shardlens.optOut} as well if they asked for that. Never throws.
+   * Deletes what the collector stored about a user (right to erasure): in privacy mode, the rows under the hashes
+   * this bot can still compute, which are those of the current salt period and the previous one; in audit mode,
+   * every period whose salt still exists. Does not opt them out of future collection; call
+   * {@link Shardlens.optOut} as well if they asked for that. Never throws.
    */
   forgetUser(userId: string): Promise<{ erased: number } | undefined>;
   /**
@@ -195,13 +200,18 @@ function attach(client: Client, options: ShardlensOptions): Shardlens {
     warn('spool', "Shardlens: spool must be { dir: './shardlens-spool' }; events are kept in memory only.");
   }
 
+  // Core counts what it could not spool (`spool_full`) but can't see what the spool later evicts at its size cap.
+  let spoolEvicted = 0;
   const transport = new ShardlensClient<EventInput>({
     endpoint: options.endpoint,
     apiKey: options.apiKey,
     exporters: options.exporters,
     spool:
       typeof spoolDir === 'string'
-        ? new FileSpool(spoolDir, typeof options.spool === 'object' ? options.spool.maxBytes : undefined)
+        ? new FileSpool(spoolDir, typeof options.spool === 'object' ? options.spool.maxBytes : undefined, (events) => {
+            spoolEvicted += events;
+            transport.count('spool_evicted');
+          })
         : undefined,
     sdk: { name: SDK_NAME, version: SDK_VERSION },
     mode,
@@ -635,7 +645,12 @@ function attach(client: Client, options: ShardlensOptions): Shardlens {
     },
 
     stats() {
-      return { ...transport.stats(), pendingInteractions: tracker?.pendingCount ?? 0 };
+      const stats = transport.stats();
+      return {
+        ...stats,
+        dropped: { ...stats.dropped, spool_evicted: spoolEvicted },
+        pendingInteractions: tracker?.pendingCount ?? 0,
+      };
     },
   };
 }

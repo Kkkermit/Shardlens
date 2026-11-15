@@ -75,6 +75,8 @@ are dropped first once that fills up. With `spool: { dir: './shardlens-spool' }`
   The collector ignores events it already has, so a replay never counts anything twice.
 - Spool files hold hashed events only. User IDs, and audit-mode identities, are never written to disk.
 - The shards of one bot can share the folder: `maxBytes` caps the folder, and any of them replays what is there.
+- At the cap, the oldest batches are deleted to make room. Those events are lost, and counted in
+  `lens.stats().dropped.spool_evicted`.
 - Erasing a user (`forgetUser`, `/privacy erase`) also removes their events from the spool.
 
 ### Member counts

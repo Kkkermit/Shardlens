@@ -4,7 +4,7 @@ import { api, errorText } from '../api';
 import { NeedsDiscord, useAdminGate } from '../components/AdminGate';
 import { DataTable } from '../components/DataTable';
 import { Name, PageHead, Panel, QueryBody, StatusMessage, usePanelStatus } from '../components/ui';
-import { ago, dateTime, money, num } from '../format';
+import { ago, dateTime, money, num, quoted } from '../format';
 import { changedFields, isSnowflake, permissionBitsError } from '../forms';
 
 interface Settings {
@@ -114,13 +114,13 @@ export function SettingsPage() {
     }
   };
   const revokeKey = async (k: Key) => {
-    const name = k.label ? `“${k.label}”` : 'this key';
-    if (!window.confirm(`Revoke ${name}? Anything using it stops working immediately.`)) return;
+    if (!window.confirm(`Revoke ${k.label ? quoted(k.label) : 'this key'}? Anything using it stops working immediately.`))
+      return;
     say('keys', '');
     try {
       await api(`/v1/keys/${k.id}`, { method: 'DELETE', body: {} });
       if (newKey?.id === k.id) setNewKey(undefined);
-      say('keys', `${k.label ? `“${k.label}”` : 'The key'} is revoked.`);
+      say('keys', `${k.label ? quoted(k.label) : 'The key'} is revoked.`);
     } catch (err) {
       say('keys', errorText(err));
     }

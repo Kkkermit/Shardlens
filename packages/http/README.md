@@ -5,7 +5,8 @@ URL) instead of the gateway: Cloudflare Workers, Deno, Bun, or Node.js with `@di
 [Shardlens collector](https://kkkermit.github.io/Shardlens/getting-started/quick-start/) that you run yourself.
 
 - Web-standard APIs only (`fetch`, Web Crypto, `CompressionStream`): no Node built-ins, one small dependency.
-- User IDs are hashed inside your bot. Interaction tokens, option values and what users type never leave it.
+- User IDs are hashed inside your bot. Interaction tokens and what users type never leave it; option values only if
+  you list the option in `captureOptionValues`.
 - Never changes your answer to Discord, and never throws into your handler.
 
 ```sh

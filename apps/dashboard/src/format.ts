@@ -159,6 +159,12 @@ export function label(dimension: string, key: string | null | undefined): string
   return LABELS[dimension]?.[key] ?? key;
 }
 
+/**
+ * A name people chose (an alert, a report, a key), quoted inside a sentence that is shown as plain text: a status
+ * message or a confirmation. Isolated like `Name`, so a right-to-left override in it can't reorder the sentence.
+ */
+export const quoted = (name: string) => `“\u2068${name}\u2069”`;
+
 /** A command's name as people type it: `/ping` once it has run as a slash command, plain for prefix commands and menus. */
 export function commandLabel(name: string, kinds: readonly string[]): string {
   return kinds.includes('chat_input') ? `/${name}` : name;

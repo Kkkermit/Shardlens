@@ -174,7 +174,8 @@ and with a badly signed request, which must get a `401`: the module answers both
 For every interaction except PING, exactly the same fields as the [discord.js adapter](../../concepts/data-collected/):
 command, subcommand, options used, context, channel type, install type, locale, member tier, premium, the response type, and how long
 your answer took against Discord's 3-second deadline. The user ID is hashed before anything is sent. The interaction
-token, option values and anything a user typed never leave your bot.
+token and what users type never leave your bot; nor do option values, unless you list the option in
+`captureOptionValues`.
 
 - **Buttons, selects and modals** are recorded by their custom ID, with numbers and IDs replaced by `*`. Buttons and
   selects are attributed to the command that created their message, and a command that opens a modal is linked to the

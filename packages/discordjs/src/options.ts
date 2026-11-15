@@ -77,8 +77,9 @@ export interface ShardlensOptions {
   /**
    * Keep events on disk during long collector outages and across restarts: `{ dir: './shardlens-spool' }`. Used when
    * memory is half full while the collector is unreachable, and on `shutdown()` for anything unsent; replayed first
-   * when the collector is back. Capped at `maxBytes` (default 100 MB, oldest dropped first). Files hold hashed events
-   * only, never user IDs or audit-mode identities. Default: off (memory only).
+   * when the collector is back. Capped at `maxBytes` (default 100 MB): at the cap the oldest batches are dropped first,
+   * and counted in `stats().dropped.spool_evicted`. Files hold hashed events only, never user IDs or audit-mode
+   * identities. Default: off (memory only).
    */
   spool?: { dir: string; maxBytes?: number | undefined } | undefined;
   /**

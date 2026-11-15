@@ -52,13 +52,20 @@ export function Root() {
   return <Shell demo={me.data.method === 'demo'} />;
 }
 
-/** After navigating, focus the new page's heading, so screen readers announce it and Tab starts from the content. */
+/**
+ * After navigating, focus the new page's heading, so screen readers announce it and Tab starts from the content.
+ * The resolved location, not the pending one: that changes while the old page is still shown, and a heading focused
+ * then is removed a moment later, leaving the focus on the body.
+ */
 function useFocusOnNavigate() {
-  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const pathname = useRouterState({ select: (state) => state.resolvedLocation?.pathname });
   const previous = useRef(pathname);
   useEffect(() => {
     if (previous.current === pathname) return;
+    const first = previous.current === undefined;
     previous.current = pathname;
+    // The first page keeps the browser's own starting point.
+    if (first) return;
     const target = document.querySelector<HTMLElement>('#main h1') ?? document.getElementById('main');
     if (!target) return;
     target.tabIndex = -1;

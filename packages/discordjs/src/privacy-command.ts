@@ -25,7 +25,7 @@ export interface PrivacyCommand {
 
 /**
  * A ready-made `/privacy` command: `info` explains what is collected, `optout` and `optin` stop and resume collection
- * for the user, `erase` deletes what was stored about them and opts them out. Replies are ephemeral. Opt-outs live in
+ * for the user, `erase` deletes what `forgetUser()` can reach of them and opts them out. Replies are ephemeral. Opt-outs live in
  * memory: persist them with `onOptOutChange` and pass them back with `optedOut`.
  */
 export function createPrivacyCommand(lens: Shardlens, options: PrivacyCommandOptions = {}): PrivacyCommand {
@@ -75,10 +75,12 @@ export function createPrivacyCommand(lens: Shardlens, options: PrivacyCommandOpt
           lens.optOut(userId);
           await i.deferReply({ flags: MessageFlags.Ephemeral });
           const result = await lens.forgetUser(userId);
+          // Not "everything was deleted": with a daily salt, the days before yesterday are beyond the hashes the bot
+          // can compute, and stay until they expire.
           await reply(
             i,
             result
-              ? 'Your recorded usage has been deleted, and you are opted out of further recording.'
+              ? 'The recorded usage this bot can link to you has been deleted, and you are opted out of further recording. Anything older can no longer be linked to you by this bot and expires on its own.'
               : 'You are opted out of further recording. Deleting past records failed; please try again later or contact the bot owner.',
           );
         } else {

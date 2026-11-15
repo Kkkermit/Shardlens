@@ -4,7 +4,7 @@ import { api, errorText } from '../api';
 import { NeedsDiscord, useAdminGate } from '../components/AdminGate';
 import { DataTable } from '../components/DataTable';
 import { Name, PageHead, Panel, QueryBody, StatusMessage, usePanelStatus } from '../components/ui';
-import { ago } from '../format';
+import { ago, quoted } from '../format';
 
 interface Report {
   id: string;
@@ -113,8 +113,8 @@ export function ReportsPage() {
                                 `/v1/reports/${r.id}`,
                                 'PATCH',
                                 { enabled: !r.enabled },
-                                r.enabled ? `“${r.name}” is off.` : `“${r.name}” is on.`,
-                                `Couldn't change “${r.name}”.`,
+                                r.enabled ? `${quoted(r.name)} is off.` : `${quoted(r.name)} is on.`,
+                                `Couldn't change ${quoted(r.name)}.`,
                               )
                             }
                           />
@@ -127,8 +127,8 @@ export function ReportsPage() {
                               `/v1/reports/${r.id}/send`,
                               'POST',
                               {},
-                              `“${r.name}” sent.`,
-                              `Sending “${r.name}” failed.`,
+                              `${quoted(r.name)} sent.`,
+                              `Sending ${quoted(r.name)} failed.`,
                             )
                           }
                         >
@@ -137,13 +137,13 @@ export function ReportsPage() {
                         <button
                           type="button"
                           onClick={() => {
-                            if (window.confirm(`Delete the report “${r.name}”?`))
+                            if (window.confirm(`Delete the report ${quoted(r.name)}?`))
                               void action(
                                 `/v1/reports/${r.id}`,
                                 'DELETE',
                                 {},
-                                `“${r.name}” deleted.`,
-                                `Couldn't delete “${r.name}”.`,
+                                `${quoted(r.name)} deleted.`,
+                                `Couldn't delete ${quoted(r.name)}.`,
                               );
                           }}
                         >

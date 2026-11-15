@@ -25,14 +25,17 @@ describe('under waitUntil', () => {
     const first = new Ctx();
     await handle(slash({ data: { id: '445566778899001122', name: 'first', type: 1 } }), first);
     const firstDone = first.settle();
-    await vi.advanceTimersByTimeAsync(5_000);
+    // Twice the two seconds a request waits for settings: before queueing, and before sending.
+    await vi.advanceTimersByTimeAsync(4_000);
     await firstDone;
 
     const second = new Ctx();
     await handle(slash({ data: { id: '445566778899001122', name: 'second', type: 1 } }), second);
-    const secondDone = second.settle();
-    await vi.advanceTimersByTimeAsync(5_000);
-    await secondDone;
+    // The second request gives up on the first one's settings after two seconds, then asks itself. From there on
+    // time is real: hashing is, and must not race a faked clock.
+    await vi.advanceTimersByTimeAsync(2_000);
+    vi.useRealTimers();
+    await second.settle();
 
     expect(collector.configRequests()).toBe(2);
     expect(collector.events('interaction').map((e) => e.command)).toEqual(['second']);
@@ -78,15 +81,21 @@ describe('under waitUntil', () => {
   });
 
   it('backs off while the collector stays unreachable, instead of asking on every request', async () => {
+    // Only the clock is faked, and stands still: the back-off is counted on it.
+    vi.useFakeTimers({ toFake: ['Date'] });
     const { collector, lens } = setup({}, { config: () => Promise.resolve(new Response('down', { status: 503 })) });
     const handle = lens.wrapInteractionHandler(answer);
-    for (let i = 0; i < 6; i++) {
+    const request = async () => {
       const ctx = new Ctx();
       await handle(slash(), ctx);
       await ctx.settle();
-    }
-    // The first client, then one replacement; the next waits at least a second.
+    };
+    for (let i = 0; i < 6; i++) await request();
+    // The first client, then one replacement; the next waits a second.
     expect(collector.configRequests()).toBe(2);
+    vi.setSystemTime(Date.now() + 1_001);
+    await request();
+    expect(collector.configRequests()).toBe(3);
   });
 
   it('never replaces a client that has no collector to send to', async () => {

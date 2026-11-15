@@ -4,7 +4,7 @@ import { api, errorText, useMeta } from '../api';
 import { NeedsDiscord, useAdminGate } from '../components/AdminGate';
 import { DataTable } from '../components/DataTable';
 import { Name, PageHead, Panel, QueryBody, StatusMessage, usePanelStatus } from '../components/ui';
-import { ago, dateTime, decimal, number } from '../format';
+import { ago, dateTime, decimal, number, quoted } from '../format';
 
 interface AlertRule {
   id: string;
@@ -129,8 +129,8 @@ export function AlertsPage() {
                                 `/v1/alerts/${r.id}`,
                                 'PATCH',
                                 { enabled: !r.enabled },
-                                r.enabled ? `“${r.name}” is off.` : `“${r.name}” is on.`,
-                                `Couldn't change “${r.name}”.`,
+                                r.enabled ? `${quoted(r.name)} is off.` : `${quoted(r.name)} is on.`,
+                                `Couldn't change ${quoted(r.name)}.`,
                               )
                             }
                           />
@@ -143,8 +143,8 @@ export function AlertsPage() {
                               `/v1/alerts/${r.id}/test`,
                               'POST',
                               {},
-                              `Test message for “${r.name}” sent.`,
-                              `The test message for “${r.name}” failed.`,
+                              `Test message for ${quoted(r.name)} sent.`,
+                              `The test message for ${quoted(r.name)} failed.`,
                             )
                           }
                         >
@@ -153,13 +153,13 @@ export function AlertsPage() {
                         <button
                           type="button"
                           onClick={() => {
-                            if (window.confirm(`Delete the alert “${r.name}”?`))
+                            if (window.confirm(`Delete the alert ${quoted(r.name)}?`))
                               void action(
                                 `/v1/alerts/${r.id}`,
                                 'DELETE',
                                 {},
-                                `“${r.name}” deleted.`,
-                                `Couldn't delete “${r.name}”.`,
+                                `${quoted(r.name)} deleted.`,
+                                `Couldn't delete ${quoted(r.name)}.`,
                               );
                           }}
                         >
