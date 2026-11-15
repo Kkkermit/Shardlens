@@ -4,12 +4,12 @@
 
 ```ts
 
+import { BaseInteraction } from 'discord.js';
 import { ChatInputCommandInteraction } from 'discord.js';
 import { Client } from 'discord.js';
 import { ClientStats } from '@shardlens/core';
 import { CustomEventName } from '@shardlens/core';
 import { CustomEventProps } from '@shardlens/core';
-import { Interaction } from 'discord.js';
 import { Logger } from '@shardlens/core';
 import { Message } from 'discord.js';
 import { RESTPostAPIChatInputApplicationCommandsJSONBody } from 'discord.js';
@@ -22,6 +22,12 @@ export function createPrivacyCommand(lens: Shardlens, options?: PrivacyCommandOp
 
 // @public
 export function createShardlens(client: Client, options: ShardlensOptions): Shardlens;
+
+// @public
+export interface HandlerResult {
+    durationMs?: number | undefined;
+    error?: unknown;
+}
 
 // @public
 export interface MessageCommandInfo {
@@ -67,6 +73,8 @@ export interface Shardlens {
     forgetUser(userId: string): Promise<{
         erased: number;
     } | undefined>;
+    handlerFinished(interaction: BaseInteraction, result?: HandlerResult): void;
+    handlerStarted(interaction: BaseInteraction): void;
     // (undocumented)
     isOptedOut(userId: string): boolean;
     // (undocumented)
@@ -80,7 +88,7 @@ export interface Shardlens {
     stats(): ShardlensStats;
     track<N extends CustomEventName>(name: N, props?: CustomEventProps<N>, context?: TrackContext): void;
     trackMessageCommand(message: Message, run: MessageCommandRun): void;
-    wrap<A extends [Interaction, ...unknown[]], R>(handler: (...args: A) => R | Promise<R>): (...args: A) => Promise<Awaited<R>>;
+    wrap<A extends [BaseInteraction, ...unknown[]], R>(handler: (...args: A) => R | Promise<R>): (...args: A) => Promise<Awaited<R>>;
     wrapMessageCommand<A extends [Message, ...unknown[]], R>(command: string | MessageCommandInfo, handler: (...args: A) => R | Promise<R>): (...args: A) => Promise<Awaited<R>>;
 }
 

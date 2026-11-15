@@ -1,8 +1,8 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { doctor, init, newKey, privacyParagraph } from '../src/commands.js';
+import { doctor, init, newKey, privacyParagraph, readBotEnv } from '../src/commands.js';
 import { run } from '../src/run.js';
 
 const dirs: string[] = [];
@@ -46,8 +46,16 @@ describe('init', () => {
     const dir = await mkdtemp(join(tmpdir(), 'shardlens-init-'));
     dirs.push(dir);
     const result = await init({ dir, domain: 'stats.example.com', appId: '1234567890123456789' });
-    expect(result.written).toEqual(['docker-compose.yml', 'Caddyfile', '.env']);
+    expect(result.written).toEqual(['docker-compose.yml', 'Caddyfile', '.env', 'bot.env']);
     const env = await readFile(join(dir, '.env'), 'utf8');
+    // bot.env holds exactly what the bot needs: the collector's address and the same ingest key, readable by its owner.
+    const bot = await readFile(join(dir, 'bot.env'), 'utf8');
+    const ingest = /^SHARDLENS_INGEST_KEY=(slk_ingest_[\w-]{43})$/m.exec(env)?.[1];
+    expect(ingest).toBeDefined();
+    expect(bot).toContain(`SHARDLENS_INGEST_KEY=${ingest}`);
+    expect(bot).toContain('SHARDLENS_URL=https://stats.example.com');
+    expect(bot).not.toMatch(/READ_KEY|SESSION_SECRET|SETTINGS_KEY|POSTGRES_PASSWORD/);
+    if (process.platform !== 'win32') expect((await stat(join(dir, 'bot.env'))).mode & 0o777).toBe(0o600);
     expect(env).toMatch(/^SHARDLENS_INGEST_KEY=slk_ingest_[\w-]{43}$/m);
     expect(env).toMatch(/^SHARDLENS_SETTINGS_KEY=.{44}$/m);
     expect(env).toContain('SHARDLENS_PUBLIC_URL=https://stats.example.com');
@@ -84,6 +92,22 @@ describe('privacy', () => {
     expect(audit).toContain('user ID, username and avatar');
     expect(privacyParagraph({ audit: true, idsOnly: true })).not.toContain('username');
     expect(audit).toContain('"category"');
+  });
+});
+
+describe('readBotEnv', () => {
+  it('reads the two settings from a .env without changing the environment', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'shardlens-botenv-'));
+    expect(await readBotEnv(dir)).toEqual({});
+    const key = `slk_ingest_${'C'.repeat(43)}`;
+    await writeFile(
+      join(dir, '.env'),
+      `DISCORD_TOKEN=abc\nSHARDLENS_URL=https://stats.example.com\nSHARDLENS_INGEST_KEY="${key}"\n`,
+    );
+    expect(await readBotEnv(dir)).toEqual({ file: join(dir, '.env'), url: 'https://stats.example.com', key });
+    expect(process.env.SHARDLENS_INGEST_KEY).not.toBe(key);
+    await writeFile(join(dir, '.env'), 'SHARDLENS_URL=\n');
+    expect(await readBotEnv(dir)).toEqual({ file: join(dir, '.env') });
   });
 });
 

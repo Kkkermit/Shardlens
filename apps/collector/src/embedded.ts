@@ -10,6 +10,9 @@ import { startCollector } from './app.js';
 import type { Config } from './env.js';
 import { applyMigrations } from './migrate.js';
 import { PG_COMPATIBLE_PARSERS, pgliteDb } from './storage/pglite.js';
+import { SINK_URL, type SinkSettings } from './storage/sink.js';
+
+export type { EventSink, SinkSettings, StoredEvent } from './storage/sink.js';
 
 export interface EmbeddedCollectorOptions {
   /** Folder for the database and the generated secrets. Created if missing. Back it up, and keep it private. */
@@ -33,6 +36,12 @@ export interface EmbeddedCollectorOptions {
   trustProxy?: boolean | undefined;
   /** Collector log level. Default `warn`, so your bot's logs stay quiet. */
   logLevel?: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent' | undefined;
+  /**
+   * Also copy every accepted event into your own database: `{ to: process.env.MONGODB_URI }` for MongoDB, or a
+   * `mysql://`, `mariadb://`, `postgres://` or `sqlite:` URL, or an {@link EventSink} you write. The dashboard keeps
+   * using the embedded database. Copies hold hashed users only, and erasure and retention reach them.
+   */
+  sink?: SinkSettings | undefined;
 }
 
 export interface EmbeddedCollector {
@@ -79,6 +88,9 @@ function loadSecrets(dataDir: string): Secrets {
 export async function startEmbeddedCollector(options: EmbeddedCollectorOptions): Promise<EmbeddedCollector> {
   if (!/^\d{17,20}$/.test(options.appId))
     throw new Error('startEmbeddedCollector: appId must be your Discord application ID');
+  if (typeof options.sink?.to === 'string' && !SINK_URL.test(options.sink.to)) {
+    throw new Error('startEmbeddedCollector: sink.to must be a mongodb:, mysql:, mariadb:, postgres: or sqlite: URL');
+  }
   let PGlite: typeof import('@electric-sql/pglite').PGlite;
   try {
     ({ PGlite } = await import('@electric-sql/pglite'));
@@ -115,6 +127,7 @@ export async function startEmbeddedCollector(options: EmbeddedCollectorOptions):
       port,
       host,
       logLevel: options.logLevel ?? 'warn',
+      sink: options.sink,
     };
     const collector = await startCollector(config, db, migrationsApplied);
     const listening = new URL(collector.address);

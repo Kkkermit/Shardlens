@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ShardlensClient, uuidv7, type WireEvent } from '@shardlens/core';
 import { afterAll, describe, expect, it } from 'vitest';
-import { type EmbeddedCollector, startEmbeddedCollector } from '../src/embedded.js';
+import { type EmbeddedCollector, type EventSink, type StoredEvent, startEmbeddedCollector } from '../src/embedded.js';
 
 const APP_ID = '1234567890123456789';
 const dataDir = mkdtempSync(join(tmpdir(), 'shardlens-embedded-'));
@@ -85,6 +85,60 @@ describe('embedded collector (PGlite)', () => {
     expect(collector.readKey).toBe(before.readKey);
     const events = await query(collector, { kind: 'events', range: range() });
     expect(events.body.rows).toEqual([expect.objectContaining({ name: 'ticket_opened', count: 2 })]);
+  });
+
+  it('copies events into a sink you write, without the raw user ID', { timeout: 60_000 }, async () => {
+    const stored: StoredEvent[] = [];
+    const sink: EventSink = {
+      name: 'mine',
+      write: async (events) => void stored.push(...events),
+      erase: async () => 0,
+      expire: async () => 0,
+      close: async () => undefined,
+    };
+    const own = mkdtempSync(join(tmpdir(), 'shardlens-embedded-sink-'));
+    const withSink = await startEmbeddedCollector({
+      dataDir: own,
+      appId: APP_ID,
+      port: 0,
+      logLevel: 'silent',
+      sink: { to: sink },
+    });
+    try {
+      const client = new ShardlensClient({
+        endpoint: withSink.url,
+        apiKey: withSink.ingestKey,
+        sdk: { name: '@shardlens/test', version: '0.0.0' },
+        source: () => ({ shards: [0], instance: 'embedded-sink-test' }),
+        logger: { warn: () => undefined },
+      });
+      await client.idle();
+      client.enqueueWithUser(
+        '300000000000000009',
+        Date.now(),
+        2,
+        (hash) =>
+          ({ id: uuidv7(), ts: Date.now(), type: 'custom', name: 'shop_opened', props: {}, user: hash }) as WireEvent,
+      );
+      await client.idle();
+      await client.flush();
+      await client.shutdown({ timeoutMs: 1_000 });
+    } finally {
+      await withSink.close(); // flushes the sink
+      rmSync(own, { recursive: true, force: true });
+    }
+    // Every accepted event is copied, the SDK's own health report included.
+    const custom = stored.filter((e) => e.type === 'custom');
+    expect(custom.map((e) => e.data.name)).toEqual(['shop_opened']);
+    expect(custom[0]?.userHash).toMatch(/^[0-9a-f]{32}$/);
+    expect(stored.map((e) => e.type)).toContain('sdk_health');
+    expect(JSON.stringify(stored)).not.toContain('300000000000000009');
+  });
+
+  it('refuses a sink URL it cannot use', async () => {
+    await expect(
+      startEmbeddedCollector({ dataDir, appId: APP_ID, port: 0, sink: { to: 'redis://localhost:6379' } }),
+    ).rejects.toThrow(/sink\.to/);
   });
 
   it('refuses requests without a key, like the standalone collector', async () => {

@@ -1,0 +1,139 @@
+---
+title: Your own database
+description: Copy every event into the MongoDB, MySQL, MariaDB, PostgreSQL or SQLite database your bot already uses.
+sidebar:
+  order: 4.5
+---
+
+import { Aside, Code, TabItem, Tabs } from '@astrojs/starlight/components';
+import ownDatabase from '../../../../snippets/own-database.ts?raw';
+
+Your bot may already have a database. Point Shardlens at it, and every event the collector accepts is also written
+there, so you can query your bot's usage with the tools you already have, join it with your own data, or keep it for
+longer.
+
+The dashboard still runs on the collector's own store: PostgreSQL with Docker, or the built-in database in
+[embedded mode](../embedded/), which needs no database server at all. Its rollups, histograms, unique-user counts and
+funnels are built on PostgreSQL, so your database holds a copy of the events rather than replacing it.
+
+## Turn it on
+
+Set `SHARDLENS_SINK_URL` on the collector (in Docker Compose, in `.env`) and restart it:
+
+<Tabs>
+  <TabItem label="MongoDB">
+
+```sh
+SHARDLENS_SINK_URL=mongodb+srv://user:password@cluster0.example.mongodb.net/mybot
+```
+
+MongoDB 5 or newer, including Atlas. The database is the one in the URL (`mybot` here), or `shardlens` if the URL
+names none.
+
+  </TabItem>
+  <TabItem label="MySQL / MariaDB">
+
+```sh
+SHARDLENS_SINK_URL=mysql://user:password@db.example.com:3306/mybot
+# MariaDB: the same, starting with mariadb://
+```
+
+MySQL 8 or MariaDB 10.5 and newer. The database must exist; the table is created.
+
+  </TabItem>
+  <TabItem label="PostgreSQL">
+
+```sh
+SHARDLENS_SINK_URL=postgres://user:password@db.example.com:5432/mybot
+```
+
+Any PostgreSQL 13 or newer (Supabase, Neon, RDS), separate from the collector's database.
+
+  </TabItem>
+  <TabItem label="SQLite">
+
+```sh
+SHARDLENS_SINK_URL=sqlite:/data/shardlens-events.db
+```
+
+A file on the collector's machine, through Node's built-in SQLite. The file is created. SQLite suits
+[embedded mode](../embedded/) best: in Docker Compose the collector's file system is read-only, so mount a volume
+for the file's folder first.
+
+  </TabItem>
+</Tabs>
+
+In embedded mode, pass the same URL (or a sink of your own) to `startEmbeddedCollector`:
+
+<Code code={ownDatabase} lang="ts" title="bot.ts" />
+
+The collector log says `sink` with the database's name when it starts. If the database is unreachable, the collector
+starts anyway, logs why once a minute (with any password removed), and keeps trying.
+
+| Setting                         | Default            | What it does                                                                     |
+| ------------------------------- | ------------------ | -------------------------------------------------------------------------------- |
+| `SHARDLENS_SINK_URL`            | off                | Where to copy events.                                                            |
+| `SHARDLENS_SINK_TABLE`          | `shardlens_events` | Table or collection name.                                                        |
+| `SHARDLENS_SINK_RETENTION_DAYS` | `35`               | Copies older than this are deleted every six hours (1 to 3,650).                 |
+| `SHARDLENS_SINK_EVENTS`         | every type         | Comma-separated event types to copy, for example `interaction,message_command,custom`. |
+
+## What is stored
+
+One row (or document) per event, with these columns. In MongoDB the event's own fields sit at the top level of the
+document instead of in `data`, and `id` is `_id`.
+
+| Column        | What it holds                                                                                |
+| ------------- | -------------------------------------------------------------------------------------------- |
+| `id`          | The event's UUIDv7. A retried batch is stored once.                                          |
+| `ts`          | When the event happened (UTC).                                                               |
+| `app_id`      | Your application ID.                                                                         |
+| `env`         | The SDK's `environment`, such as `production`.                                               |
+| `bot_release` | The SDK's `release`, if you set it.                                                          |
+| `type`        | `interaction`, `message_command`, `custom`, `guild_join`, `rest_window` and so on.          |
+| `guild_id`    | The server, when the event has one.                                                          |
+| `user_hash`   | The salted user hash (32 hex characters), when the event has a user.                         |
+| `salt_period` | The salt period of `user_hash`, such as `2026-11`.                                           |
+| `data`        | The whole event, as listed on [Data collected](../../concepts/data-collected/).              |
+
+```sql
+-- Prefix and slash runs per command this week (MySQL; PostgreSQL uses data->>'command')
+SELECT type, JSON_UNQUOTE(JSON_EXTRACT(data, '$.command')) AS command, count(*) AS runs
+  FROM shardlens_events
+ WHERE type IN ('interaction', 'message_command') AND ts > NOW() - INTERVAL 7 DAY
+ GROUP BY 1, 2 ORDER BY runs DESC;
+```
+
+```js
+// The same in MongoDB
+db.shardlens_events.aggregate([
+  { $match: { type: { $in: ['interaction', 'message_command'] }, ts: { $gt: new Date(Date.now() - 7 * 864e5) } } },
+  { $group: { _id: { type: '$type', command: '$command' }, runs: { $sum: 1 } } },
+  { $sort: { runs: -1 } },
+]);
+```
+
+## Privacy
+
+The copy follows the same rules as the collector:
+
+- Users are the same salted hashes, never user IDs. In audit mode, who ran a command stays in the collector's
+  encrypted store and is not copied.
+- Erasure reaches the copy: `forgetUser()`, `/privacy erase` and the dashboard's erase delete a person's rows from
+  your database as well, and the request fails (so it is retried) if your database can't be reached.
+- Copies are deleted after `SHARDLENS_SINK_RETENTION_DAYS`. If you keep them longer than about a month, their hashes
+  outlive the salt that made them: they can no longer be tied to anyone, or erased by user.
+- Message content is never collected, so it is never copied.
+
+Your privacy policy should name the database you copy to. `npx shardlens privacy` prints a paragraph to start from.
+
+## Limits
+
+- Only events accepted from the moment the sink is turned on are copied. Nothing is backfilled.
+- Copies wait in memory (up to 20,000 events) while your database is down, and are dropped and counted after that.
+  The collector's own store is unaffected.
+- Webhook events from Discord (installs and removals sent to the collector directly) are not copied.
+
+<Aside type="tip">
+  A sink is not a backup of the dashboard: back up the collector's database as described in
+  [Backups](../../operations/backups/).
+</Aside>

@@ -21,6 +21,7 @@ import { privacyRoutes } from './routes/privacy.js';
 import { reportRoutes } from './routes/reports.js';
 import type { KeyStore } from './security/auth.js';
 import type { ClickHouseStore } from './storage/clickhouse.js';
+import type { SinkMirror } from './storage/sink.js';
 
 export interface Deps {
   config: Config;
@@ -29,6 +30,8 @@ export interface Deps {
   live: LiveHub;
   /** Optional ClickHouse analytics store (preview). */
   analytics?: ClickHouseStore | undefined;
+  /** Optional copy of accepted events in the owner's own database. */
+  sink?: SinkMirror | undefined;
   /** Where log lines go. Default: standard output. */
   logStream?: { write(line: string): void } | undefined;
 }

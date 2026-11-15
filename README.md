@@ -107,6 +107,8 @@ packages in CI. The docs are also published as plain text for agents
   exporters with a ready-made Grafana dashboard, with or without a collector.
 - **Small bots:** [embedded mode](https://kkkermit.github.io/Shardlens/self-hosting/embedded/) runs the collector
   inside your bot's own process. No Docker, no database server.
+- **Your own database:** [copy every event](https://kkkermit.github.io/Shardlens/self-hosting/your-own-database/) into
+  the MongoDB, MySQL, MariaDB, PostgreSQL or SQLite your bot already uses.
 - **Platforms:** one-file templates for [Railway](https://kkkermit.github.io/Shardlens/self-hosting/railway/) and
   [Render](https://kkkermit.github.io/Shardlens/self-hosting/render/) in [`deploy/`](deploy).
 

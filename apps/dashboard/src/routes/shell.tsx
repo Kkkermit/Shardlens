@@ -132,6 +132,8 @@ function Shell(props: { demo: boolean }) {
 
 const LOGIN_ERRORS: Record<string, string> = {
   not_a_team_member: 'Only the app owner and its team members can open this dashboard.',
+  bot_not_reported:
+    'The bot has not connected to Shardlens yet, so its owner and team are not known. Start the bot, or sign in with a read key.',
   invalid_state: 'The sign-in link expired. Please try again.',
   discord_error: 'Discord sign-in failed. Please try again.',
 };

@@ -83,7 +83,7 @@ The collector writes one JSON object per line (`docker compose logs collector`).
 
 | Message                               | Level   | What it means                                                                                                             |
 | ------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `Shardlens collector started`         | info    | Startup finished. Lists the database migrations this start applied (`migrationsApplied`, empty when the database was up to date) and which optional features are switched on (Discord sign-in, webhook events, audit key, ClickHouse). |
+| `Shardlens collector started`         | info    | Startup finished. Lists the database migrations this start applied (`migrationsApplied`, empty when the database was up to date) and which optional features are switched on (Discord sign-in, webhook events, audit key, ClickHouse, the sink to your own database). |
 | `Server listening at …`               | info    | The address the collector accepts connections on.                                                                         |
 | `shutting down`                       | info    | The collector received `SIGTERM` or `SIGINT` and is finishing what it was doing.                                          |
 | `Demo mode: …`                        | warning | `SHARDLENS_DEMO` is on: the dashboard is open to anyone. For demo data only.                                              |
@@ -93,7 +93,10 @@ The collector writes one JSON object per line (`docker compose logs collector`).
 | `input refused by the database`       | warning | A request carried a value PostgreSQL would not store. It was answered with `400`; nothing was saved from it.              |
 | `clock skew corrected for batch`      | warning | The bot's clock is more than 5 minutes off. Timestamps were corrected; fix the clock (NTP).                               |
 | `Discord sign-in failed`              | warning | The OAuth exchange failed. `reason` names the error, usually a wrong client secret or redirect URL.                       |
-| `Discord sign-in refused: …`          | warning | Someone who is not the application owner, a team member or an extra admin tried to sign in.                               |
+| `Discord sign-in refused: …`          | warning | Someone who is not the application owner, a team member or an extra admin tried to sign in. If it says the bot has not reported yet, start the bot with Shardlens once, or add your user ID to `SHARDLENS_EXTRA_ADMINS`. |
+| `No ingest key: …`                    | warning | No ingest key exists, in the environment or created in the dashboard. Set `SHARDLENS_INGEST_KEY`.                         |
+| `No way to open the dashboard: …`     | warning | Neither a read key nor Discord sign-in is set up. Set `SHARDLENS_READ_KEY`.                                               |
+| `Discord sign-in works once …`        | warning | Only Discord sign-in is set up and the bot hasn't reported yet. Set a read key or `SHARDLENS_EXTRA_ADMINS` meanwhile.      |
 | `live update failed`                  | warning | The live tiles could not read the database. Logged once per open dashboard.                                               |
 | `slow job`                            | info    | A background job took more than 10 seconds. Frequent on a healthy database means it needs more resources.                 |
 | `request failed`                      | error   | A request hit an unexpected error. `reqId` matches the `requestId` in the `500` response the caller received.             |

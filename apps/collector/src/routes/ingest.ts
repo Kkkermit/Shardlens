@@ -141,8 +141,15 @@ export async function ingestRoutes(app: FastifyInstance, deps: Deps): Promise<vo
             items,
           ),
         );
-        // After the PostgreSQL commit: queue accepted rows for ClickHouse (never blocks or fails ingest).
+        // After the PostgreSQL commit: queue accepted rows for ClickHouse and the sink (never blocks or fails ingest).
         if (result.mirror) deps.analytics?.mirror(result.mirror);
+        if (deps.sink) {
+          const refused = new Set(result.rejected.map((r) => r.index));
+          deps.sink.push(
+            { appId: auth.appId, env: envelope.app.env, release: envelope.app.release },
+            items.filter((i) => !refused.has(i.index)).map((i) => i.event),
+          );
+        }
         // Live tiles count by when things happened, so replayed or backfilled batches never look live.
         for (const { event } of items) {
           if ((event.type !== 'interaction' && event.type !== 'message_command') || event.ts < now - 15 * 60_000) {

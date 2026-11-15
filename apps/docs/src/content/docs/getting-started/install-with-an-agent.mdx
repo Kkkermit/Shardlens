@@ -10,8 +10,10 @@ import prompt from '../../../../prompts/install.md?raw';
 
 Open your bot's repository in a coding agent (Claude Code, Cursor, GitHub Copilot, Codex, Windsurf or similar), paste
 the prompt below and let it work. It installs `@shardlens/discordjs`, creates Shardlens next to your client, wraps
-your interaction handler, flushes on shutdown and documents the two settings. It covers single-process bots,
-`ShardingManager`, internal sharding and discord-hybrid-sharding.
+your interaction handler, records prefix commands if you have them, flushes on shutdown and documents the two
+settings. It works out your setup first: TypeScript or JavaScript, ESM or CommonJS, the discord.js guide layout, a
+framework such as Sapphire or a handler of your own, and single-process bots, `ShardingManager`, internal sharding or
+discord-hybrid-sharding.
 
 <Code code={prompt} lang="md" title="Paste this to your agent" wrap />
 
@@ -29,7 +31,8 @@ samples are type-checked against the real packages on every build of these docs.
 
 <Aside type="caution" title="Review what it did">
   Read the diff before you commit, as with any generated change. The prompt tells the agent not to touch intents, not
-  to turn on audit mode and never to write a key into a tracked file. Check that it listened.
+  to turn on audit mode, never to write or print a key, never to let a Shardlens setting stop your bot from starting,
+  and not to add anything you didn't ask for. Check that it listened.
 </Aside>
 
 ## What the agent doesn't do

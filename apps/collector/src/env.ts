@@ -1,5 +1,6 @@
 import { Snowflake } from '@shardlens/schema';
 import { z } from 'zod';
+import { DEFAULT_SINK_TABLE, SINK_TABLE, SINK_URL, type SinkSettings } from './storage/sink.js';
 
 const snowflake = Snowflake.describe('a Discord snowflake');
 const key32 = z
@@ -31,6 +32,19 @@ const EnvSchema = z.object({
   SHARDLENS_TRUST_PROXY: z.enum(['true', 'false']).default('false'),
   SHARDLENS_DEMO: z.enum(['true', 'false']).default('false'),
   CLICKHOUSE_URL: z.url().optional(),
+  SHARDLENS_SINK_URL: z
+    .string()
+    .regex(SINK_URL, 'must start with mongodb:, mongodb+srv:, mysql:, mariadb:, postgres: or sqlite:')
+    .optional(),
+  SHARDLENS_SINK_TABLE: z
+    .string()
+    .regex(SINK_TABLE, 'must be letters, digits and underscores')
+    .default(DEFAULT_SINK_TABLE),
+  SHARDLENS_SINK_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(35),
+  SHARDLENS_SINK_EVENTS: z
+    .string()
+    .regex(/^[a-z_]+(\s*,\s*[a-z_]+)*$/, 'must be a comma-separated list of event types')
+    .optional(),
   SHARDLENS_DASHBOARD_DIR: z.string().optional(),
   PORT: z.coerce.number().int().min(1).max(65535).default(8080),
   HOST: z.string().default('0.0.0.0'),
@@ -57,6 +71,8 @@ export interface Config {
   demo: boolean;
   /** Optional ClickHouse analytics store (preview). Never logged: it may contain credentials. */
   clickhouseUrl?: string | undefined;
+  /** Optional copy of every accepted event in the owner's own database. Never logged: the URL may hold a password. */
+  sink?: SinkSettings | undefined;
   dashboardDir: string | undefined;
   port: number;
   host: string;
@@ -106,6 +122,14 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     trustProxy: e.SHARDLENS_TRUST_PROXY === 'true',
     demo: e.SHARDLENS_DEMO === 'true',
     clickhouseUrl: e.CLICKHOUSE_URL,
+    sink: e.SHARDLENS_SINK_URL
+      ? {
+          to: e.SHARDLENS_SINK_URL,
+          table: e.SHARDLENS_SINK_TABLE,
+          retentionDays: e.SHARDLENS_SINK_RETENTION_DAYS,
+          events: e.SHARDLENS_SINK_EVENTS?.split(',').map((t) => t.trim()),
+        }
+      : undefined,
     dashboardDir: e.SHARDLENS_DASHBOARD_DIR,
     port: e.PORT,
     host: e.HOST,

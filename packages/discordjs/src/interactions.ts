@@ -23,7 +23,7 @@ interface ResponseInfo {
   modalCustomId?: string;
 }
 
-type HandlerState = { state: 'running'; start: number } | { state: 'done'; ms: number; error?: HandlerError };
+type HandlerState = { state: 'running'; start: number } | { state: 'done'; ms?: number; error?: HandlerError };
 
 interface HandlerError {
   errorClass: string;
@@ -243,10 +243,12 @@ export class InteractionTracker {
     if (p) p.handler = { state: 'running', start: performance.now() };
   }
 
-  handlerFinished(i: Interaction, ms: number, error?: HandlerError): void {
+  /** `ms` may be left out when the handler's start was reported; without either, no handler time is recorded. */
+  handlerFinished(i: Interaction, given: number | undefined, error?: HandlerError): void {
     const p = this.#pending.get(i.id);
+    const ms = given ?? (p?.handler?.state === 'running' ? performance.now() - p.handler.start : undefined);
     if (p) {
-      p.handler = error ? { state: 'done', ms, error } : { state: 'done', ms };
+      p.handler = { state: 'done', ...(ms !== undefined ? { ms } : {}), ...(error ? { error } : {}) };
       if (p.response) this.#emit(i.id);
       return;
     }
@@ -262,7 +264,7 @@ export class InteractionTracker {
           command: emitted.command,
           errorClass: error.errorClass,
           errorCode: error.errorCode,
-          handlerMs: Math.round(ms),
+          handlerMs: ms === undefined ? undefined : Math.round(ms),
         }),
         3,
       );
@@ -312,7 +314,7 @@ export class InteractionTracker {
       ephemeral: p.response?.ephemeral,
       errorCode: error?.errorCode ?? p.response?.errorCode,
       errorClass: error?.errorClass,
-      handlerMs: handler ? Math.round(handler.ms) : undefined,
+      handlerMs: handler?.ms === undefined ? undefined : Math.round(handler.ms),
     });
     this.#emitted.set(interactionId, {
       eventId: p.base.id,

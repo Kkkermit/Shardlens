@@ -14,7 +14,8 @@ You need a server with Docker and a domain name pointing at it (for HTTPS), and 
 
 1. **Start the collector**
 
-   `shardlens init` writes `docker-compose.yml`, a `Caddyfile` and a `.env` with generated secrets and keys.
+   `shardlens init` writes `docker-compose.yml`, a `Caddyfile`, a `.env` with generated secrets and keys, and a
+   `bot.env` holding the two settings your bot needs.
 
    ```sh
    npx shardlens init --domain stats.example.com --app-id 123456789012345678
@@ -22,7 +23,7 @@ You need a server with Docker and a domain name pointing at it (for HTTPS), and 
    ```
 
    Caddy gets a certificate for your domain, the collector creates its tables, and the dashboard is served at
-   `https://stats.example.com`. Your ingest key is in `.env` as `SHARDLENS_INGEST_KEY`.
+   `https://stats.example.com`. The bot's two settings are in `bot.env`.
 
 2. **Install the SDK in your bot**
 
@@ -37,7 +38,8 @@ You need a server with Docker and a domain name pointing at it (for HTTPS), and 
 
    <Code code={quickStart} lang="ts" title="bot.ts" />
 
-   Set `SHARDLENS_URL` to your collector's URL and `SHARDLENS_INGEST_KEY` to the key from step 1.
+   Copy the two lines from `bot.env` (`SHARDLENS_URL` and `SHARDLENS_INGEST_KEY`) to wherever your bot reads its
+   settings, then delete `bot.env`.
 
 4. **Open the dashboard**
 

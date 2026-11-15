@@ -1,17 +1,19 @@
 import { parseArgs } from 'node:util';
-import { doctor, init, newKey, privacyParagraph, type Scope } from './commands.js';
+import { doctor, init, newKey, privacyParagraph, readBotEnv, type Scope } from './commands.js';
 
 const HELP = `shardlens <command> [options]
 
 Commands
-  init      Write docker-compose.yml, Caddyfile and a .env with generated secrets and keys
+  init      Write docker-compose.yml, Caddyfile, a .env with generated secrets and keys, and bot.env with
+            the two settings your bot needs
             --dir <path> (default ./shardlens)  --domain <host>  --app-id <id>  [--force]
             [--identify-users]  also create the key that allows identified users (audit mode)
   keys      Print a new API key            --scope ingest|read (default ingest)
   privacy   Print a privacy-policy paragraph matching your setup
             [--audit] [--ids-only] [--option-values a,b] [--webhook-events] [--retention <days>]
   doctor    Check Node, discord.js, the collector and your key
-            [--url <collector>] [--key <slk_ingest_…>]  (or SHARDLENS_URL / SHARDLENS_INGEST_KEY)
+            [--url <collector>] [--key <slk_ingest_…>]  (or SHARDLENS_URL / SHARDLENS_INGEST_KEY, also read
+            from ./.env)
 `;
 
 /** Runs one invocation of the CLI and returns its exit code. */
@@ -61,7 +63,8 @@ export async function run(argv: string[]): Promise<number> {
         identifyUsers: values['identify-users'] ?? false,
       });
       console.log(`Wrote ${result.written.join(', ')} to ${result.dir}`);
-      console.log('Your ingest and read keys are in .env (SHARDLENS_INGEST_KEY, SHARDLENS_READ_KEY).');
+      console.log('Your bot needs the two settings in bot.env: copy them to where the bot runs, then delete the file.');
+      console.log('The dashboard read key is SHARDLENS_READ_KEY in .env.');
       console.log(
         `Next: point DNS for ${values.domain} at this server, then run: cd ${result.dir} && docker compose up -d`,
       );
@@ -96,8 +99,11 @@ export async function run(argv: string[]): Promise<number> {
       return 0;
     }
     case 'doctor': {
-      const url = values.url ?? process.env.SHARDLENS_URL;
-      const key = values.key ?? process.env.SHARDLENS_INGEST_KEY;
+      // Run from the bot's folder, its own .env is where these usually live. Flags and set variables win.
+      const fromFile = await readBotEnv(process.cwd());
+      if (fromFile.file) console.log(`Read SHARDLENS_URL and SHARDLENS_INGEST_KEY from ${fromFile.file} if not set`);
+      const url = values.url ?? process.env.SHARDLENS_URL ?? fromFile.url;
+      const key = values.key ?? process.env.SHARDLENS_INGEST_KEY ?? fromFile.key;
       const checks = await doctor({ ...(url ? { url } : {}), ...(key ? { key } : {}) });
       for (const c of checks) console.log(`${c.ok ? '✓' : c.warnOnly ? '!' : '✗'} ${c.name}: ${c.detail}`);
       return checks.some((c) => !c.ok && !c.warnOnly) ? 1 : 0;

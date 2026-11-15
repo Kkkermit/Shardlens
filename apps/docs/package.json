@@ -24,6 +24,7 @@
   },
   "devDependencies": {
     "@opentelemetry/api": "^1.10.0",
+    "@sapphire/framework": "^5.5.1",
     "@shardlens/collector": "workspace:*",
     "@shardlens/core": "workspace:*",
     "@shardlens/discordjs": "workspace:*",

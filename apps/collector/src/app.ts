@@ -7,6 +7,38 @@ import { KeyStore, seedKey } from './security/auth.js';
 import { buildServer } from './server.js';
 import { ClickHouseStore } from './storage/clickhouse.js';
 import { activeSalts, ensurePartitions } from './storage/maintenance.js';
+import { createSink, SinkMirror } from './storage/sink.js';
+
+/**
+ * Set-ups that start but can't be used: no key for the bot, or no way into the dashboard. Keys made in the dashboard
+ * count, so a collector whose keys were created there and later removed from the environment is fine.
+ */
+export async function signInProblems(db: Db, config: Config): Promise<string[]> {
+  const keys = await db.query<{ scope: string }>(
+    'SELECT DISTINCT scope FROM api_keys WHERE app_id = $1 AND revoked_at IS NULL',
+    [config.appId],
+  );
+  const scopes = new Set(keys.rows.map((r) => r.scope));
+  const problems: string[] = [];
+  if (!scopes.has('ingest')) {
+    problems.push(
+      'No ingest key: the bot cannot send events. Set SHARDLENS_INGEST_KEY (npx shardlens keys makes one).',
+    );
+  }
+  if (!scopes.has('read') && !config.discord) {
+    problems.push(
+      'No way to open the dashboard: set SHARDLENS_READ_KEY, or DISCORD_CLIENT_ID and DISCORD_CLIENT_SECRET for Discord sign-in.',
+    );
+  } else if (!scopes.has('read') && config.extraAdmins.length === 0) {
+    const reported = await db.query('SELECT 1 FROM app_info WHERE app_id = $1', [config.appId]);
+    if (reported.rowCount === 0) {
+      problems.push(
+        'Discord sign-in works once the bot has reported its owner and team. Until then, set SHARDLENS_READ_KEY or add your Discord user ID to SHARDLENS_EXTRA_ADMINS.',
+      );
+    }
+  }
+  return problems;
+}
 
 export interface RunningCollector {
   readonly server: FastifyInstance;
@@ -39,11 +71,18 @@ export async function startCollector(
   const live = new LiveHub(db);
   const liveShared = await live.start();
   const analytics = config.clickhouseUrl ? new ClickHouseStore(config.clickhouseUrl) : undefined;
-  const server = await buildServer({ config, db, keys: new KeyStore(db), live, analytics });
+  const sinkTo = config.sink?.to;
+  const sink =
+    sinkTo === undefined
+      ? undefined
+      : new SinkMirror(typeof sinkTo === 'string' ? await createSink(sinkTo, config.sink?.table) : sinkTo, config.sink);
+  const server = await buildServer({ config, db, keys: new KeyStore(db), live, analytics, sink });
+  sink?.start((message) => server.log.warn({ component: 'sink' }, message));
   if (analytics) {
     await analytics.migrate();
     analytics.start((message) => server.log.warn({ component: 'clickhouse' }, message));
   }
+  for (const problem of await signInProblems(db, config)) server.log.warn(problem);
   if (config.demo) {
     server.log.warn('Demo mode: anyone can view this dashboard without signing in. Use it only with demo data.');
   }
@@ -59,6 +98,7 @@ export async function startCollector(
       webhookEvents: config.discordPublicKey !== undefined,
       auditKey: config.auditKey !== undefined,
       clickhouse: analytics !== undefined,
+      sink: sink?.name ?? false,
       demo: config.demo,
       migrationsApplied,
     },
@@ -75,6 +115,7 @@ export async function startCollector(
         await jobs.stop();
         await live.stop();
         await analytics?.stop().catch(() => undefined);
+        await sink?.stop().catch(() => undefined);
       })();
       return stopped;
     },

@@ -16,10 +16,12 @@ Repository: https://github.com/Kkkermit/Shardlens · Docs: https://kkkermit.gith
 ## 1. Look at the project first
 
 - `package.json` and the lockfile: which package manager is used, which discord.js version is installed, and which Node.js version the project targets.
-- Whether the code is TypeScript or JavaScript, and ESM (`import`) or CommonJS (`require`).
-- Where the discord.js `Client` is constructed and where `client.login()` is called.
+- Whether the code is TypeScript or JavaScript, and ESM (`import`) or CommonJS (`require`). TypeScript built to CommonJS (tsc, tsup, esbuild) counts as CommonJS for imports at runtime; write what the project's own source files use.
+- Where the discord.js `Client` is constructed (it may be a subclass) and where `client.login()` is called.
 - How the bot runs: one process, `ShardingManager` (find the shard file it spawns), internal sharding (`shards: 'auto'`), or discord-hybrid-sharding (`ClusterManager` and `ClusterClient`).
-- Where interactions are handled (the `interactionCreate` listener or a command dispatcher).
+- How commands are registered and run: the discord.js guide layout (a `commands/` folder of files with `execute`, and an `interactionCreate` file), a framework (Sapphire, discordx, CommandKit, Necord), or a loader the project wrote. Find the one place a matched command's code is called.
+- Whether the bot has prefix (message) commands: a `messageCreate` listener that checks a prefix or a mention. Note whether the prefix comes from a database, whether there are aliases, and whether slash and prefix commands share the same command code.
+- Whether that code already catches command errors itself (a `try`/`catch` that replies "something went wrong").
 - How environment variables are loaded, and whether the bot already handles `SIGINT`/`SIGTERM`.
 
 Stop and tell me, instead of continuing, if:
@@ -52,7 +54,7 @@ In CommonJS, use `const { createShardlens } = require('@shardlens/discordjs');`.
 - **`ShardingManager`:** put it in the shard file (the one that constructs the `Client`), never in the manager file.
 - **discord-hybrid-sharding:** put it in the cluster file, after `client.cluster = new ClusterClient(client)` has been set. Never in the `ClusterManager` file.
 - **Internal sharding** (`shards: 'auto'`) and single-process bots need nothing special.
-- Make `lens` reachable from wherever interactions are handled, the same way the project already shares its client (an export, a property on the client, a container).
+- Make `lens` reachable from wherever interactions and messages are handled, the same way the project already shares things (an export, a container). If it has no such pattern, put it on the client (`client.lens = createShardlens(…)`; in TypeScript add `declare module 'discord.js' { interface Client { lens: Shardlens } }`), so every handler reaches it as `interaction.client.lens` or `message.client.lens`.
 - If the project has its version readily available (for example from `package.json`), pass it as `release`.
 - If either variable is unset, the SDK logs one warning and records nothing; `lens.wrap()` and every other call still work and do nothing. The bot must still start, so don't add your own checks and don't throw.
 
@@ -103,7 +105,30 @@ client.on(Events.InteractionCreate, async (interaction) => {
 });
 ```
 
-Interactions are recorded even without `wrap`; wrapping adds handler time and handler errors.
+Interactions are recorded even without `wrap`; wrapping adds handler time and handler errors. If one function runs both slash and prefix commands, wrapping it is still right: `wrap` records the interactions it is given and runs anything else untouched.
+
+**If a framework runs the handlers** and emits events when a command starts and ends (Sapphire does), there is nothing to wrap. Report from those events instead, with `lens.handlerStarted(interaction)` and `lens.handlerFinished(interaction, { durationMs, error })`. For Sapphire:
+
+```ts
+import { Events } from '@sapphire/framework';
+
+client.on(Events.ChatInputCommandRun, (interaction) => lens.handlerStarted(interaction));
+client.on(Events.ChatInputCommandSuccess, ({ interaction, duration }) =>
+  lens.handlerFinished(interaction, { durationMs: duration }),
+);
+client.on(Events.ChatInputCommandError, (error, { interaction, duration }) =>
+  lens.handlerFinished(interaction, { durationMs: duration, error }),
+);
+// Prefix commands, from the same framework:
+client.on(Events.MessageCommandSuccess, ({ message, command, duration }) =>
+  lens.trackMessageCommand(message, { command: command.name, durationMs: duration }),
+);
+client.on(Events.MessageCommandError, (error, { message, command, duration }) =>
+  lens.trackMessageCommand(message, { command: command.name, durationMs: duration, error }),
+);
+```
+
+Sapphire's context-menu events (`ContextMenuCommandRun`, `ContextMenuCommandSuccess`, `ContextMenuCommandError`) work the same way.
 
 ### Prefix commands, if the bot has them
 
@@ -142,7 +167,9 @@ async function runPrefixCommand(message: Message, name: string, args: string[]) 
 ```
 
 - If the command has a subcommand, pass `{ command, sub }` to `wrapMessageCommand` or add `sub` to the `trackMessageCommand` object.
+- Pass the command's own name after the project's parser has matched it (aliases resolved, prefix removed). A per-server prefix, aliases and mentions make no difference.
 - Never pass `message.content`, the typed name, argument values or anything else the user wrote.
+- Record prefix commands only with `trackMessageCommand` or `wrapMessageCommand`, never as a custom event with `track()`: only those show up next to slash commands.
 - Don't add the Message Content intent for Shardlens. If the bot has prefix commands it already has it.
 
 ## 5. Flush on shutdown
@@ -163,7 +190,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 
 ## 6. Document the two settings
 
-Add `SHARDLENS_URL=` and `SHARDLENS_INGEST_KEY=` (empty) to `.env.example` or wherever the project documents its environment, and to its environment validation or types if it has any. Add one line about Shardlens to the README's setup section if there is one.
+Add `SHARDLENS_URL=` and `SHARDLENS_INGEST_KEY=` (empty) to `.env.example` or wherever the project documents its environment. If the project validates its environment (zod, envalid, a config file), declare both as **optional strings and nothing more**: no format checks, no "both or neither" rule, no failure. The SDK checks them itself, logs one warning and records nothing when they are wrong. Add one line about Shardlens to the README's setup section if there is one.
 
 - `SHARDLENS_URL` is the collector's address, for example `https://stats.example.com`. It must be HTTPS (plain HTTP is accepted for `localhost` only).
 - `SHARDLENS_INGEST_KEY` looks like `slk_ingest_…`. It can only send events; it cannot read anything.
@@ -175,6 +202,10 @@ Add `SHARDLENS_URL=` and `SHARDLENS_INGEST_KEY=` (empty) to `.env.example` or wh
 - Leave privacy mode on: don't set `mode: 'audit'` or `captureOptionValues` unless I ask.
 - Don't wrap SDK calls (`createShardlens`, `lens.*`) in `try`/`catch`: the SDK never throws into the bot.
 - Don't change command behaviour, error handling or anything unrelated to these steps.
+- The bot must start and behave exactly as before when Shardlens isn't configured, is misconfigured or the collector is down. Never add a check that stops it from starting, and never exit or throw because of Shardlens.
+- Do these steps and nothing more. No status commands, owner panels, API routes, dashboards, extra settings (such as a dry-run variable), privacy-notice rewrites or tests of your own invention unless I ask. Suggest them in your summary instead.
+- Use the SDK's own methods for what they cover. Don't invent event names or send your own versions of what the SDK records.
+- Never print, log, echo or paste a secret or any part of one (keys, tokens, session secrets, settings keys), not even while testing. Say where it is stored instead.
 
 ## Only if I ask for them
 
@@ -217,19 +248,31 @@ const lens = createShardlens(client, { endpoint: collector?.url, apiKey: collect
 
 This uses top-level `await`, which needs an ES module; in CommonJS, put it inside the `async` function that starts the bot. On shutdown, after `await lens.shutdown()`, also `await collector?.close()`. The dashboard is then at `http://127.0.0.1:8080`, and the key to sign in with is `readKey` in `shardlens-data/secrets.json`: tell me where it is, never print it.
 
+**Your own database.** To also keep every event in the database the bot already uses (MongoDB, MySQL, MariaDB, PostgreSQL or SQLite), the collector copies them there; the bot's code doesn't change. With a standalone collector, tell me to set `SHARDLENS_SINK_URL` on the collector. With embedded mode, pass the URL the project already reads (never a hard-coded one) as `sink`:
+
+```ts
+import { startEmbeddedCollector } from '@shardlens/collector/embedded';
+
+const collector = await startEmbeddedCollector({
+  dataDir: './shardlens-data',
+  appId: process.env.DISCORD_APP_ID ?? '',
+  sink: { to: process.env.MONGODB_URI ?? 'sqlite:./shardlens-data/events.db' },
+}).catch(() => undefined);
+```
+
 **Other options** of `createShardlens`: `environment` (default `'production'`), `dryRun` (print events instead of sending them), `disable` (turn off groups: `'interactions'`, `'guilds'`, `'rest'`, `'gateway'`, `'process'`, `'premium'`, `'app'`), `optedOut` and `onOptOutChange` (persist opt-outs), `spool: { dir }` (keep events on disk through long collector outages), `exporters` (Prometheus or OpenTelemetry), `sampleRate` (very large bots). Every option is documented in the package's type definitions (`node_modules/@shardlens/discordjs/dist/index.d.ts`).
 
 ## Check your work
 
 - Run the project's own type-check, lint, build and test scripts, and fix anything you broke.
-- If `SHARDLENS_URL` and `SHARDLENS_INGEST_KEY` are set in my environment, run `npx shardlens doctor` from the bot's folder and show me its output. It checks Node.js, discord.js, the collector and the key. Never print the key.
+- If `SHARDLENS_URL` and `SHARDLENS_INGEST_KEY` are set in my environment or the bot's `.env`, run `npx shardlens doctor` from the bot's folder and show me its output. It checks Node.js, discord.js, the collector and the key. Never print the key.
 - Don't start the bot yourself unless I ask.
 
 ## Tell me when you're done
 
 - Which files you changed, and what each change does.
 - What I still need to do:
-  1. Run a collector: `npx shardlens init --domain <my domain> --app-id <my application ID>`, then `docker compose up -d` in the folder it creates. It prints nothing secret; the keys are in the generated `.env`. Guide: https://kkkermit.github.io/Shardlens/getting-started/quick-start/
+  1. Run a collector: `npx shardlens init --domain <my domain> --app-id <my application ID>`, then `docker compose up -d` in the folder it creates. It prints nothing secret; the bot's two settings are in the generated `bot.env`. Guide: https://kkkermit.github.io/Shardlens/getting-started/quick-start/
   2. Set `SHARDLENS_URL` and `SHARDLENS_INGEST_KEY` where the bot runs.
   3. To see what would be sent before any of that, pass `dryRun: true` once and run a command in the bot.
 - Anything you skipped or weren't sure about.

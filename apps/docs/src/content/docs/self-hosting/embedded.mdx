@@ -13,6 +13,9 @@ jobs and the dashboard run inside your bot process, on an in-process PostgreSQL 
 in one folder. It is the same code as the standalone collector, so the dashboard, privacy model and features are the
 same.
 
+If your bot already has a database (MongoDB, MySQL, MariaDB, PostgreSQL or SQLite), embedded mode can also
+[copy every event into it](../your-own-database/).
+
 <Tabs syncKey="pkg">
   <TabItem label="pnpm">`pnpm add @shardlens/discordjs @shardlens/collector @electric-sql/pglite`</TabItem>
   <TabItem label="npm">`npm install @shardlens/discordjs @shardlens/collector @electric-sql/pglite`</TabItem>

@@ -12,7 +12,8 @@ npx shardlens <command> [options]
 
 ## `init`
 
-Writes `docker-compose.yml`, a `Caddyfile` and a `.env` with generated secrets and keys.
+Writes `docker-compose.yml`, a `Caddyfile`, a `.env` with generated secrets and keys, and `bot.env` with the two
+settings your bot needs (`SHARDLENS_URL` and `SHARDLENS_INGEST_KEY`). Copy those to the bot, then delete `bot.env`.
 
 ```sh
 npx shardlens init --domain stats.example.com --app-id 123456789012345678
@@ -72,5 +73,8 @@ npx shardlens doctor --url https://stats.example.com --key slk_ingest_…
 | --------------- | ------------------------------------------------------ |
 | `--url <url>`   | The collector. Or set `SHARDLENS_URL`.                  |
 | `--key <key>`   | An ingest key. Or set `SHARDLENS_INGEST_KEY`.           |
+
+Run from your bot's folder, `doctor` also reads `SHARDLENS_URL` and `SHARDLENS_INGEST_KEY` from a `.env` there, unless
+they are already set. It never changes your environment.
 
 It exits with a non-zero code when a check fails, so you can use it in a deploy script.

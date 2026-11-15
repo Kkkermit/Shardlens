@@ -19,6 +19,7 @@ import {
 } from '@shardlens/core';
 import type { EventInput } from '@shardlens/schema';
 import {
+  type BaseInteraction,
   type Client,
   type Entitlement,
   Events,
@@ -78,6 +79,14 @@ export interface TrackContext {
   guildId?: string | null | undefined;
 }
 
+/** How a handler went, for {@link Shardlens.handlerFinished}. */
+export interface HandlerResult {
+  /** How long the handler ran, in milliseconds. Measured from `handlerStarted()` when left out. */
+  durationMs?: number | undefined;
+  /** What the handler threw, if anything. Only its class name and Discord error code are recorded. */
+  error?: unknown;
+}
+
 /** SDK health, including interactions still waiting for a response. */
 export interface ShardlensStats extends ClientStats {
   pendingInteractions: number;
@@ -93,9 +102,16 @@ export interface Shardlens {
    * Wraps an interaction handler to record its duration and failures. The handler's errors are re-thrown unchanged,
    * so your own error handling still runs.
    */
-  wrap<A extends [Interaction, ...unknown[]], R>(
+  wrap<A extends [BaseInteraction, ...unknown[]], R>(
     handler: (...args: A) => R | Promise<R>,
   ): (...args: A) => Promise<Awaited<R>>;
+  /**
+   * For frameworks that run handlers themselves and announce it (Sapphire's `chatInputCommandRun`, for example): call
+   * when the handler starts. With {@link Shardlens.handlerFinished} it records what {@link Shardlens.wrap} would.
+   */
+  handlerStarted(interaction: BaseInteraction): void;
+  /** Call when a handler started with {@link Shardlens.handlerStarted} has finished or thrown. */
+  handlerFinished(interaction: BaseInteraction, result?: HandlerResult): void;
   /**
    * Records a command run from a message, such as a prefix command (`!ban @user`), after your bot's parser matched it.
    * Pass the command's own name, not what was typed: message content is never read. Counted with interactions on
@@ -422,7 +438,7 @@ export function createShardlens(client: Client, options: ShardlensOptions): Shar
       }
     },
 
-    wrap<A extends [Interaction, ...unknown[]], R>(handler: (...args: A) => R | Promise<R>) {
+    wrap<A extends [BaseInteraction, ...unknown[]], R>(handler: (...args: A) => R | Promise<R>) {
       return async (...args: A): Promise<Awaited<R>> => {
         // A handler shared by slash and prefix commands may get something else first; that is not recorded here.
         const interaction = isInteraction(args[0]) ? args[0] : undefined;
@@ -455,6 +471,32 @@ export function createShardlens(client: Client, options: ShardlensOptions): Shar
           throw error;
         }
       };
+    },
+
+    handlerStarted(interaction) {
+      try {
+        if (isInteraction(interaction)) tracker?.handlerStarted(interaction);
+      } catch (error) {
+        count('handlerStarted', error);
+      }
+    },
+
+    handlerFinished(interaction, result = {}) {
+      try {
+        if (!isInteraction(interaction)) return;
+        const ms = result.durationMs;
+        const error = result.error;
+        const code = error === undefined ? undefined : errorCode(error);
+        tracker?.handlerFinished(
+          interaction,
+          typeof ms === 'number' && Number.isFinite(ms) ? Math.max(0, ms) : undefined,
+          error === undefined
+            ? undefined
+            : { errorClass: errorClass(error), ...(code !== undefined ? { errorCode: code } : {}) },
+        );
+      } catch (error) {
+        count('handlerFinished', error);
+      }
     },
 
     trackMessageCommand,

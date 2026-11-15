@@ -4,9 +4,11 @@ import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { bucketOf, uuidv7 } from '@shardlens/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { signInProblems } from '../src/app.js';
 import { evaluateMetric } from '../src/jobs/alerts.js';
 import { runRollups, runUniques } from '../src/jobs/rollups.js';
 import { runRetention, runSalts } from '../src/jobs/scheduler.js';
+import { allowedUser } from '../src/routes/auth.js';
 import { KeyStore } from '../src/security/auth.js';
 import { buildServer } from '../src/server.js';
 import {
@@ -204,6 +206,31 @@ describe('ingest', () => {
     expect(await n('rollup_1m')).toBe(0);
     const left = await h.db.query('SELECT count(*)::int AS n FROM dirty_buckets');
     expect(left.rows[0].n).toBe(0);
+  });
+
+  it('warns at start-up when the bot or its owner would have no way in, and says why Discord sign-in is refused', async () => {
+    expect(await signInProblems(h.db, h.config)).toEqual([]);
+    const fresh = { ...h.config, appId: '1234567890123456780' };
+    await h.db.query('INSERT INTO apps (app_id) VALUES ($1) ON CONFLICT DO NOTHING', [fresh.appId]);
+    expect(await signInProblems(h.db, fresh)).toEqual([
+      expect.stringMatching(/^No ingest key/),
+      expect.stringMatching(/^No way to open the dashboard/),
+    ]);
+    const discordOnly = { ...fresh, discord: { clientId: fresh.appId, clientSecret: 'x'.repeat(32) } };
+    expect(await signInProblems(h.db, discordOnly)).toEqual([
+      expect.stringMatching(/^No ingest key/),
+      expect.stringMatching(/^Discord sign-in works once the bot has reported/),
+    ]);
+    expect(await signInProblems(h.db, { ...discordOnly, extraAdmins: ['334455667788990011'] })).toHaveLength(1);
+
+    const deps = { config: discordOnly, db: h.db } as unknown as Parameters<typeof allowedUser>[0];
+    expect(await allowedUser(deps, fresh.appId, '334455667788990011')).toBe('bot_not_reported');
+    await h.db.query(
+      `INSERT INTO app_info (app_id, ts, name, dashboard_user_ids) VALUES ($1, now(), 'bot', ARRAY[334455667788990011]::bigint[])`,
+      [fresh.appId],
+    );
+    expect(await allowedUser(deps, fresh.appId, '334455667788990011')).toBe('ok');
+    expect(await allowedUser(deps, fresh.appId, '445566778899001122')).toBe('not_a_team_member');
   });
 
   it('rejects a batch for another app', async () => {

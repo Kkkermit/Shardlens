@@ -15,13 +15,23 @@ export function hasCsrfHeader(req: FastifyRequest): boolean {
   return req.headers[CSRF_HEADER] === '1';
 }
 
-async function allowedUser(deps: Deps, appId: string, userId: string): Promise<boolean> {
-  if (deps.config.extraAdmins.includes(userId)) return true;
+/**
+ * Owner and team come from the bot's `app_info` event, so before the bot first reports nobody but an extra admin can
+ * sign in with Discord. That case gets its own answer, so it doesn't read as "you are not on the team".
+ */
+export async function allowedUser(
+  deps: Deps,
+  appId: string,
+  userId: string,
+): Promise<'ok' | 'not_a_team_member' | 'bot_not_reported'> {
+  if (deps.config.extraAdmins.includes(userId)) return 'ok';
   const res = await deps.db.query<{ ok: boolean }>(
     'SELECT $2::bigint = ANY(dashboard_user_ids) AS ok FROM app_info WHERE app_id = $1',
     [appId, userId],
   );
-  return res.rows[0]?.ok === true;
+  const row = res.rows[0];
+  if (!row) return 'bot_not_reported';
+  return row.ok ? 'ok' : 'not_a_team_member';
 }
 
 export async function authRoutes(app: FastifyInstance, deps: Deps): Promise<void> {
@@ -80,9 +90,16 @@ export async function authRoutes(app: FastifyInstance, deps: Deps): Promise<void
       req.log.warn({ reason: error instanceof Error ? error.message : 'unknown' }, 'Discord sign-in failed');
       return fail(reply, 'discord_error');
     }
-    if (!(await allowedUser(deps, deps.config.appId, userId))) {
+    const allowed = await allowedUser(deps, deps.config.appId, userId);
+    if (allowed === 'bot_not_reported') {
+      req.log.warn(
+        'Discord sign-in refused: the bot has not reported its owner and team yet. Start the bot with Shardlens, or add your Discord user ID to SHARDLENS_EXTRA_ADMINS',
+      );
+      return fail(reply, allowed);
+    }
+    if (allowed !== 'ok') {
       req.log.warn('Discord sign-in refused: not the application owner, a team member or an extra admin');
-      return fail(reply, 'not_a_team_member');
+      return fail(reply, allowed);
     }
     await createSession(deps.db, reply, { appId: deps.config.appId, userId, method: 'discord' }, secure);
     await deps.db.query("INSERT INTO admin_audit (app_id, user_id, action) VALUES ($1, $2, 'login')", [

@@ -85,8 +85,10 @@ async function eraseUser(
       ]);
       erased += res.rowCount ?? 0;
     }
-    // The ClickHouse copy too. If it fails the request fails, so the caller retries (deletes are idempotent).
+    // The ClickHouse and sink copies too. If one fails the request fails, so the caller retries (deletes are
+    // idempotent).
     await deps.analytics?.erase(appId, hashes);
+    erased += (await deps.sink?.erase(appId, hashes)) ?? 0;
   }
   if (input.userId && deps.config.auditKey) {
     const cipher = auditCipher(deps.config.auditKey);

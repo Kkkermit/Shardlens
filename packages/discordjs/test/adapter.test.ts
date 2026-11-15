@@ -23,6 +23,7 @@ import {
   rawGuild,
   rawSlashCommand,
   settle,
+  snowflake,
   USER_ID,
   undiciLikeResponse,
 } from './helpers.js';
@@ -200,6 +201,34 @@ describe('interactions', () => {
     expect(event).toMatchObject({ outcome: 'error', errorClass: 'RangeError' });
     expect(event?.handlerMs).toEqual(expect.any(Number));
     expect(collector.raw()).not.toContain('boom');
+  });
+
+  it('handlerStarted() and handlerFinished() record what wrap() would, for frameworks that run handlers', async () => {
+    const { collector, client, lens } = setup();
+    await settle();
+    const ok = slash(client);
+    client.emit(Events.InteractionCreate, ok);
+    lens.handlerStarted(ok);
+    await ok.reply({ content: 'done' });
+    await settle();
+    expect(collector.events('interaction')).toHaveLength(0); // waits for the handler, as with wrap()
+    lens.handlerFinished(ok, { durationMs: 1234.4 });
+
+    const failed = slash(client, { id: snowflake(Date.now(), 11) });
+    client.emit(Events.InteractionCreate, failed);
+    lens.handlerStarted(failed);
+    await failed.reply({ content: 'working' });
+    lens.handlerFinished(failed, { error: new RangeError('secret detail') });
+    lens.handlerFinished({ commandName: 'not an interaction' } as never, { durationMs: 5 });
+    await settle();
+    await lens.flush();
+
+    const [first, second] = collector.events('interaction');
+    expect(first).toMatchObject({ outcome: 'ok', handlerMs: 1234 });
+    expect(second).toMatchObject({ outcome: 'error', errorClass: 'RangeError' });
+    expect(second?.handlerMs).toEqual(expect.any(Number)); // measured from handlerStarted()
+    expect(collector.raw()).not.toContain('secret detail');
+    expect(lens.stats().internalErrors).toEqual({});
   });
 
   it('counts a reply that came after the deadline as a missed deadline, even when the handler then throws', async () => {
