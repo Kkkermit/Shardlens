@@ -283,7 +283,7 @@ export const COLLECTED_FIELDS: readonly CollectedField[] = [
     'REST call counts, retries and latency histograms by method, route and status. Routes hold route words only: IDs, invite and template codes, tokens, query strings and any other value are replaced.',
   ),
   f('rest_window', 'invalid', '401, 403 and 429 counts toward the invalid-request ban threshold.'),
-  f('rate_limit', 'scope', '429 scope: user, global or shared.'),
+  f('rate_limit', 'scope', 'Scope of the rate limit a request was held back for: user, global or shared.'),
   f('rate_limit', 'global', 'Whether the limit was global.'),
   f(
     'rate_limit',

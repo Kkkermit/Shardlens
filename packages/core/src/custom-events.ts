@@ -5,11 +5,12 @@ export type CustomPropValue = string | number | boolean | null;
 export type CustomProps = Record<string, CustomPropValue>;
 
 /**
- * Register your custom events here for typed `track()` calls:
+ * Register your custom events here for typed `track()` calls. Name the Shardlens package your bot installs
+ * (`@shardlens/discordjs` or `@shardlens/http`): with pnpm, a bot can't see `@shardlens/core` itself.
  *
  * @example
  * ```ts
- * declare module '@shardlens/core' {
+ * declare module '@shardlens/discordjs' {
  *   interface CustomEvents {
  *     ticket_opened: { category: 'billing' | 'support' };
  *   }

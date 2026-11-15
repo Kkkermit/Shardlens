@@ -156,7 +156,7 @@ Using SHARDLENS_URL and SHARDLENS_INGEST_KEY from /home/me/my-bot/.env
 | Check               | What it checks                                                                                  |
 | ------------------- | ----------------------------------------------------------------------------------------------- |
 | Node.js version     | The Node.js running `doctor` is 22.12 or newer.                                                  |
-| discord.js          | The discord.js installed in the current folder (or a folder above it) is 14.x or 15.x. A project that uses `@shardlens/http` instead passes. A warning when neither is found. |
+| discord.js          | The discord.js installed in the current folder (or a folder above it) is 14.12 or newer, or 15. A project that uses `@shardlens/http` instead passes. A warning when neither is found. |
 | Collector URL       | The URL is HTTPS, or plain HTTP to `localhost`, `127.0.0.1` or `[::1]` for development, as the SDK requires. It must not contain a user name or password. |
 | Collector reachable | `/healthz` answers like a Shardlens collector within 5 seconds. A redirect fails this check: use the address it redirects to. |
 | Ingest key          | `/v1/config` accepts the key, and for which application. It tells a read key or a mistyped key from one the collector doesn't know. |

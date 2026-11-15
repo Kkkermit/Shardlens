@@ -31,7 +31,8 @@ Three things to know before you paste it:
 
 - **Node.js 24.11 or newer.** That is the collector's requirement; the SDK on its own runs on 22.12.
 - **It uses top-level `await`**, which needs an ES module (`"type": "module"`, or a `.mjs` file). In CommonJS, put the
-  same lines inside the `async` function that starts your bot.
+  same lines inside the `async` function that starts your bot, and keep `lens` on the client (`client.lens = lens`) so
+  listeners registered earlier can reach it.
 - **Starting can fail.** The SDK never throws into your bot, but `startEmbeddedCollector` does when it can't do its
   job: `appId` isn't an application ID, the port is already in use, or the data folder can't be written. Above, that
   stops the bot. To start without analytics instead, add `.catch()` to the call and pass the (then missing) `url` and

@@ -20,3 +20,5 @@ Fixes from installing and running the CLI as a new self-hoster:
 - `privacy`: `--ids-only` and `--audit-retention` imply `--audit`, and the paragraph now mentions the permission level
   and premium status that are recorded, and that the pseudonymous code changes at least monthly and can't be linked a
   week after each change.
+
+`shardlens doctor` accepts discord.js 14.12 and newer and 15, matching what the SDK supports.

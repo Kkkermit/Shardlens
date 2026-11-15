@@ -67,7 +67,7 @@ export const EXPORTER_METRICS = {
   },
   ratelimits: {
     kind: 'counter',
-    description: 'Rate limits hit, by scope (user, global or shared).',
+    description: 'Requests held back for a rate limit, by scope (user, global or shared).',
     unit: '1',
     labels: ['scope'],
   },

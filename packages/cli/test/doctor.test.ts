@@ -172,6 +172,26 @@ describe('doctor', () => {
     expect(find(await doctor({ cwd: nested }), 'discord.js')).toMatchObject({ ok: true, detail: '15.0.0' });
   });
 
+  it('accepts discord.js 14.12 and newer and 15, and says so for an older 14', async () => {
+    const check = async (version: string) => {
+      const dir = await mkdtemp(join(tmpdir(), 'shardlens-doctor-'));
+      dirs.push(dir);
+      const djs = join(dir, 'node_modules', 'discord.js');
+      await mkdir(djs, { recursive: true });
+      await writeFile(join(djs, 'package.json'), JSON.stringify({ name: 'discord.js', version }));
+      return find(await doctor({ cwd: dir }), 'discord.js');
+    };
+    for (const version of ['14.12.0', '14.28.1', '15.0.0-dev.1794009739-5bb74922a']) {
+      expect(await check(version), version).toMatchObject({ ok: true });
+    }
+    for (const version of ['14.11.0', '13.17.1']) {
+      expect(await check(version), version).toMatchObject({
+        ok: false,
+        detail: `${version} (Shardlens supports 14.12 and newer, and 15)`,
+      });
+    }
+  });
+
   it('passes the discord.js check for an HTTP-interactions bot', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'shardlens-doctor-'));
     dirs.push(dir);

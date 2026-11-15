@@ -176,7 +176,7 @@ export const EXPORTER_METRICS: {
     };
     readonly ratelimits: {
         readonly kind: "counter";
-        readonly description: "Rate limits hit, by scope (user, global or shared).";
+        readonly description: "Requests held back for a rate limit, by scope (user, global or shared).";
         readonly unit: "1";
         readonly labels: readonly ["scope"];
     };

@@ -1,4 +1,4 @@
-# Simulated installs (tests/sim): the published packages, packed and installed with npm into three bots that coding
+# Simulated installs (tests/sim): the published packages, packed and installed with npm into four bots that coding
 # agents set up, each run against a fake Discord, with PostgreSQL, MySQL and MongoDB in Docker. Fails on a count that
 # differs from what was sent, a leak of user data or secrets, an unclean shutdown or an unknown REST route.
 name: sim

@@ -135,11 +135,12 @@ export async function doctor(opts: {
   const cwd = resolve(opts.cwd ?? process.cwd());
   const djs = await installedVersion('discord.js', cwd);
   if (djs) {
-    const supported = /^1[45]\./.test(djs);
+    // Before 14.12, discord.js never emits the REST response events the SDK reads its timings and outcomes from.
+    const supported = /^15\./.test(djs) || (/^14\./.test(djs) && versionAtLeast(djs, [14, 12]));
     checks.push({
       name: 'discord.js',
       ok: supported,
-      detail: `${djs}${supported ? '' : ' (Shardlens supports 14.x and 15.x)'}`,
+      detail: `${djs}${supported ? '' : ' (Shardlens supports 14.12 and newer, and 15)'}`,
     });
   } else if (await installedVersion('@shardlens/http', cwd)) {
     checks.push({ name: 'discord.js', ok: true, detail: 'not needed: this project uses @shardlens/http' });

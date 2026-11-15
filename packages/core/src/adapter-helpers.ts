@@ -19,7 +19,7 @@ export function errorClass(error: unknown): string {
 /** Discord's numeric JSON error code (`DiscordAPIError.code`), when the thrown value carries one. */
 export function errorCode(error: unknown): number | undefined {
   const code = (error as { code?: unknown } | null)?.code;
-  return typeof code === 'number' && Number.isInteger(code) ? code : undefined;
+  return typeof code === 'number' && Number.isSafeInteger(code) ? code : undefined;
 }
 
 /** Copies an object without its `undefined` values, so events stay small on the wire. */

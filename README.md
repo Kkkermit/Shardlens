@@ -11,7 +11,7 @@ Three lines to install. No privileged intents. User IDs never leave your bot.
 
 [![CI](https://github.com/Kkkermit/Shardlens/actions/workflows/ci.yml/badge.svg)](https://github.com/Kkkermit/Shardlens/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@shardlens/discordjs?label=%40shardlens%2Fdiscordjs&color=2a78d6)](https://www.npmjs.com/package/@shardlens/discordjs)
-[![discord.js](https://img.shields.io/badge/discord.js-14%20%7C%2015-5865F2?logo=discord&logoColor=white)](https://discord.js.org)
+[![discord.js](https://img.shields.io/badge/discord.js-14.12%2B%20%7C%2015-5865F2?logo=discord&logoColor=white)](https://discord.js.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](tsconfig.base.json)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Kkkermit/Shardlens/badge)](https://scorecard.dev/viewer/?uri=github.com/Kkkermit/Shardlens)
 [![Licence: MIT](https://img.shields.io/badge/licence-MIT-green)](LICENSE)
@@ -100,7 +100,7 @@ packages in CI. The docs are also published as plain text for agents
 
 - **Your own dashboard:** everything the built-in dashboard shows comes from one query endpoint, so you can
   [render it inside the dashboard you already have](https://kkkermit.github.io/Shardlens/guides/your-own-dashboard/).
-- **discord.js 14 and 15**, TypeScript or JavaScript, ESM or CommonJS, Node 22.12+.
+- **discord.js 14.12+ and 15**, TypeScript or JavaScript, ESM or CommonJS, Node 22.12+.
 - **Every sharding mode:** single process, `ShardingManager`, internal sharding and discord-hybrid-sharding.
 - **HTTP-interaction bots** on Cloudflare Workers, Deno and Bun with [`@shardlens/http`](packages/http).
 - **Your monitoring:** [Prometheus](packages/exporter-prometheus) and [OpenTelemetry](packages/exporter-otel)
@@ -116,16 +116,16 @@ Runnable [`examples/`](examples) cover a minimal bot, both sharding managers, au
 
 ## How it compares
 
-|                                                    | Shardlens                          | [Discord Analytics](https://discordanalytics.xyz) | Discord's own counts (`GET /applications/@me`)              |
-| -------------------------------------------------- | ---------------------------------- | ------------------------------------------------- | ----------------------------------------------------------- |
-| Where your data lives                              | Your server only                   | Hosted, with a self-host option                   | Discord                                                     |
-| Command usage, servers and growth                  | Yes                                | Yes                                               | Approximate server and user-install counts only, no history |
-| Response time against the 3-second deadline        | Yes, per command                   | Not in its docs                                   | No                                                          |
-| REST health: latency, 429s, invalid-request budget | Yes                                | Not in its docs                                   | No                                                          |
-| Shard and gateway health                           | Yes                                | Not in its docs                                   | No                                                          |
-| User IDs                                           | Hashed inside your bot; never sent | See its privacy policy                            | Not applicable                                              |
-| Prometheus / OpenTelemetry export                  | Yes                                | Not in its docs                                   | No                                                          |
-| Libraries                                          | discord.js 14 and 15, HTTP bots    | discord.js, discord.py, Oceanic.js and more       | Any                                                         |
+|                                                    | Shardlens                           | [Discord Analytics](https://discordanalytics.xyz) | Discord's own counts (`GET /applications/@me`)              |
+| -------------------------------------------------- | ----------------------------------- | ------------------------------------------------- | ----------------------------------------------------------- |
+| Where your data lives                              | Your server only                    | Hosted, with a self-host option                   | Discord                                                     |
+| Command usage, servers and growth                  | Yes                                 | Yes                                               | Approximate server and user-install counts only, no history |
+| Response time against the 3-second deadline        | Yes, per command                    | Not in its docs                                   | No                                                          |
+| REST health: latency, 429s, invalid-request budget | Yes                                 | Not in its docs                                   | No                                                          |
+| Shard and gateway health                           | Yes                                 | Not in its docs                                   | No                                                          |
+| User IDs                                           | Hashed inside your bot; never sent  | See its privacy policy                            | Not applicable                                              |
+| Prometheus / OpenTelemetry export                  | Yes                                 | Not in its docs                                   | No                                                          |
+| Libraries                                          | discord.js 14.12+ and 15, HTTP bots | discord.js, discord.py, Oceanic.js and more       | Any                                                         |
 
 Based on each project's public documentation in November 2026. Spotted something out of date?
 [Open an issue](https://github.com/Kkkermit/Shardlens/issues).

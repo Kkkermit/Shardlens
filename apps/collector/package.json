@@ -29,6 +29,13 @@
     },
     "./package.json": "./package.json"
   },
+  "typesVersions": {
+    "*": {
+      "embedded": [
+        "./dist/embedded.d.ts"
+      ]
+    }
+  },
   "files": [
     "dist",
     "migrations",
