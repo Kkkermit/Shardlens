@@ -90,7 +90,7 @@ test('a SKU price is saved and removed, with the result beside its form', async 
   // In the panel that was used, and on screen: the top of this long page is out of view from here.
   const saved = prices.getByRole('status').getByText('Saved.');
   await expect(saved).toBeInViewport();
-  await expect(prices.getByRole('row', { name: /1180000000000000001/ })).toContainText('4,99');
+  await expect(prices.getByRole('row', { name: /1180000000000000001/ })).toContainText('€4.99');
   await expect(prices.getByRole('textbox', { name: 'SKU ID' })).toHaveValue('');
 
   await prices.getByRole('textbox', { name: 'SKU ID' }).fill('12');
