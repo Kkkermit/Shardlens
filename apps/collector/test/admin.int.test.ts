@@ -163,6 +163,24 @@ describe('admin access', () => {
     expect(noCsrf.statusCode).toBe(403);
   });
 
+  it('lets no cache keep an answer: settings, keys, alerts, queries, sign-in errors', async () => {
+    const admin = { cookies: { shardlens_session: adminCookie } };
+    const answers = {
+      settings: await h.app.inject({ method: 'GET', url: '/v1/settings', ...admin }),
+      keys: await h.app.inject({ method: 'GET', url: '/v1/keys', ...admin }),
+      alerts: await h.app.inject({ method: 'GET', url: '/v1/alerts', ...admin }),
+      meta: await h.app.inject({ method: 'GET', url: '/v1/meta', ...admin }),
+      refused: await h.app.inject({ method: 'GET', url: '/v1/settings' }),
+      signIn: await h.app.inject({
+        method: 'POST',
+        url: '/auth/read-key',
+        headers: { 'x-shardlens-csrf': '1' },
+        payload: {},
+      }),
+    };
+    for (const [name, res] of Object.entries(answers)) expect(res.headers['cache-control'], name).toBe('no-store');
+  });
+
   it('validates settings: audit retention over 90 days and unknown fields are rejected', async () => {
     const ok = await h.app.inject({
       method: 'PUT',
@@ -651,6 +669,7 @@ describe('reliability, premium and badge queries', () => {
     const res = await h.app.inject({ method: 'GET', url: '/v1/badge/servers.svg' });
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toContain('image/svg+xml');
+    expect(res.headers['cache-control']).toBe('public, max-age=600');
     expect(res.body).toContain('servers');
   });
 });

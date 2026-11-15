@@ -4,7 +4,7 @@ import { badgeValue } from '../query/reports.js';
 import { runQuery } from '../query/run.js';
 import { QuerySpec } from '../query/spec.js';
 import { bearerToken } from '../security/auth.js';
-import type { Deps } from '../server.js';
+import { clientKey, type Deps } from '../server.js';
 import { activeSalts } from '../storage/maintenance.js';
 import type { SaltPeriod } from '../storage/periods.js';
 import { requireReader } from './guard.js';
@@ -60,12 +60,17 @@ export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void>
     };
   });
 
+  // Open streams in all and per visitor, so one visitor (anyone, in demo mode) can't take every slot.
   let connections = 0;
+  const perVisitor = new Map<string, number>();
   app.get('/v1/live', async (req, reply) => {
     const appId = await requireReader(deps, req, reply);
     if (!appId) return;
-    if (connections >= 100) return reply.code(503).header('retry-after', '10').send({ error: 'busy' });
+    const visitor = clientKey(req);
+    const open = perVisitor.get(visitor) ?? 0;
+    if (connections >= 100 || open >= 10) return reply.code(503).header('retry-after', '10').send({ error: 'busy' });
     connections++;
+    perVisitor.set(visitor, open + 1);
     reply.hijack();
     const res = reply.raw;
     res.writeHead(200, {
@@ -131,6 +136,9 @@ export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void>
       closed = true;
       clearInterval(timer);
       connections--;
+      const left = (perVisitor.get(visitor) ?? 1) - 1;
+      if (left > 0) perVisitor.set(visitor, left);
+      else perVisitor.delete(visitor);
     });
   });
 

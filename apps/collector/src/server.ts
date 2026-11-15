@@ -139,6 +139,12 @@ export async function buildServer(deps: Deps): Promise<FastifyInstance> {
     route.decompress ??= false;
   });
   await app.register(compress, { global: true, encodings: ['gzip', 'br'] });
+  // API answers hold analytics, keys and, in audit mode, decrypted user IDs: no browser or proxy cache may keep one,
+  // unless its route says otherwise (public badges).
+  app.addHook('onSend', async (req, reply, payload) => {
+    if (!reply.hasHeader('cache-control') && /^\/(v1|auth)\//.test(req.url)) reply.header('cache-control', 'no-store');
+    return payload;
+  });
 
   // PostgreSQL text can't hold NUL. Ingest reads its body as a buffer and checks each event itself.
   app.addHook('preValidation', async (req, reply) => {

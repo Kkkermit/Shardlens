@@ -290,10 +290,15 @@ export const COLLECTED_FIELDS: readonly CollectedField[] = [
   f('app_info', 'approximateUserAuthorizationCount', "Discord's approximate user-authorisation count.", {
     retention: 'gauge',
   }),
-  f('app_info', 'dashboardUserIds', "The app owner's or accepted team members' user IDs, for dashboard login only.", {
-    personal: 'yes',
-    retention: 'latest',
-  }),
+  f(
+    'app_info',
+    'dashboardUserIds',
+    "The app owner's or accepted team members' user IDs, kept as they are to check a Discord sign-in to the dashboard. Admin sessions and the admin activity log keep the ID of the team member who signed in.",
+    {
+      personal: 'yes',
+      retention: 'latest',
+    },
+  ),
   f('app_info', 'eventWebhooksStatus', 'Whether Discord webhook events are enabled.', { retention: 'latest' }),
   f('app_info', 'skus', 'SKU IDs, names and types.', { retention: 'latest' }),
   f('app_info', 'sessionStartRemaining', 'Identify calls left in the current 24-hour window.', { retention: 'gauge' }),

@@ -306,6 +306,24 @@ describe('LiveHub tiles', () => {
 });
 
 describe('live tiles stream', () => {
+  it('keeps slots for other visitors when one opens too many streams', { timeout: 10_000 }, async () => {
+    const db = { query: () => new Promise(() => undefined) } as unknown as Db;
+    const config = loadConfig({ ...base, SHARDLENS_DEMO: 'true', SHARDLENS_TRUST_PROXY: '1', LOG_LEVEL: 'silent' });
+    const app = await buildServer({ config, db, keys: new KeyStore(db), live: new LiveHub(db) });
+    const address = await app.listen({ port: 0, host: '127.0.0.1' });
+    const aborted = new AbortController();
+    const open = (visitor: string) =>
+      fetch(`${address}/v1/live`, { signal: aborted.signal, headers: { 'x-forwarded-for': visitor } });
+    try {
+      for (let i = 0; i < 10; i++) expect((await open('198.51.100.1')).status).toBe(200);
+      expect((await open('198.51.100.1')).status).toBe(503);
+      expect((await open('198.51.100.2')).status).toBe(200);
+    } finally {
+      aborted.abort();
+      await app.close();
+    }
+  });
+
   it('waits for a slow database instead of starting another refresh every second', { timeout: 10_000 }, async () => {
     let queries = 0;
     const db = {
