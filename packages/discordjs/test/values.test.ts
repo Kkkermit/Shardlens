@@ -102,7 +102,9 @@ describe('values the wire format would refuse', () => {
     await interaction.reply({ content: 'done' });
     await settle();
     await lens.flush();
-    expect(collector.events('message_command').map((e) => e.handlerMs)).toEqual([2 ** 31 - 1, 0]);
+    // By command, not by position: each event waits for its user hash, and two hashes can finish in either order.
+    const handlerMs = Object.fromEntries(collector.events('message_command').map((e) => [e.command, e.handlerMs]));
+    expect(handlerMs).toEqual({ slow: 2 ** 31 - 1, fast: 0 });
     expect(collector.events('interaction')).toMatchObject([{ handlerMs: 2 ** 31 - 1 }]);
   });
 
