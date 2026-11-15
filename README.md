@@ -38,15 +38,18 @@ Three lines to install. No privileged intents. User IDs never leave your bot.
 
 ## Quick start
 
-**1. Run the collector** on any server with Docker:
+**1. Run the collector** on any server with Docker and a domain pointing at it:
 
 ```sh
-git clone https://github.com/Kkkermit/Shardlens && cd Shardlens/deploy
-cp .env.example .env          # fill in your domain, application ID, secrets and two keys
-docker compose up -d --build  # Caddy (HTTPS) → collector and dashboard → PostgreSQL
+npx shardlens init --domain stats.example.com --app-id 123456789012345678
+cd shardlens && docker compose up -d  # Caddy (HTTPS) → collector and dashboard → PostgreSQL
 ```
 
-**2. Add three lines to your bot.** Only the `Guilds` intent is needed:
+`init` writes the Compose file, a `.env` with generated secrets and keys, and a `bot.env` with the two settings your
+bot needs. No server? [Embedded mode](https://kkkermit.github.io/Shardlens/self-hosting/embedded/) runs the collector
+inside your bot instead.
+
+**2. Add three lines to your bot** (`npm install @shardlens/discordjs`). Only the `Guilds` intent is needed:
 
 ```ts
 import { Client, GatewayIntentBits } from 'discord.js';
@@ -60,7 +63,8 @@ createShardlens(client, {
 await client.login(process.env.DISCORD_TOKEN);
 ```
 
-**3. Open the dashboard** at your domain and sign in with Discord (the app owner and team) or your read key.
+**3. Open the dashboard** at your domain and sign in with your read key (`SHARDLENS_READ_KEY` in `.env`), or with
+Discord (the app owner and team) once you have set that up. `npx shardlens doctor` checks the bot's side.
 
 That's it. Add `lens.wrap(handler)` to record handler time and errors, `lens.wrapMessageCommand(name, handler)` for
 prefix commands, `lens.track('ticket_opened', { … })` for your own events, and `lens.shutdown()` to flush on exit.
@@ -113,6 +117,8 @@ packages in CI. The docs are also published as plain text for agents
   [Render](https://kkkermit.github.io/Shardlens/self-hosting/render/) in [`deploy/`](deploy).
 
 Runnable [`examples/`](examples) cover a minimal bot, both sharding managers, audit mode and a Cloudflare Worker.
+`pnpm sim` installs the packed packages into four differently built bots and runs them against a fake Discord, so
+every release is checked the way you would use it.
 
 ## How it compares
 
