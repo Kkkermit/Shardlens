@@ -1,3 +1,5 @@
+import { ACCEPT_BACK_DAYS } from '../storage/maintenance.js';
+
 const DAY = 86_400_000;
 const BUCKET_MS = { rollup_1m: 60_000, rollup_1h: 3_600_000, rollup_1d: DAY } as const;
 
@@ -11,4 +13,9 @@ export function rollupSource(from: Date, now: Date, minutes = false): { table: k
   const table = minutes ? 'rollup_1m' : now.getTime() - from.getTime() <= 395 * DAY ? 'rollup_1h' : 'rollup_1d';
   const size = BUCKET_MS[table];
   return { table, from: new Date(Math.floor(from.getTime() / size) * size) };
+}
+
+/** Where reading raw rows starts: they exist for the raw retention window only. */
+export function rawFrom(from: Date, now: Date): Date {
+  return new Date(Math.max(from.getTime(), now.getTime() - ACCEPT_BACK_DAYS * DAY));
 }

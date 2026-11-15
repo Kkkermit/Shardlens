@@ -3,6 +3,9 @@ import { postToDiscordWebhook } from '../discord-webhook.js';
 import { INTERACTIONS_ONLY_SQL } from '../ingest/codes.js';
 import { auditCipher } from '../security/crypto.js';
 
+/** Usually a changed `SHARDLENS_SETTINGS_KEY`. */
+export const UNREADABLE_WEBHOOK = 'The saved webhook could not be decrypted. Save the alert again.';
+
 /** Minimum time between two notifications for the same rule. */
 const ALERT_DEBOUNCE_MS = 30 * 60_000;
 
@@ -130,11 +133,11 @@ export async function runAlerts(
     try {
       url = cipher.decrypt(rule.webhook_enc);
     } catch {
-      // Usually a changed SHARDLENS_SETTINGS_KEY. Shown in the alert's history instead of failing silently.
+      // Shown in the alert's history instead of failing silently.
       await db.query('UPDATE alert_rules SET last_fired = $2 WHERE id = $1', [rule.id, now]);
       await db.query(
         'INSERT INTO alert_events (rule_id, app_id, ts, value, delivered, error) VALUES ($1, $2, $3, $4, false, $5)',
-        [rule.id, rule.app_id, now, value, 'The saved webhook could not be decrypted. Save the alert again.'],
+        [rule.id, rule.app_id, now, value, UNREADABLE_WEBHOOK],
       );
       continue;
     }

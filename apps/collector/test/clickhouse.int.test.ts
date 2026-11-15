@@ -54,7 +54,7 @@ beforeAll(async () => {
       ts: now,
       id: uuidv7(now),
     }),
-    // A button: not part of the `interactions` metric (commands, context menus, entry points only).
+    // A button: not part of the `interactions` metric (commands, context menus, entry points, message commands).
     interaction(await hashOf('300000000000000001'), {
       kind: 'button',
       command: undefined,

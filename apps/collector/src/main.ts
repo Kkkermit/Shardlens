@@ -2,7 +2,6 @@ import { startCollector } from './app.js';
 import { createPool, migrate } from './db.js';
 import { loadConfig } from './env.js';
 
-/** Collector entry point: config → migrations → bootstrap → HTTP server → background jobs. */
 async function main(): Promise<void> {
   const config = loadConfig();
   const migrationsApplied = await migrate(config.databaseUrl);

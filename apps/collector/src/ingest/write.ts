@@ -3,10 +3,10 @@ import { insertRows, type Tx } from '../db.js';
 import type { auditCipher } from '../security/crypto.js';
 import type { MirroredCustom, MirroredInteraction } from '../storage/clickhouse.js';
 import { ensureUniquesPartition } from '../storage/maintenance.js';
-import { COMMAND_SCOPE, INSTALL, KIND, MEMBER_TIER, OUTCOME, parseUserHash } from './codes.js';
-import { applyGuildJoin, applyGuildLeave, applyGuildUpdate, applySnapshot } from './guilds.js';
+import { COMMAND_SCOPE, GUILD_EVENT, INSTALL, KIND, MEMBER_TIER, OUTCOME, parseUserHash } from './codes.js';
+import { applyGuildJoin, applyGuildLeave, applyGuildUpdate, applySnapshot, recordGuildEvent } from './guilds.js';
 
-export interface IngestContext {
+interface IngestContext {
   appId: string;
   env: string;
   release: string | undefined;
@@ -28,12 +28,12 @@ export interface Indexed {
   event: Event;
 }
 
-export interface WriteResult {
+interface WriteResult {
   accepted: number;
   duplicates: number;
   rejected: { index: number; reason: string }[];
-  interactions: number;
-  errors: number;
+  /** IDs (lower case) of the interactions and message commands this batch stored: retried ones are left out. */
+  stored: Set<string>;
   /** Rows PostgreSQL accepted (never retries), when `ctx.mirror` is set. */
   mirror?: { interactions: MirroredInteraction[]; custom: MirroredCustom[] } | undefined;
 }
@@ -43,12 +43,73 @@ const LATE_MS = 2 * 60_000;
 
 const minute = (ts: number) => new Date(Math.floor(ts / 60_000) * 60_000);
 
+const INTERACTION_COLUMNS = [
+  'id',
+  'ts',
+  'app_id',
+  'env',
+  'release',
+  'kind',
+  'command',
+  'cmd_group',
+  'sub',
+  'command_id',
+  'command_scope',
+  'options',
+  'option_values',
+  'custom_id',
+  'component_type',
+  'source_command',
+  'context',
+  'install',
+  'guild_id',
+  'channel_type',
+  'locale',
+  'guild_locale',
+  'member_tier',
+  'user_hash',
+  'salt_period',
+  'premium',
+  'outcome',
+  'error_code',
+  'error_class',
+  'ack_ms',
+  'response_type',
+  'deferred',
+  'ephemeral',
+  'handler_ms',
+  'shard',
+  'weight',
+] as const;
+const GAUGE_COLUMNS = ['app_id', 'ts', 'name', 'shard', 'instance', 'value'];
+
+/** Entitlements come from the gateway (here) and from webhook events (`routes/discord-events.ts`). */
+export const ENTITLEMENT_COLUMNS = [
+  'app_id',
+  'ts',
+  'action',
+  'sku_id',
+  'entitlement_type',
+  'owner',
+  'user_hash',
+  'guild_id',
+  'starts_at',
+  'ends_at',
+  'source',
+];
+
+/** Position of each column in an `interactions` row, for the ClickHouse mirror. */
+const AT = Object.fromEntries(INTERACTION_COLUMNS.map((c, i) => [c, i])) as Record<
+  (typeof INTERACTION_COLUMNS)[number],
+  number
+>;
+
 /**
  * Writes one validated batch in the caller's transaction. Every insert is idempotent (`ON CONFLICT DO NOTHING` on the
  * UUIDv7 event ID), so a retried batch is counted once.
  */
 export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly Indexed[]): Promise<WriteResult> {
-  const result: WriteResult = { accepted: 0, duplicates: 0, rejected: [], interactions: 0, errors: 0 };
+  const result: WriteResult = { accepted: 0, duplicates: 0, rejected: [], stored: new Set() };
   const dirty = new Set<number>();
   const markLate = (ts: number) => {
     if (ctx.now.getTime() - ts > LATE_MS) dirty.add(minute(ts).getTime());
@@ -190,8 +251,6 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
         if (e.install) extra.push(['install', e.install]);
         countRun(user, ts, command, e.guild, e.kind !== 'autocomplete', extra);
         audit(e, ts, KIND[e.kind], e.customId, e.ackMs);
-        result.interactions += e.weight;
-        if (e.outcome !== 'ok') result.errors += e.weight;
         break;
       }
       case 'message_command': {
@@ -241,8 +300,6 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
         ]);
         countRun(user, ts, e.command, e.guild, true, []);
         audit(e, ts, KIND.message_command, undefined, undefined);
-        result.interactions += e.weight;
-        if (e.outcome !== 'ok') result.errors += e.weight;
         break;
       }
       case 'interaction_error':
@@ -353,45 +410,7 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
 
   for (const period of periods) await ensureUniquesPartition(tx, period);
 
-  const interactionCols = [
-    'id',
-    'ts',
-    'app_id',
-    'env',
-    'release',
-    'kind',
-    'command',
-    'cmd_group',
-    'sub',
-    'command_id',
-    'command_scope',
-    'options',
-    'option_values',
-    'custom_id',
-    'component_type',
-    'source_command',
-    'context',
-    'install',
-    'guild_id',
-    'channel_type',
-    'locale',
-    'guild_locale',
-    'member_tier',
-    'user_hash',
-    'salt_period',
-    'premium',
-    'outcome',
-    'error_code',
-    'error_class',
-    'ack_ms',
-    'response_type',
-    'deferred',
-    'ephemeral',
-    'handler_ms',
-    'shard',
-    'weight',
-  ];
-  const counted = async (table: string, cols: string[], rows: unknown[][], fresh?: Set<string>) => {
+  const counted = async (table: string, cols: readonly string[], rows: unknown[][], fresh?: Set<string>) => {
     const inserted = await insertRows(
       tx,
       table,
@@ -407,33 +426,7 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
     result.duplicates += rows.length - inserted;
   };
 
-  // With ClickHouse, only rows PostgreSQL accepted are mirrored, so retried batches are never counted twice there.
-  const freshInteractions = ctx.mirror ? new Set<string>() : undefined;
-  await counted('interactions', interactionCols, interactionRows, freshInteractions);
-  if (freshInteractions) {
-    result.mirror = {
-      interactions: interactionRows
-        .filter((r) => freshInteractions.has(r[0] as string))
-        .map((r) => ({
-          id: r[0] as string,
-          ts: r[1] as Date,
-          appId: r[2] as string,
-          kind: r[5] as number,
-          command: r[6] as string | null,
-          sub: r[8] as string | null,
-          outcome: r[26] as number,
-          context: r[16] as number | null,
-          install: r[17] as number | null,
-          guildId: r[18] as string | null,
-          locale: r[20] as string,
-          tier: r[22] as number | null,
-          userHash: r[23] as Buffer,
-          ackMs: r[29] as number | null,
-          weight: r[35] as number,
-        })),
-      custom: [],
-    };
-  }
+  await counted('interactions', INTERACTION_COLUMNS, interactionRows, result.stored);
   await insertRows(tx, 'uniques', ['app_id', 'period', 'day', 'scope', 'scope_key', 'user_hash'], uniqueRows);
   await insertRows(
     tx,
@@ -468,46 +461,51 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
   );
   await counted('rest_invalid', ['id', 'ts', 'app_id', 'count401', 'count403', 'count429', 'shared429'], invalidRows);
   await counted('rate_limits', ['id', 'ts', 'app_id', 'scope', 'global', 'route', 'method', 'retry_after'], rateRows);
-  const freshCustom = result.mirror ? new Set<string>() : undefined;
+  const freshCustom = ctx.mirror ? new Set<string>() : undefined;
   await counted(
     'custom_events',
     ['id', 'ts', 'app_id', 'name', 'props', 'user_hash', 'guild_id', 'weight'],
     customRows,
     freshCustom,
   );
-  if (result.mirror && freshCustom) {
-    result.mirror.custom = customRows
-      .filter((r) => freshCustom.has(r[0] as string))
-      .map((r) => ({
-        id: r[0] as string,
-        ts: r[1] as Date,
-        appId: r[2] as string,
-        name: r[3] as string,
-        userHash: (r[5] as Buffer | null) ?? null,
-        guildId: (r[6] as string | null) ?? null,
-        weight: r[7] as number,
-      }));
+  // With ClickHouse, only rows PostgreSQL accepted are mirrored, so retried batches are never counted twice there.
+  if (freshCustom) {
+    result.mirror = {
+      interactions: interactionRows
+        .filter((r) => result.stored.has((r[AT.id] as string).toLowerCase()))
+        .map((r) => ({
+          id: r[AT.id] as string,
+          ts: r[AT.ts] as Date,
+          appId: r[AT.app_id] as string,
+          kind: r[AT.kind] as number,
+          command: r[AT.command] as string | null,
+          sub: r[AT.sub] as string | null,
+          outcome: r[AT.outcome] as number,
+          context: r[AT.context] as number | null,
+          install: r[AT.install] as number | null,
+          guildId: r[AT.guild_id] as string | null,
+          locale: r[AT.locale] as string,
+          tier: r[AT.member_tier] as number | null,
+          userHash: r[AT.user_hash] as Buffer,
+          ackMs: r[AT.ack_ms] as number | null,
+          weight: r[AT.weight] as number,
+        })),
+      custom: customRows
+        .filter((r) => freshCustom.has((r[0] as string).toLowerCase()))
+        .map((r) => ({
+          id: r[0] as string,
+          ts: r[1] as Date,
+          appId: r[2] as string,
+          name: r[3] as string,
+          userHash: (r[5] as Buffer | null) ?? null,
+          guildId: (r[6] as string | null) ?? null,
+          weight: r[7] as number,
+        })),
+    };
   }
-  await insertRows(tx, 'gauges', ['app_id', 'ts', 'name', 'shard', 'instance', 'value'], gaugeRows);
+  await insertRows(tx, 'gauges', GAUGE_COLUMNS, gaugeRows);
   await insertRows(tx, 'shard_events', ['app_id', 'ts', 'shard', 'state', 'close_code', 'replayed'], shardRows);
-  await insertRows(
-    tx,
-    'entitlements',
-    [
-      'app_id',
-      'ts',
-      'action',
-      'sku_id',
-      'entitlement_type',
-      'owner',
-      'user_hash',
-      'guild_id',
-      'starts_at',
-      'ends_at',
-      'source',
-    ],
-    entitlementRows,
-  );
+  await insertRows(tx, 'entitlements', ENTITLEMENT_COLUMNS, entitlementRows);
   await insertRows(
     tx,
     'subscriptions',
@@ -539,15 +537,12 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
         else result.duplicates++;
         markLate(e.ts);
         break;
-      case 'guild_availability':
-        await insertRows(
-          tx,
-          'guild_events',
-          ['app_id', 'guild_id', 'ts', 'kind', 'detected_at_startup'],
-          [[ctx.appId, e.guild, ts, e.available ? 4 : 3, false]],
-        );
-        result.accepted++;
+      case 'guild_availability': {
+        const kind = e.available ? GUILD_EVENT.available : GUILD_EVENT.unavailable;
+        if (await recordGuildEvent(tx, ctx.appId, e.guild, ts, kind, false)) result.accepted++;
+        else result.duplicates++;
         break;
+      }
       case 'guild_snapshot':
         await applySnapshot(tx, ctx.appId, ts, e);
         result.accepted++;
@@ -638,7 +633,7 @@ async function applyRegistry(
 
 async function applyAppInfo(tx: Tx, ctx: IngestContext, e: Extract<Event, { type: 'app_info' }>) {
   const ts = new Date(e.ts);
-  await tx.query(
+  const newest = await tx.query(
     `INSERT INTO app_info (app_id, ts, name, approx_guilds, approx_user_installs, approx_user_auths, dashboard_user_ids,
        event_webhooks_status, skus, session_start_remaining, session_start_total, node_version, lib_version,
        sdk_version, release)
@@ -649,7 +644,8 @@ async function applyAppInfo(tx: Tx, ctx: IngestContext, e: Extract<Event, { type
        skus = EXCLUDED.skus, session_start_remaining = EXCLUDED.session_start_remaining,
        session_start_total = EXCLUDED.session_start_total, node_version = EXCLUDED.node_version,
        lib_version = EXCLUDED.lib_version, sdk_version = EXCLUDED.sdk_version, release = EXCLUDED.release
-     WHERE app_info.ts <= EXCLUDED.ts`,
+     WHERE app_info.ts <= EXCLUDED.ts
+     RETURNING app_id`,
     [
       ctx.appId,
       ts,
@@ -668,7 +664,8 @@ async function applyAppInfo(tx: Tx, ctx: IngestContext, e: Extract<Event, { type
       ctx.release ?? null,
     ],
   );
-  await tx.query('UPDATE apps SET name = $2 WHERE app_id = $1', [ctx.appId, e.name]);
+  // A report older than the stored one (a late retry) must not bring back an old name.
+  if (newest.rowCount) await tx.query('UPDATE apps SET name = $2 WHERE app_id = $1', [ctx.appId, e.name]);
   const gauges: [string, number | null | undefined][] = [
     ['app.approx_guilds', e.approximateGuildCount],
     ['app.approx_user_installs', e.approximateUserInstallCount],
@@ -677,7 +674,7 @@ async function applyAppInfo(tx: Tx, ctx: IngestContext, e: Extract<Event, { type
   await insertRows(
     tx,
     'gauges',
-    ['app_id', 'ts', 'name', 'shard', 'instance', 'value'],
+    GAUGE_COLUMNS,
     gauges.filter(([, v]) => typeof v === 'number').map(([name, v]) => [ctx.appId, ts, name, -1, ctx.instance, v]),
   );
 }

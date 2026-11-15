@@ -145,7 +145,8 @@ function mergeWindows(windows: [number, number][]): [number, number][] {
 /** Minute rollups are kept 14 days; their partitions start at this day boundary. */
 const MINUTE_RETENTION_DAYS = 13;
 
-async function rawRetentionDays(db: Db): Promise<number> {
+/** The longest raw retention of any app: raw partitions are shared, so they are kept that long. */
+export async function rawRetentionDays(db: Db): Promise<number> {
   const res = await db.query<{ days: number | null }>('SELECT max(raw_retention_days) AS days FROM apps');
   return res.rows[0]?.days ?? 35;
 }

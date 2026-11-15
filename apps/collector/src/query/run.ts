@@ -15,7 +15,7 @@ import type { ClickHouseStore } from '../storage/clickhouse.js';
 import { periodBounds, periodLabel, type SaltPeriod } from '../storage/periods.js';
 import { eventProps, events, funnel, retention } from './funnels.js';
 import { installs, premium, reliability } from './reports.js';
-import { rollupSource } from './rollup-source.js';
+import { rawFrom, rollupSource } from './rollup-source.js';
 import type { Filter, QuerySpec } from './spec.js';
 
 /** A query the spec allows but the data can't answer (for example a minute series over a month). */
@@ -130,11 +130,7 @@ async function series(db: Db, appId: string, spec: Spec<'series'>, now: Date, an
   if (spec.interval === 'hour' && span > 31 * DAY) throw new QueryError('hourly series are limited to 31 days');
   const metric = resolveMetric(spec);
   // ClickHouse keeps minutes and widens the range to the minute itself, so it gets the range as asked.
-  const fromAnalytics = await analytics?.series(
-    appId,
-    { ...spec, metric, from: asked, to, interval: spec.interval, timezone: spec.timezone, limit: spec.limit },
-    encodeValue,
-  );
+  const fromAnalytics = await analytics?.series(appId, { ...spec, metric, from: asked, to }, encodeValue);
   if (fromAnalytics) {
     return {
       timezone: spec.timezone,
@@ -217,11 +213,7 @@ async function heatmap(db: Db, appId: string, spec: Spec<'heatmap'>, now: Date, 
   const asked = new Date(spec.range.from);
   const to = new Date(spec.range.to);
   const metric = resolveMetric(spec);
-  const fromAnalytics = await analytics?.heatmap(
-    appId,
-    { ...spec, metric, from: asked, to, stat: 'count' },
-    encodeValue,
-  );
+  const fromAnalytics = await analytics?.heatmap(appId, { ...spec, metric, from: asked, to }, encodeValue);
   if (fromAnalytics) return { timezone: spec.timezone, source: 'clickhouse', cells: fromAnalytics };
   const { table, from } = rollupSource(asked, now);
   const params: unknown[] = [appId, metric, from, to, spec.timezone];
@@ -293,8 +285,7 @@ async function commands(db: Db, appId: string, spec: Spec<'commands'>, now: Date
 }
 
 async function command(db: Db, appId: string, spec: Spec<'command'>, now: Date) {
-  // Detail views read raw rows, which exist for the raw retention window only.
-  const from = new Date(Math.max(Date.parse(spec.range.from), now.getTime() - 35 * DAY));
+  const from = rawFrom(new Date(spec.range.from), now);
   const to = new Date(spec.range.to);
   const p = [appId, spec.name, from, to];
   const base = `FROM interactions WHERE app_id = $1 AND command = $2 AND ts >= $3 AND ts < $4 AND kind IN ${COMMAND_KINDS_SQL}`;
@@ -449,8 +440,8 @@ async function servers(db: Db, appId: string, spec: Spec<'servers'>) {
                      GROUP BY 1) r ON r.gid = g.guild_id::text
         WHERE ${filter}
         ORDER BY ${order}
-        LIMIT ${spec.limit} OFFSET ${spec.offset}`,
-      params,
+        LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, spec.limit, spec.offset],
     ),
     db.query<{ n: number }>(`SELECT count(*)::int AS n FROM guilds g WHERE ${filter}`, params),
   ]);
@@ -604,7 +595,6 @@ async function audience(db: Db, appId: string, spec: Spec<'audience'>, now: Date
   // Unique users are counted per UTC day. `to` is exclusive, so the last day is the one its final millisecond is in:
   // a range ending now includes today.
   const days = [appId, day(from), day(new Date(to.getTime() - 1))];
-  const rawFrom = new Date(Math.max(from.getTime(), now.getTime() - 35 * DAY));
   const rollups = rollupSource(from, now);
   const [daily, weekly, periods, splits, premium] = await Promise.all([
     db.query(
@@ -637,7 +627,7 @@ async function audience(db: Db, appId: string, spec: Spec<'audience'>, now: Date
     db.query<{ share: number | null }>(
       `SELECT (sum(weight) FILTER (WHERE premium) / nullif(sum(weight), 0))::float8 AS share
          FROM interactions WHERE app_id = $1 AND ts >= $2 AND ts < $3 AND ${INTERACTIONS_ONLY_SQL}`,
-      [appId, rawFrom, to],
+      [appId, rawFrom(from, now), to],
     ),
   ]);
   const dau = daily.rows as { users: number }[];

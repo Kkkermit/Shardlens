@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Db } from '../src/db.js';
@@ -9,7 +10,7 @@ import { LiveHub } from '../src/live.js';
 import { openApiDocument } from '../src/openapi.js';
 import { rollupSource } from '../src/query/rollup-source.js';
 import { KeyStore } from '../src/security/auth.js';
-import { clientKey } from '../src/server.js';
+import { buildServer, clientKey } from '../src/server.js';
 import { periodBounds, periodIdent } from '../src/storage/periods.js';
 
 const base = {
@@ -19,6 +20,16 @@ const base = {
   SHARDLENS_SESSION_SECRET: 'x'.repeat(40),
   SHARDLENS_SETTINGS_KEY: Buffer.alloc(32, 1).toString('base64'),
 };
+
+/** A pool connection that answers every query with `rows` and records how it was released. */
+function fakeClient(rows: object[] = []) {
+  const released: unknown[] = [];
+  const client = Object.assign(new EventEmitter(), {
+    query: async () => ({ rows, rowCount: rows.length }),
+    release: (broken?: boolean) => void released.push(broken ?? false),
+  });
+  return { client, released };
+}
 
 describe('loadConfig', () => {
   it('loads a minimal valid configuration', () => {
@@ -169,6 +180,31 @@ describe('job scheduler', () => {
     await vi.advanceTimersByTimeAsync(60_000);
     await stopped;
   });
+
+  it('keeps one connection, with one error listener, while another collector leads', async () => {
+    vi.useFakeTimers();
+    const clients: ReturnType<typeof fakeClient>[] = [];
+    const db = {
+      query: async () => ({ rows: [], rowCount: 0 }),
+      connect: async () => {
+        const c = fakeClient([{ ok: false }]);
+        clients.push(c);
+        return c.client;
+      },
+    } as unknown as Db;
+    const jobs = startJobs(db, { info: () => undefined, error: () => undefined });
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(clients).toHaveLength(1);
+    expect(clients[0]?.client.listenerCount('error')).toBe(1);
+
+    // A broken connection goes back to the pool to be destroyed, and the next attempt opens a new one.
+    clients[0]?.client.emit('error', new Error('Connection terminated unexpectedly'));
+    expect(clients[0]?.released).toEqual([true]);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(clients).toHaveLength(2);
+    await jobs.stop();
+    expect(clients[1]?.released).toEqual([false]);
+  });
 });
 
 describe('periods', () => {
@@ -198,6 +234,10 @@ describe('periods', () => {
 });
 
 describe('LiveHub tiles', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('sums the last minute of interactions and 15 minutes of failures', () => {
     const hub = new LiveHub({} as never);
     const now = Date.now();
@@ -207,6 +247,70 @@ describe('LiveHub tiles', () => {
     hub.bump('1', now - 20 * 60_000, 50, 50);
     expect(hub.tiles('1', now)).toMatchObject({ perMinute: 8, errors15m: 3 });
     expect(hub.tiles('2', now)).toMatchObject({ perMinute: 0, errors15m: 0 });
+  });
+
+  it('keeps counting after 2038, when epoch seconds no longer fit 32 bits', () => {
+    const hub = new LiveHub({} as never);
+    const at = Date.UTC(2040, 0, 1);
+    hub.bump('1', at, 5, 1);
+    expect(hub.tiles('1', at)).toMatchObject({ perMinute: 5, errors15m: 1 });
+  });
+
+  it('gives a broken listening connection back to the pool, once', async () => {
+    const { client, released } = fakeClient();
+    const hub = new LiveHub({ connect: async () => client } as unknown as Db);
+    expect(await hub.start()).toBe(true);
+    client.emit('error', new Error('Connection terminated unexpectedly'));
+    client.emit('error', new Error('Connection terminated unexpectedly'));
+    await hub.stop();
+    expect(released).toEqual([true]);
+  });
+
+  it('shares a burst spread over many seconds with the other instances', async () => {
+    vi.useFakeTimers();
+    const payloads: string[] = [];
+    const db = {
+      connect: async () => fakeClient().client,
+      query: async (_sql: string, params: string[]) => {
+        payloads.push(params[1] as string);
+        return { rows: [] };
+      },
+    } as unknown as Db;
+    const hub = new LiveHub(db);
+    await hub.start();
+    const now = Date.now();
+    for (let back = 0; back < 900; back++) hub.bump('1', now - back * 1_000, 1 / 3, 1 / 3);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await hub.stop();
+    expect(payloads.length).toBeGreaterThan(1);
+    for (const payload of payloads) expect(Buffer.byteLength(payload)).toBeLessThan(8_000);
+    expect(payloads.flatMap((payload) => (JSON.parse(payload) as { c: unknown[] }).c)).toHaveLength(900);
+  });
+});
+
+describe('live tiles stream', () => {
+  it('waits for a slow database instead of starting another refresh every second', { timeout: 10_000 }, async () => {
+    let queries = 0;
+    const db = {
+      query: () => {
+        queries++;
+        return new Promise(() => undefined);
+      },
+    } as unknown as Db;
+    const config = loadConfig({ ...base, SHARDLENS_DEMO: 'true', LOG_LEVEL: 'silent' });
+    const app = await buildServer({ config, db, keys: new KeyStore(db), live: new LiveHub(db) });
+    const address = await app.listen({ port: 0, host: '127.0.0.1' });
+    const aborted = new AbortController();
+    try {
+      const res = await fetch(`${address}/v1/live`, { signal: aborted.signal });
+      expect(res.status).toBe(200);
+      await new Promise((resolve) => setTimeout(resolve, 2_500));
+      // One refresh (three queries) still waiting, not one started for every second.
+      expect(queries).toBe(3);
+    } finally {
+      aborted.abort();
+      await app.close();
+    }
   });
 });
 

@@ -1,12 +1,11 @@
 import type { Db } from '../db.js';
 import { INTERACTIONS_ONLY_SQL } from '../ingest/codes.js';
-import { rollupSource } from './rollup-source.js';
+import { rawFrom, rollupSource } from './rollup-source.js';
 
-const DAY = 86_400_000;
-const rawFrom = (from: Date, now: Date) => new Date(Math.max(from.getTime(), now.getTime() - 35 * DAY));
-
-/** Reliability page: deadlines, errors, REST, rate limits, budgets, shards, process and SDK health. */
-/** Interactions only: message commands have no response or deadline, and show on the Commands page. */
+/**
+ * Reliability page: deadlines, errors, REST, rate limits, budgets, shards, process and SDK health. Interactions only:
+ * message commands have no response or deadline, and show on the Commands page.
+ */
 export async function reliability(db: Db, appId: string, range: { from: string; to: string }, now: Date) {
   const from = new Date(range.from);
   const to = new Date(range.to);

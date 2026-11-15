@@ -135,7 +135,7 @@ export async function buildServer(deps: Deps): Promise<FastifyInstance> {
   });
   await app.register(compress, { global: true, encodings: ['gzip', 'br'] });
 
-  // Ingest reads its body as a buffer and checks each event itself; everything else is refused here.
+  // PostgreSQL text can't hold NUL. Ingest reads its body as a buffer and checks each event itself.
   app.addHook('preValidation', async (req, reply) => {
     const body = Buffer.isBuffer(req.body) ? undefined : req.body;
     if (containsNul(body) || containsNul(req.query) || containsNul(req.params)) {

@@ -35,6 +35,16 @@ export const AuditLogFilters = z
   })
   .strict();
 
+/** `null` for a value this key can't read (written under another audit key). */
+function decryptOrNull(cipher: ReturnType<typeof auditCipher> | undefined, blob: Buffer | null): string | null {
+  if (!blob || !cipher) return null;
+  try {
+    return cipher.decrypt(blob);
+  } catch {
+    return null;
+  }
+}
+
 async function appMode(db: Db, appId: string): Promise<string | undefined> {
   const res = await db.query<{ mode: string }>('SELECT mode FROM apps WHERE app_id = $1', [appId]);
   return res.rows[0]?.mode;
@@ -102,13 +112,7 @@ async function eraseUser(
       [appId],
     );
     for (const w of installers.rows) {
-      let actor: string | undefined;
-      try {
-        actor = cipher.decrypt(w.actor_enc);
-      } catch {
-        actor = undefined;
-      }
-      if (actor === input.userId) {
+      if (decryptOrNull(cipher, w.actor_enc) === input.userId) {
         await db.query('UPDATE webhook_events SET actor_enc = NULL WHERE id = $1 AND ts = $2', [w.id, w.ts]);
         erased++;
       }
@@ -119,6 +123,7 @@ async function eraseUser(
 
 export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<void> {
   const cipher = deps.config.auditKey ? auditCipher(deps.config.auditKey) : undefined;
+  const decrypt = (blob: Buffer | null) => decryptOrNull(cipher, blob);
 
   app.post('/v1/privacy/erase', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (req, reply) => {
     const body = EraseBody.parse(req.body ?? {});
@@ -148,7 +153,6 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
     return { erased };
   });
 
-  // Audit mode: who ran what
   const requireAudit = async (req: FastifyRequest, reply: FastifyReply) => {
     const admin = await requireAdmin(deps, req, reply);
     if (!admin) return undefined;
@@ -195,18 +199,8 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
       params,
     );
     return res.rows.map((r) => {
-      let profile: { username?: string; avatar?: string } = {};
-      try {
-        if (r.names_enc && cipher) profile = JSON.parse(cipher.decrypt(r.names_enc)) as typeof profile;
-      } catch {
-        profile = {};
-      }
-      let userId: string | null = null;
-      try {
-        userId = cipher ? cipher.decrypt(r.actor_enc) : null;
-      } catch {
-        userId = null;
-      }
+      const names = decrypt(r.names_enc);
+      const profile = (names ? JSON.parse(names) : {}) as { username?: string; avatar?: string };
       return {
         interactionId: r.interaction_id,
         ts: r.ts,
@@ -218,7 +212,7 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
         customId: r.custom_id,
         outcome: OUTCOME_NAME[r.outcome] ?? String(r.outcome),
         ackMs: r.ack_ms,
-        userId,
+        userId: decrypt(r.actor_enc),
         username: profile.username ?? null,
         avatar: profile.avatar ?? null,
       };
@@ -253,15 +247,7 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
     await logAccess(deps.db, admin.appId, admin.userId, 'top_users', { window });
     return {
       window,
-      rows: res.rows.map((r) => {
-        let userId: string | null = null;
-        try {
-          userId = cipher?.decrypt(r.actor_enc) ?? null;
-        } catch {
-          userId = null;
-        }
-        return { userId, runs: r.runs };
-      }),
+      rows: res.rows.map((r) => ({ userId: decrypt(r.actor_enc), runs: r.runs })),
     };
   });
 

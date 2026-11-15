@@ -11,7 +11,7 @@ import {
 } from './periods.js';
 
 /** Raw tables partitioned by day, and how many days of partitions to keep by default. */
-export const DAILY_TABLES = [
+const DAILY_TABLES = [
   'interactions',
   'interaction_errors',
   'rest_calls',
@@ -101,17 +101,20 @@ export async function dropExpiredPartitions(
   return dropped;
 }
 
-const knownUniquesPartitions = new Set<string>();
+/** Partitions known to exist, per database handle: one process can use several databases (embedded mode, tests). */
+const knownUniquesPartitions = new WeakMap<Db | Tx, Set<string>>();
 
 /** Creates the `uniques` LIST partition for a salt period if needed. */
 export async function ensureUniquesPartition(db: Db | Tx, label: string): Promise<void> {
-  if (knownUniquesPartitions.has(label)) return;
+  const known = knownUniquesPartitions.get(db) ?? new Set<string>();
+  if (known.has(label)) return;
   const ident = `uniques_${periodIdent(label)}`;
   await db.query(`CREATE TABLE IF NOT EXISTS "${ident}" PARTITION OF uniques FOR VALUES IN ('${label}')`);
-  knownUniquesPartitions.add(label);
+  known.add(label);
+  knownUniquesPartitions.set(db, known);
 }
 
-export interface SaltRow {
+interface SaltRow {
   period: string;
   secret: Buffer;
 }
@@ -193,7 +196,7 @@ export async function destroyExpiredSalts(
     const stillLive = await db.query('SELECT 1 FROM salts WHERE period = $1 AND secret IS NOT NULL LIMIT 1', [period]);
     if (stillLive.rowCount === 0) {
       await db.query(`DROP TABLE IF EXISTS "uniques_${periodIdent(period)}"`);
-      knownUniquesPartitions.delete(period);
+      knownUniquesPartitions.get(db)?.delete(period);
     }
     destroyed.push(`${app_id}:${period}`);
   }

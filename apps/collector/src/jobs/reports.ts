@@ -20,7 +20,7 @@ interface ReportRow {
   day_end: Date;
 }
 
-export interface ReportOptions {
+interface ReportOptions {
   settingsKey: string;
   publicUrl: URL;
   fetchImpl?: typeof fetch;

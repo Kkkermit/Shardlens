@@ -30,7 +30,16 @@ export function maskWebhook(url: string): string {
   return m ? `${m[1]}${m[2]}…/•••` : '•••';
 }
 
-export interface DiscordMessage {
+/** A stored, encrypted webhook URL, masked. Just `•••` when it can no longer be decrypted (a changed settings key). */
+export function maskStoredWebhook(cipher: { decrypt(blob: Buffer): string }, blob: Buffer): string {
+  try {
+    return maskWebhook(cipher.decrypt(blob));
+  } catch {
+    return '•••';
+  }
+}
+
+interface DiscordMessage {
   title: string;
   /** Discord Markdown. */
   body: string;

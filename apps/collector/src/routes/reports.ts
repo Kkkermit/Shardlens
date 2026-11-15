@@ -1,9 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { isDiscordWebhookUrl, maskWebhook } from '../discord-webhook.js';
+import { isDiscordWebhookUrl, maskStoredWebhook } from '../discord-webhook.js';
 import { REPORT_SCHEDULES, type ReportSchedule, sendReportNow } from '../jobs/reports.js';
 import { auditCipher } from '../security/crypto.js';
 import type { Deps } from '../server.js';
+import { EnabledBody, IdParam } from './admin.js';
 import { adminAudit, requireAdmin } from './guard.js';
 
 const MAX_REPORTS = 10;
@@ -22,8 +23,6 @@ export const ReportBody = z
       .refine(isDiscordWebhookUrl, 'must be a Discord webhook URL (https://discord.com/api/webhooks/…)'),
   })
   .strict();
-
-const ReportId = z.object({ id: z.string().regex(/^\d{1,18}$/) });
 
 /** Scheduled reports: a daily or weekly summary posted to a Discord channel through its webhook. */
 export async function reportRoutes(app: FastifyInstance, deps: Deps): Promise<void> {
@@ -52,25 +51,17 @@ export async function reportRoutes(app: FastifyInstance, deps: Deps): Promise<vo
     ]);
     return {
       timezone: zone.rows[0]?.timezone ?? 'UTC',
-      reports: rows.rows.map((r) => {
-        let webhook = '•••';
-        try {
-          webhook = maskWebhook(cipher.decrypt(r.webhook_enc));
-        } catch {
-          // an unreadable URL is shown masked; the next send records why
-        }
-        return {
-          id: r.id,
-          name: r.name,
-          schedule: r.schedule,
-          hour: r.hour,
-          weekday: r.weekday,
-          webhook,
-          enabled: r.enabled,
-          lastSent: r.last_sent,
-          lastError: r.last_error,
-        };
-      }),
+      reports: rows.rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        schedule: r.schedule,
+        hour: r.hour,
+        weekday: r.weekday,
+        webhook: maskStoredWebhook(cipher, r.webhook_enc),
+        enabled: r.enabled,
+        lastSent: r.last_sent,
+        lastError: r.last_error,
+      })),
     };
   });
 
@@ -99,11 +90,8 @@ export async function reportRoutes(app: FastifyInstance, deps: Deps): Promise<vo
   app.patch('/v1/reports/:id', async (req, reply) => {
     const admin = await requireAdmin(deps, req, reply, { mutate: true });
     if (!admin) return;
-    const { id } = ReportId.parse(req.params);
-    const { enabled } = z
-      .object({ enabled: z.boolean() })
-      .strict()
-      .parse(req.body ?? {});
+    const { id } = IdParam.parse(req.params);
+    const { enabled } = EnabledBody.parse(req.body ?? {});
     const res = await deps.db.query('UPDATE reports SET enabled = $3 WHERE app_id = $1 AND id = $2', [
       admin.appId,
       id,
@@ -116,7 +104,7 @@ export async function reportRoutes(app: FastifyInstance, deps: Deps): Promise<vo
   app.delete('/v1/reports/:id', async (req, reply) => {
     const admin = await requireAdmin(deps, req, reply, { mutate: true });
     if (!admin) return;
-    const { id } = ReportId.parse(req.params);
+    const { id } = IdParam.parse(req.params);
     const res = await deps.db.query('DELETE FROM reports WHERE app_id = $1 AND id = $2', [admin.appId, id]);
     if (!res.rowCount) return reply.code(404).send({ error: 'not_found' });
     await adminAudit(deps, admin.appId, admin.userId, 'report_delete', { id });
@@ -129,7 +117,7 @@ export async function reportRoutes(app: FastifyInstance, deps: Deps): Promise<vo
     async (req, reply) => {
       const admin = await requireAdmin(deps, req, reply, { mutate: true });
       if (!admin) return;
-      const { id } = ReportId.parse(req.params);
+      const { id } = IdParam.parse(req.params);
       const result = await sendReportNow(deps.db, admin.appId, id, {
         settingsKey: deps.config.settingsKey,
         publicUrl: deps.config.publicUrl,

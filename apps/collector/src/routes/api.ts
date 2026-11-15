@@ -106,18 +106,23 @@ export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void>
     };
 
     let closed = false;
+    let sending = false;
     let failureLogged = false;
     const send = async () => {
-      if (closed) return;
+      // A slow database must not pile up one refresh per second per connection.
+      if (closed || sending) return;
+      sending = true;
       try {
         if (Date.now() - slowAt > 10_000) await refreshSlow();
         const tiles = { ts: new Date().toISOString(), ...deps.live.tiles(appId), ...slow };
-        res.write(`event: tiles\ndata: ${JSON.stringify(tiles)}\n\n`);
+        if (!closed) res.write(`event: tiles\ndata: ${JSON.stringify(tiles)}\n\n`);
       } catch (error) {
         // Once per connection: this runs every second while the database is unreachable.
         if (!failureLogged) req.log.warn({ err: error }, 'live update failed');
         failureLogged = true;
-        res.write('event: error\ndata: {}\n\n');
+        if (!closed) res.write('event: error\ndata: {}\n\n');
+      } finally {
+        sending = false;
       }
     };
     const timer = setInterval(() => void send(), 1_000);

@@ -270,6 +270,16 @@ describe('sink mirror', () => {
     expect([...rows.values()].map((r) => r.userHash)).toEqual([OTHER]);
   });
 
+  it('counts only the copies it erased, while a flush writes the others', async () => {
+    const { sink, rows } = memorySink();
+    const mirror = new SinkMirror(sink);
+    mirror.push(ctx, [...Array.from({ length: 1_000 }, () => command(OTHER)), command(HEX)]);
+    const flushed = mirror.flush();
+    expect(await mirror.erase(APP, [Buffer.from(HEX, 'hex')])).toBe(1);
+    await flushed;
+    expect(rows.size).toBe(1_000);
+  });
+
   it('expires copies past their retention', async () => {
     const { sink, rows } = memorySink();
     const mirror = new SinkMirror(sink, { retentionDays: 7 });

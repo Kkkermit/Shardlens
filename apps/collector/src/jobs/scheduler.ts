@@ -8,32 +8,28 @@ import {
 } from '../storage/maintenance.js';
 import { runAlerts } from './alerts.js';
 import { runReports } from './reports.js';
-import { runRollups, runUniques } from './rollups.js';
+import { rawRetentionDays, runRollups, runUniques } from './rollups.js';
 
 /** Advisory lock key for the single job leader (any constant; shared by every collector). */
 const LEADER_LOCK = 727_274_001;
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 
-export interface JobLogger {
+interface JobLogger {
   info(obj: object, msg?: string): void;
   error(obj: object, msg?: string): void;
 }
 
 export interface Jobs {
-  readonly isLeader: boolean;
-  /** Runs every job once now (tests and manual maintenance). */
-  runAll(now?: Date): Promise<void>;
   stop(): Promise<void>;
 }
 
 async function retentionSettings(db: Db): Promise<{ rawDays: number; auditDays: number }> {
-  const raw = await db.query<{ days: number | null }>('SELECT max(raw_retention_days) AS days FROM apps');
   const audit = await db.query<{ days: number | null }>(
     "SELECT max((value #>> '{}')::int) AS days FROM settings WHERE key = 'audit_retention_days'",
   );
   return {
-    rawDays: raw.rows[0]?.days ?? 35,
+    rawDays: await rawRetentionDays(db),
     auditDays: Math.min(90, Math.max(1, audit.rows[0]?.days ?? 30)),
   };
 }
@@ -103,25 +99,44 @@ export function startJobs(db: Db, log: JobLogger, opts?: { settingsKey: string; 
     if (due('retention', 24 * HOUR)) void serial('retention', () => runRetention(db, new Date()));
   };
 
-  const tryLead = async () => {
+  const dropLock = (client: pg.PoolClient) => {
+    if (lockClient !== client) return;
+    lockClient = undefined;
+    leader = false;
+    client.release(true);
+  };
+
+  let electing: Promise<void> | undefined;
+  const elect = async () => {
     if (stopped || leader) return;
     try {
-      lockClient ??= await db.connect();
-      lockClient.on('error', () => {
-        leader = false;
-        lockClient = undefined;
-      });
+      if (!lockClient) {
+        const client = await db.connect();
+        if (stopped) {
+          client.release();
+          return;
+        }
+        // The lock lives and dies with this connection's session.
+        client.on('error', () => dropLock(client));
+        lockClient = client;
+      }
       const res = await lockClient.query<{ ok: boolean }>('SELECT pg_try_advisory_lock($1) AS ok', [LEADER_LOCK]);
-      if (res.rows[0]?.ok) {
+      if (res.rows[0]?.ok && !stopped) {
         leader = true;
         log.info({}, 'this collector is now the job leader');
         tick();
       }
     } catch (error) {
       log.error({ err: error }, 'leader election failed');
-      lockClient?.release(true);
-      lockClient = undefined;
+      if (lockClient) dropLock(lockClient);
     }
+  };
+  // One attempt at a time: while the database is unreachable, a connection attempt can outlast the 30-second timer.
+  const tryLead = () => {
+    electing ??= elect().finally(() => {
+      electing = undefined;
+    });
+    return electing;
   };
 
   timers.push(setInterval(() => void tryLead(), 30_000));
@@ -130,26 +145,18 @@ export function startJobs(db: Db, log: JobLogger, opts?: { settingsKey: string; 
   void tryLead();
 
   return {
-    get isLeader() {
-      return leader;
-    },
-    async runAll(now = new Date()) {
-      await ensurePartitions(db, now, await retentionSettings(db));
-      await runSalts(db, now);
-      await runRollups(db, now);
-      await runUniques(db);
-      await runRetention(db, now);
-    },
     async stop() {
       stopped = true;
       for (const t of timers) clearInterval(t);
       await running.catch(() => undefined);
-      if (lockClient) {
-        await lockClient.query('SELECT pg_advisory_unlock($1)', [LEADER_LOCK]).catch(() => undefined);
-        lockClient.release();
-        lockClient = undefined;
+      const client = lockClient;
+      if (client) {
+        await client.query('SELECT pg_advisory_unlock($1)', [LEADER_LOCK]).catch(() => undefined);
+        if (lockClient === client) {
+          lockClient = undefined;
+          client.release();
+        }
       }
-      leader = false;
     },
   };
 }

@@ -150,11 +150,11 @@ export async function ingestRoutes(app: FastifyInstance, deps: Deps): Promise<vo
             items.filter((i) => !refused.has(i.index)).map((i) => i.event),
           );
         }
-        // Live tiles count by when things happened, so replayed or backfilled batches never look live.
+        // Live tiles count by when things happened, so backfilled batches never look live, and only what this batch
+        // stored, so a retried one is not counted twice.
         for (const { event } of items) {
-          if ((event.type !== 'interaction' && event.type !== 'message_command') || event.ts < now - 15 * 60_000) {
-            continue;
-          }
+          if (event.type !== 'interaction' && event.type !== 'message_command') continue;
+          if (event.ts < now - 15 * 60_000 || !result.stored.has(event.id.toLowerCase())) continue;
           deps.live.bump(auth.appId, event.ts, event.weight, event.outcome === 'ok' ? 0 : event.weight);
         }
         const allRejected = [...rejected, ...result.rejected].sort((a, b) => a.index - b.index);

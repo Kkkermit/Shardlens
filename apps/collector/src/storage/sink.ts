@@ -220,15 +220,17 @@ export class SinkMirror {
   async erase(appId: string, hashes: readonly Buffer[]): Promise<number> {
     if (hashes.length === 0) return 0;
     const hex = new Set(hashes.map((h) => h.toString('hex')));
-    const keep = (e: StoredEvent) => e.appId !== appId || e.userHash === null || !hex.has(e.userHash);
-    let removed = this.#buffer.length;
-    this.#buffer = this.#buffer.filter(keep);
+    const unbuffer = () => {
+      const before = this.#buffer.length;
+      this.#buffer = this.#buffer.filter((e) => e.appId !== appId || e.userHash === null || !hex.has(e.userHash));
+      return before - this.#buffer.length;
+    };
+    let removed = unbuffer();
     // A batch being written now either lands (and the delete below removes it) or comes back to the buffer.
     await this.#flushing?.catch(() => undefined);
-    this.#buffer = this.#buffer.filter(keep);
-    removed -= this.#buffer.length;
+    removed += unbuffer();
     if (!(await this.#init())) throw new Error(`${this.#sink.name} sink is unreachable; erase it again later`);
-    return Math.max(0, removed) + (await this.#sink.erase(appId, [...hex]));
+    return removed + (await this.#sink.erase(appId, [...hex]));
   }
 
   async expire(now = new Date()): Promise<number> {

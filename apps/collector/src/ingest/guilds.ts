@@ -42,15 +42,27 @@ const INSERT_PROFILE = `INSERT INTO guilds (app_id, guild_id, name, icon, member
   channel_counts, role_count, emoji_count, sticker_count, bot_permissions)
   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`;
 
-/** A server added the bot while it was online. Duplicate (retried) joins are ignored. */
-export async function applyGuildJoin(tx: Tx, appId: string, ts: Date, info: GuildInfo, detected: boolean) {
+/** One entry in a server's history. `false` when it is already there (a retried event). */
+export async function recordGuildEvent(
+  tx: Tx,
+  appId: string,
+  guildId: string,
+  ts: Date,
+  kind: (typeof GUILD_EVENT)[keyof typeof GUILD_EVENT],
+  detected: boolean,
+): Promise<boolean> {
   const inserted = await insertRows(
     tx,
     'guild_events',
     ['app_id', 'guild_id', 'ts', 'kind', 'detected_at_startup'],
-    [[appId, info.guild, ts, GUILD_EVENT.join, detected]],
+    [[appId, guildId, ts, kind, detected]],
   );
-  if (inserted === 0) return false;
+  return inserted > 0;
+}
+
+/** A server added the bot while it was online. Duplicate (retried) joins are ignored. */
+export async function applyGuildJoin(tx: Tx, appId: string, ts: Date, info: GuildInfo, detected: boolean) {
+  if (!(await recordGuildEvent(tx, appId, info.guild, ts, GUILD_EVENT.join, detected))) return false;
   await tx.query(
     `${INSERT_PROFILE}
      ON CONFLICT (app_id, guild_id) DO UPDATE SET ${PROFILE_COLUMNS},
@@ -73,13 +85,7 @@ export async function applyGuildUpdate(tx: Tx, appId: string, info: GuildInfo) {
 }
 
 export async function applyGuildLeave(tx: Tx, appId: string, ts: Date, guildId: string, detected: boolean) {
-  const inserted = await insertRows(
-    tx,
-    'guild_events',
-    ['app_id', 'guild_id', 'ts', 'kind', 'detected_at_startup'],
-    [[appId, guildId, ts, GUILD_EVENT.leave, detected]],
-  );
-  if (inserted === 0) return false;
+  if (!(await recordGuildEvent(tx, appId, guildId, ts, GUILD_EVENT.leave, detected))) return false;
   await tx.query(
     'UPDATE guilds SET left_at = $3, updated_at = now() WHERE app_id = $1 AND guild_id = $2 AND left_at IS NULL',
     [appId, guildId, ts],
@@ -171,13 +177,7 @@ async function diff(
       );
       continue;
     }
-    const inserted = await insertRows(
-      tx,
-      'guild_events',
-      ['app_id', 'guild_id', 'ts', 'kind', 'detected_at_startup'],
-      [[appId, guildId, ts, GUILD_EVENT.join, true]],
-    );
-    if (inserted === 0) continue;
+    if (!(await recordGuildEvent(tx, appId, guildId, ts, GUILD_EVENT.join, true))) continue;
     await tx.query(
       `INSERT INTO guilds (app_id, guild_id, joined_at, detected_at_startup) VALUES ($1, $2, $3, true)
        ON CONFLICT (app_id, guild_id) DO UPDATE SET joined_at = EXCLUDED.joined_at, left_at = NULL,

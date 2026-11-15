@@ -5,16 +5,20 @@ export type Db = pg.Pool;
 export type Tx = pg.PoolClient;
 
 export function createPool(databaseUrl: string, max = 10): Db {
-  const pool = new pg.Pool({ connectionString: databaseUrl, max, application_name: 'shardlens-collector' });
+  const pool = new pg.Pool({
+    connectionString: databaseUrl,
+    max,
+    application_name: 'shardlens-collector',
+    // Rollup buckets and day boundaries are UTC, whatever time zone the server runs in (`date_trunc` and `to_char`
+    // follow the session's). The pool waits for this before handing the connection out.
+    onConnect: (client) => client.query("SET TIME ZONE 'UTC'"),
+  });
   // Errors on idle clients must not crash the collector; the next query reconnects.
   pool.on('error', () => undefined);
   return pool;
 }
 
-/**
- * Applies pending migrations on a connection of their own and returns their names. Several collectors can start at
- * once.
- */
+/** Applies pending migrations on a connection of their own and returns their names. */
 export async function migrate(databaseUrl: string): Promise<string[]> {
   const client = new pg.Client({ connectionString: databaseUrl, application_name: 'shardlens-migrate' });
   await client.connect();

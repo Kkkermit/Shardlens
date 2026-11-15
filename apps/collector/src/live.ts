@@ -4,11 +4,16 @@ import type { Db } from './db.js';
 
 const CHANNEL = 'shardlens_live';
 const WINDOW_S = 15 * 60;
+/** Seconds per notification: PostgreSQL refuses a `NOTIFY` payload of 8,000 bytes or more. */
+const SECONDS_PER_NOTIFY = 100;
+
+const slot = (second: number) => ((second % WINDOW_S) + WINDOW_S) % WINDOW_S;
 
 interface Ring {
   interactions: Float64Array;
   errors: Float64Array;
-  second: Int32Array;
+  /** Epoch seconds, which pass the Int32 range in 2038. */
+  second: Float64Array;
 }
 
 /**
@@ -30,15 +35,13 @@ export class LiveHub {
   /** Resolves `false` when this instance could not subscribe: its tiles then only count its own traffic. */
   async start(): Promise<boolean> {
     try {
-      this.#listener = await this.#db.connect();
-      this.#listener.on('notification', (msg) => this.#onNotify(msg.payload));
-      this.#listener.on('error', () => {
-        this.#listener = undefined;
-      });
-      await this.#listener.query(`LISTEN ${CHANNEL}`);
+      const client = await this.#db.connect();
+      this.#listener = client;
+      client.on('notification', (msg) => this.#onNotify(msg.payload));
+      client.on('error', () => this.#release(client, true));
+      await client.query(`LISTEN ${CHANNEL}`);
     } catch {
-      this.#listener?.release(true);
-      this.#listener = undefined;
+      if (this.#listener) this.#release(this.#listener, true);
     }
     this.#timer = setInterval(() => void this.#publish(), 1_000);
     this.#timer.unref();
@@ -47,10 +50,10 @@ export class LiveHub {
 
   async stop(): Promise<void> {
     if (this.#timer) clearInterval(this.#timer);
-    if (this.#listener) {
-      await this.#listener.query(`UNLISTEN ${CHANNEL}`).catch(() => undefined);
-      this.#listener.release();
-      this.#listener = undefined;
+    const listener = this.#listener;
+    if (listener) {
+      await listener.query(`UNLISTEN ${CHANNEL}`).catch(() => undefined);
+      this.#release(listener, false);
     }
   }
 
@@ -73,18 +76,25 @@ export class LiveHub {
     if (ring) {
       for (let back = 0; back < WINDOW_S; back++) {
         const s = now - back;
-        const i = ((s % WINDOW_S) + WINDOW_S) % WINDOW_S;
+        const i = slot(s);
         if (ring.second[i] !== s) continue;
         if (back < 60) perMinute += ring.interactions[i]!;
         errors15m += ring.errors[i]!;
       }
       for (let back = 59; back >= 0; back--) {
         const s = now - back;
-        const i = ((s % WINDOW_S) + WINDOW_S) % WINDOW_S;
+        const i = slot(s);
         perSecond.push(ring.second[i] === s ? ring.interactions[i]! : 0);
       }
     }
     return { perMinute: Math.round(perMinute), errors15m: Math.round(errors15m), perSecond };
+  }
+
+  /** Returns the listening connection to the pool once. A broken one is destroyed: until then it holds a pool slot. */
+  #release(client: pg.PoolClient, broken: boolean): void {
+    if (this.#listener !== client) return;
+    this.#listener = undefined;
+    client.release(broken);
   }
 
   #add(appId: string, s: number, n: number, e: number): void {
@@ -93,11 +103,11 @@ export class LiveHub {
       ring = {
         interactions: new Float64Array(WINDOW_S),
         errors: new Float64Array(WINDOW_S),
-        second: new Int32Array(WINDOW_S).fill(-1),
+        second: new Float64Array(WINDOW_S).fill(-1),
       };
       this.#rings.set(appId, ring);
     }
-    const i = ((s % WINDOW_S) + WINDOW_S) % WINDOW_S;
+    const i = slot(s);
     if (ring.second[i] !== s) {
       ring.second[i] = s;
       ring.interactions[i] = 0;
@@ -119,9 +129,11 @@ export class LiveHub {
         t.e += e;
         bySecond.set(s, t);
       }
-      const payload = JSON.stringify({ i: this.#instance, a: appId, c: [...bySecond].map(([s, t]) => [s, t.n, t.e]) });
-      if (payload.length > 7_900) continue;
-      await this.#db.query('SELECT pg_notify($1, $2)', [CHANNEL, payload]).catch(() => undefined);
+      const counts = [...bySecond].map(([s, t]) => [s, t.n, t.e]);
+      for (let i = 0; i < counts.length; i += SECONDS_PER_NOTIFY) {
+        const payload = JSON.stringify({ i: this.#instance, a: appId, c: counts.slice(i, i + SECONDS_PER_NOTIFY) });
+        await this.#db.query('SELECT pg_notify($1, $2)', [CHANNEL, payload]).catch(() => undefined);
+      }
     }
   }
 
@@ -134,7 +146,7 @@ export class LiveHub {
         if (Number.isInteger(s) && Number.isFinite(n) && Number.isFinite(e)) this.#add(msg.a, s, n, e);
       }
     } catch {
-      // ignore malformed notifications
+      // A malformed notification is not from a collector.
     }
   }
 }

@@ -514,7 +514,6 @@ async function main() {
       }
     }
 
-    // REST windows and gauges, a few per day.
     for (let w = 0; w < 24; w++) {
       const ts = Math.min(now - 60_000, dayStart + w * 3_600_000 + 1_000);
       const hist = (median: number, n: number) => {

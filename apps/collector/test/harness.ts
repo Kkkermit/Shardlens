@@ -1,6 +1,7 @@
+import { createHash, randomBytes } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { UserHasher, uuidv7 } from '@shardlens/core';
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { PostgreSqlContainer } from '@testcontainers/postgresql';
 import type { FastifyInstance } from 'fastify';
 import { createPool, type Db, migrate } from '../src/db.js';
 import type { Config } from '../src/env.js';
@@ -15,7 +16,6 @@ export const INGEST_KEY = `slk_ingest_${'A'.repeat(43)}`;
 export const READ_KEY = `slk_read_${'B'.repeat(43)}`;
 
 export interface Harness {
-  container: StartedPostgreSqlContainer;
   db: Db;
   app: FastifyInstance;
   live: LiveHub;
@@ -60,7 +60,6 @@ export async function startHarness(
   const app = await buildServer({ config, db, keys: new KeyStore(db), live, analytics: opts.analytics });
   await app.ready();
   return {
-    container,
     db,
     app,
     live,
@@ -183,7 +182,6 @@ export async function testSession(
   method: 'discord' | 'read_key',
   userId: string | null = '987654321098765432',
 ) {
-  const { createHash, randomBytes } = await import('node:crypto');
   const token = randomBytes(32).toString('base64url');
   await db.query(
     "INSERT INTO sessions (id_sha256, user_id, app_id, method, expires_at) VALUES ($1, $2, $3, $4, now() + interval '1 hour')",

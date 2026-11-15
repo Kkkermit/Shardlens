@@ -5,6 +5,7 @@ import { evaluateMetric, runAlerts } from '../src/jobs/alerts.js';
 import { runReports } from '../src/jobs/reports.js';
 import { backfillRollups, runRollups, runUniques } from '../src/jobs/rollups.js';
 import { ALERT_METRICS } from '../src/routes/admin.js';
+import { auditCipher } from '../src/security/crypto.js';
 import {
   APP_ID,
   envelope,
@@ -278,6 +279,23 @@ describe('alerts', () => {
     );
     expect(history.rows[0]).toMatchObject({ delivered: false });
     expect(history.rows[0]?.error).toMatch(/could not be decrypted/);
+  });
+
+  it('answers a test of an alert whose webhook can no longer be decrypted with the reason, not a 500', async () => {
+    const stale = auditCipher(Buffer.alloc(32, 9).toString('base64')).encrypt(WEBHOOK);
+    const rule = await h.db.query<{ id: string }>(
+      `INSERT INTO alert_rules (app_id, name, metric, comparator, threshold, window_s, webhook_enc)
+       VALUES ($1, 'stale key', 'error_rate', '>', 1, 300, $2) RETURNING id::text`,
+      [APP_ID, stale],
+    );
+    const id = rule.rows[0]?.id;
+    try {
+      const res = await h.app.inject({ method: 'POST', url: `/v1/alerts/${id}/test`, ...asAdmin() });
+      expect(res.statusCode).toBe(502);
+      expect(res.json()).toMatchObject({ error: 'webhook_failed', message: expect.stringMatching(/decrypted/) });
+    } finally {
+      await h.db.query('DELETE FROM alert_rules WHERE id = $1', [id]);
+    }
   });
 });
 

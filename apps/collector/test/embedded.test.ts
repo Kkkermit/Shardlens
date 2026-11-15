@@ -1,8 +1,9 @@
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { type AddressInfo, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ShardlensClient, uuidv7, type WireEvent } from '@shardlens/core';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { type EmbeddedCollector, type EventSink, type StoredEvent, startEmbeddedCollector } from '../src/embedded.js';
 
 const APP_ID = '1234567890123456789';
@@ -140,6 +141,40 @@ describe('embedded collector (PGlite)', () => {
       startEmbeddedCollector({ dataDir, appId: APP_ID, port: 0, sink: { to: 'redis://localhost:6379' } }),
     ).rejects.toThrow(/sink\.to/);
   });
+
+  it(
+    'stops everything it started when it cannot listen, so a bot that carries on is left alone',
+    {
+      timeout: 60_000,
+    },
+    async () => {
+      const taken = createServer();
+      await new Promise<void>((resolve) => taken.listen(0, '127.0.0.1', resolve));
+      const own = mkdtempSync(join(tmpdir(), 'shardlens-embedded-busy-'));
+      const running = new Set<unknown>();
+      const { setInterval: set, clearInterval: clear } = globalThis;
+      vi.spyOn(globalThis, 'setInterval').mockImplementation(((...args: Parameters<typeof set>) => {
+        const timer = set(...args);
+        running.add(timer);
+        return timer;
+      }) as typeof setInterval);
+      vi.spyOn(globalThis, 'clearInterval').mockImplementation((timer) => {
+        running.delete(timer);
+        clear(timer);
+      });
+      try {
+        const port = (taken.address() as AddressInfo).port;
+        await expect(startEmbeddedCollector({ dataDir: own, appId: APP_ID, port, logLevel: 'silent' })).rejects.toThrow(
+          /EADDRINUSE/,
+        );
+        expect(running.size).toBe(0);
+      } finally {
+        vi.restoreAllMocks();
+        taken.close();
+        rmSync(own, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('refuses requests without a key, like the standalone collector', async () => {
     const res = await fetch(`${(collector as EmbeddedCollector).url}/v1/query`, {

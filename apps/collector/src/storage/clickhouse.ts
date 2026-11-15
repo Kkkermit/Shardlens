@@ -124,10 +124,15 @@ interface Target {
   stat: string;
 }
 
+/** Turns an API value (`chat_input`) into the code PostgreSQL and ClickHouse store (`1`). */
+type Encode = (field: string, value: string) => string;
+
 const MAX_BUFFER = 50_000;
 const FLUSH_MS = 1_000;
+/** While ClickHouse is down every flush fails, once a second: say so once a minute. */
+const WARN_EVERY_MS = 60_000;
 
-export interface AnalyticsQuery {
+interface AnalyticsQuery {
   metric: string;
   name?: string | undefined;
   from: Date;
@@ -140,23 +145,22 @@ export interface AnalyticsQuery {
 export class ClickHouseStore {
   readonly #client: ClickHouseClient;
   readonly #url: URL;
+  readonly #database: string;
   #interactions: MirroredInteraction[] = [];
   #custom: MirroredCustom[] = [];
   #timer: ReturnType<typeof setInterval> | undefined;
   #flushing: Promise<void> | undefined;
   #since: number | undefined;
   #warn: (message: string) => void = () => undefined;
-  /** Rows dropped because the buffer was full or ClickHouse refused them (exposed in logs). */
+  #warnedAt = 0;
+  /** Rows dropped because the buffer was full or ClickHouse refused them (counted in the warnings). */
   dropped = 0;
 
   constructor(url: string) {
     this.#url = new URL(url);
     if (this.#url.pathname === '/' || this.#url.pathname === '') this.#url.pathname = '/shardlens';
+    this.#database = this.#url.pathname.slice(1);
     this.#client = createClient({ url: this.#url, request_timeout: 15_000 });
-  }
-
-  get database(): string {
-    return this.#url.pathname.replace(/^\//, '');
   }
 
   /** Creates the database, tables and views if needed, and records when mirroring started. */
@@ -166,8 +170,8 @@ export class ClickHouseStore {
     const adminClient = createClient({ url: admin });
     try {
       // The database name comes from the operator's URL, not from requests; it is still checked.
-      if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(this.database)) throw new Error('invalid ClickHouse database name');
-      await adminClient.command({ query: `CREATE DATABASE IF NOT EXISTS ${this.database}` });
+      if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(this.#database)) throw new Error('invalid ClickHouse database name');
+      await adminClient.command({ query: `CREATE DATABASE IF NOT EXISTS ${this.#database}` });
     } finally {
       await adminClient.close();
     }
@@ -182,7 +186,7 @@ export class ClickHouseStore {
     this.#since = await this.#readSince();
   }
 
-  /** Starts sending buffered rows. `warn` receives a message when an insert fails. */
+  /** Starts sending buffered rows. `warn` hears about failed inserts and dropped rows, at most once a minute. */
   start(warn?: (message: string) => void): void {
     if (warn) this.#warn = warn;
     this.#timer ??= setInterval(() => void this.flush(), FLUSH_MS);
@@ -202,6 +206,7 @@ export class ClickHouseStore {
     const total = rows.interactions.length + rows.custom.length;
     if (total > room) {
       this.dropped += total;
+      this.#report('buffer full');
       return;
     }
     this.#interactions.push(...rows.interactions);
@@ -217,8 +222,8 @@ export class ClickHouseStore {
   }
 
   async #flush(): Promise<void> {
-    const interactions = this.#interactions;
-    const custom = this.#custom;
+    let interactions = this.#interactions;
+    let custom = this.#custom;
     if (interactions.length === 0 && custom.length === 0) return;
     this.#interactions = [];
     this.#custom = [];
@@ -246,6 +251,8 @@ export class ClickHouseStore {
           })),
           clickhouse_settings: { date_time_input_format: 'best_effort' },
         });
+        // Stored: a failure below must not send them again (ClickHouse would count them twice).
+        interactions = [];
       }
       if (custom.length > 0) {
         await this.#client.insert({
@@ -262,16 +269,23 @@ export class ClickHouseStore {
           })),
           clickhouse_settings: { date_time_input_format: 'best_effort' },
         });
+        custom = [];
       }
     } catch (error) {
-      // Put the rows back (oldest first) if they still fit; otherwise drop and count them.
       const keep = MAX_BUFFER - this.#interactions.length - this.#custom.length;
       if (interactions.length + custom.length <= keep) {
         this.#interactions = [...interactions, ...this.#interactions];
         this.#custom = [...custom, ...this.#custom];
       } else this.dropped += interactions.length + custom.length;
-      this.#warn(`ClickHouse insert failed: ${error instanceof Error ? error.message : 'unknown error'}`);
+      this.#report(`insert failed: ${error instanceof Error ? error.message : 'unknown error'}`);
     }
+  }
+
+  #report(problem: string): void {
+    const now = Date.now();
+    if (now - this.#warnedAt < WARN_EVERY_MS) return;
+    this.#warnedAt = now;
+    this.#warn(`ClickHouse ${problem} (${this.dropped} rows dropped so far)`);
   }
 
   /** Right to erasure: deletes a person's raw rows (their rollups are anonymous counts and sketches). */
@@ -319,11 +333,12 @@ export class ClickHouseStore {
     return undefined;
   }
 
-  #filters(target: Target, filters: readonly Filter[], params: Record<string, unknown>): string {
+  /** `AND column IN {fN:…}` per filter, with values encoded the way PostgreSQL stores them. */
+  #filters(target: Target, filters: readonly Filter[], encode: Encode, params: Record<string, unknown>): string {
     return filters
       .map((f, i) => {
         const column = target.columns[f.field] as string;
-        const values = Array.isArray(f.value) ? f.value : [f.value];
+        const values = (Array.isArray(f.value) ? f.value : [f.value]).map((v) => encode(f.field, v));
         const type = NUMERIC.has(column) ? 'Array(Int64)' : 'Array(String)';
         params[`f${i}`] = NUMERIC.has(column) ? values.map((v) => (v === '' ? -1 : Number(v))) : values;
         return ` AND ${column} IN {f${i}:${type}}`;
@@ -331,9 +346,9 @@ export class ClickHouseStore {
       .join('');
   }
 
-  #params(q: AnalyticsQuery, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  #params(appId: string, q: AnalyticsQuery, extra: Record<string, unknown> = {}): Record<string, unknown> {
     return {
-      app: '',
+      app: appId,
       // Minute buckets: include the minute `from` falls in.
       from: Math.floor(q.from.getTime() / 60_000) * 60,
       to: Math.floor(q.to.getTime() / 1000),
@@ -346,13 +361,13 @@ export class ClickHouseStore {
   async series(
     appId: string,
     q: AnalyticsQuery & { interval: string; timezone: string; limit: number },
-    encode: (field: string, value: string) => string,
+    encode: Encode,
   ): Promise<{ t: string; key: string | null; value: number | null }[] | undefined> {
     const target = this.#target(q);
     const bucket = BUCKET[q.interval];
     if (!target || !bucket) return undefined;
-    const params = this.#params(q, { app: appId, tz: q.timezone, limit: q.limit });
-    const where = this.#filters(target, this.#encoded(q.filters, encode), params);
+    const params = this.#params(appId, q, { tz: q.timezone, limit: q.limit });
+    const where = this.#filters(target, q.filters, encode, params);
     const key = q.groupBy ? `toString(${target.columns[q.groupBy]})` : "''";
     const rs = await this.#client.query({
       query: `WITH keys AS (
@@ -375,12 +390,12 @@ export class ClickHouseStore {
   async top(
     appId: string,
     q: AnalyticsQuery & { groupBy: string; limit: number },
-    encode: (field: string, value: string) => string,
+    encode: Encode,
   ): Promise<{ key: string; value: number | null; count: number }[] | undefined> {
     const target = this.#target(q);
     if (!target) return undefined;
-    const params = this.#params(q, { app: appId, limit: q.limit });
-    const where = this.#filters(target, this.#encoded(q.filters, encode), params);
+    const params = this.#params(appId, q, { limit: q.limit });
+    const where = this.#filters(target, q.filters, encode, params);
     const column = target.columns[q.groupBy] as string;
     const rs = await this.#client.query({
       query: `SELECT toString(${column}) AS key, toFloat64(${target.stat}) AS value, toFloat64(sumMerge(runs)) AS count
@@ -400,13 +415,14 @@ export class ClickHouseStore {
   /** Hour × weekday counts, or `undefined` if ClickHouse can't answer it. */
   async heatmap(
     appId: string,
-    q: AnalyticsQuery & { timezone: string },
-    encode: (field: string, value: string) => string,
+    q: Omit<AnalyticsQuery, 'stat'> & { timezone: string },
+    encode: Encode,
   ): Promise<{ weekday: number; hour: number; value: number }[] | undefined> {
-    const target = this.#target({ ...q, stat: 'count' });
+    const counts = { ...q, stat: 'count' };
+    const target = this.#target(counts);
     if (!target) return undefined;
-    const params = this.#params(q, { app: appId, tz: q.timezone });
-    const where = this.#filters(target, this.#encoded(q.filters, encode), params);
+    const params = this.#params(appId, counts, { tz: q.timezone });
+    const where = this.#filters(target, q.filters, encode, params);
     const rs = await this.#client.query({
       query: `SELECT toDayOfWeek(bucket, 0, {tz:String}) AS weekday, toHour(bucket, {tz:String}) AS hour,
                      toFloat64(sumMerge(runs)) AS value
@@ -417,12 +433,5 @@ export class ClickHouseStore {
       format: 'JSONEachRow',
     });
     return (await rs.json()) as { weekday: number; hour: number; value: number }[];
-  }
-
-  #encoded(filters: readonly Filter[], encode: (field: string, value: string) => string): Filter[] {
-    return filters.map((f) => ({
-      ...f,
-      value: Array.isArray(f.value) ? f.value.map((v) => encode(f.field, v)) : encode(f.field, f.value),
-    }));
   }
 }

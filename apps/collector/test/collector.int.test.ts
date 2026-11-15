@@ -5,12 +5,15 @@ import { gzipSync } from 'node:zlib';
 import { bucketOf, uuidv7 } from '@shardlens/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { signInProblems } from '../src/app.js';
+import { createPool, migrate } from '../src/db.js';
 import { evaluateMetric } from '../src/jobs/alerts.js';
-import { runRollups, runUniques } from '../src/jobs/rollups.js';
+import { backfillRollups, runRollups, runUniques } from '../src/jobs/rollups.js';
 import { runRetention, runSalts } from '../src/jobs/scheduler.js';
 import { allowedUser } from '../src/routes/auth.js';
 import { KeyStore } from '../src/security/auth.js';
 import { buildServer } from '../src/server.js';
+import { activeSalts } from '../src/storage/maintenance.js';
+import { periodIdent } from '../src/storage/periods.js';
 import {
   APP_ID,
   envelope,
@@ -87,6 +90,66 @@ describe('ingest', () => {
     expect(first.json()).toMatchObject({ accepted: 3, duplicates: 0, rejected: [] });
     const retry = await ingest(h.app, batch);
     expect(retry.json()).toMatchObject({ accepted: 0, duplicates: 3 });
+  });
+
+  it('counts a batch once in the live tiles, even when the SDK sends it again', async () => {
+    const { hasher, period } = await sdkHasher(h.app);
+    const user = (await hasher.hash('121212121212121212', period))!;
+    const probe = { command: 'live_probe' };
+    // PostgreSQL hands IDs back in lower case; an SDK may send them in upper case.
+    const shouted = { ...probe, id: uuidv7().toUpperCase(), outcome: 'error' };
+    const batch = envelope([interaction(user, probe), interaction(user, shouted)]);
+    const before = h.live.tiles(APP_ID);
+    try {
+      expect((await ingest(h.app, batch)).json()).toMatchObject({ accepted: 2 });
+      expect((await ingest(h.app, batch)).json()).toMatchObject({ duplicates: 2 });
+      expect(h.live.tiles(APP_ID)).toMatchObject({ perMinute: before.perMinute + 2, errors15m: before.errors15m + 1 });
+    } finally {
+      await h.db.query("DELETE FROM interactions WHERE command = 'live_probe'");
+    }
+  });
+
+  it('counts a retried server availability change as a duplicate', async () => {
+    const event = {
+      id: uuidv7(),
+      ts: Date.now(),
+      type: 'guild_availability',
+      guild: GUILD,
+      available: false,
+      shard: 0,
+    };
+    expect((await ingest(h.app, envelope([event]))).json()).toMatchObject({ accepted: 1, duplicates: 0 });
+    expect((await ingest(h.app, envelope([event]))).json()).toMatchObject({ accepted: 0, duplicates: 1 });
+  });
+
+  it('keeps the newest bot name when an older app report arrives late', async () => {
+    const report = (name: string, ts: number) => ({
+      id: uuidv7(ts),
+      ts,
+      type: 'app_info',
+      name,
+      approximateGuildCount: 3,
+      approximateUserInstallCount: null,
+      approximateUserAuthorizationCount: null,
+      dashboardUserIds: [],
+      eventWebhooksStatus: 1,
+      skus: [],
+      nodeVersion: 'v24.11.0',
+      libVersion: '14.22.0',
+    });
+    try {
+      await ingest(h.app, envelope([report('Newer name', Date.now())]));
+      await ingest(h.app, envelope([report('Older name', Date.now() - 3_600_000)]));
+      const meta = await h.app.inject({
+        method: 'GET',
+        url: '/v1/meta',
+        headers: { authorization: `Bearer ${READ_KEY}` },
+      });
+      expect(meta.json().name).toBe('Newer name');
+    } finally {
+      await h.db.query('DELETE FROM app_info WHERE app_id = $1', [APP_ID]);
+      await h.db.query("UPDATE apps SET name = '' WHERE app_id = $1", [APP_ID]);
+    }
   });
 
   it('drops events carrying identifying data in privacy mode, and audit batches when the app is in privacy mode', async () => {
@@ -547,6 +610,51 @@ describe('servers and snapshots', () => {
     expect(res.json(), res.body).toMatchObject({ accepted: 1 });
     const detail = await query(h.app, { kind: 'server', guild: id });
     expect(detail.json().profile).toMatchObject({ name, memberCount: 250, sizeAtJoin: 250 });
+  });
+});
+
+describe('database server settings', () => {
+  it('buckets days in UTC whatever time zone the database server uses', async () => {
+    const name = (await h.db.query<{ name: string }>('SELECT current_database() AS name')).rows[0]?.name;
+    await h.db.query(`ALTER DATABASE "${name}" SET timezone TO 'Pacific/Kiritimati'`);
+    const db = createPool(h.config.databaseUrl, 1);
+    try {
+      // 23:30 UTC is already the next day in Kiritimati (UTC+14).
+      const day = new Date(Date.now() - 2 * 86_400_000).toISOString().slice(0, 10);
+      const ts = new Date(`${day}T23:30:00Z`);
+      await db.query(
+        `INSERT INTO interactions (id, ts, app_id, env, kind, command, locale, user_hash, salt_period, premium, outcome)
+         VALUES ($1, $2, $3, 'production', 1, 'tz_probe', 'en-GB', $4, '2026-01', false, 0)`,
+        [uuidv7(ts.getTime()), ts, APP_ID, Buffer.alloc(16)],
+      );
+      await backfillRollups(db, new Date(`${day}T00:00:00Z`), new Date(ts.getTime() + 60_000));
+      const buckets = await db.query<{ bucket: Date }>(
+        "SELECT bucket FROM rollup_1d WHERE metric = 'interactions' AND dims->>'command' = 'tz_probe'",
+      );
+      expect(buckets.rows.map((r) => r.bucket.toISOString())).toEqual([`${day}T00:00:00.000Z`]);
+    } finally {
+      await h.db.query(`ALTER DATABASE "${name}" RESET timezone`);
+      await db.end();
+    }
+  });
+
+  it('creates the unique-user partition in every database the process uses', async () => {
+    await activeSalts(h.db, APP_ID, 'month');
+    await h.db.query('CREATE DATABASE shardlens_second');
+    const url = new URL(h.config.databaseUrl);
+    url.pathname = '/shardlens_second';
+    await migrate(url.toString());
+    const db = createPool(url.toString(), 1);
+    try {
+      await db.query('INSERT INTO apps (app_id) VALUES ($1)', [APP_ID]);
+      const [salt] = await activeSalts(db, APP_ID, 'month');
+      const partition = await db.query<{ t: string | null }>('SELECT to_regclass($1) AS t', [
+        `uniques_${periodIdent(salt?.period ?? '')}`,
+      ]);
+      expect(partition.rows[0]?.t).not.toBeNull();
+    } finally {
+      await db.end();
+    }
   });
 });
 

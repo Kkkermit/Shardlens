@@ -38,7 +38,6 @@ interface Target {
   name: string;
   url: () => string;
   reader: () => Promise<Reader>;
-  stop: () => Promise<void>;
 }
 
 let h: Harness;
@@ -93,7 +92,6 @@ beforeAll(async () => {
           close: () => client.close(),
         };
       },
-      stop: async () => undefined,
     },
     ...[
       ['MySQL', mysql.getConnectionUri()],
@@ -109,7 +107,6 @@ beforeAll(async () => {
           () => '?',
         );
       },
-      stop: async () => undefined,
     })),
     {
       name: 'PostgreSQL',
@@ -123,7 +120,6 @@ beforeAll(async () => {
           (i) => `$${i}`,
         );
       },
-      stop: async () => undefined,
     },
     {
       name: 'SQLite',
@@ -136,7 +132,6 @@ beforeAll(async () => {
           () => '?',
         );
       },
-      stop: async () => undefined,
     },
   );
 }, 300_000);
