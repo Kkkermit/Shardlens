@@ -1,4 +1,3 @@
-const SNOWFLAKE = /\d{17,20}/g;
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 const DIGITS = /\d+/g;
 
@@ -17,9 +16,12 @@ export function cutText(text: string, max: number): string {
   return out.replace(LONE_SURROGATE, '\ufffd').replaceAll('\0', '\ufffd');
 }
 
-/** Turns a custom ID into a pattern without IDs or numbers: `ticket:close:112233445566778899` → `ticket:close:*`. */
+/**
+ * Turns a custom ID into a pattern without IDs or numbers: `ticket:close:112233445566778899` → `ticket:close:*`. UUIDs
+ * go first, as a whole: their digits alone would leave the letters behind.
+ */
 export function normaliseCustomId(customId: string): string {
-  return cutText(customId, MAX_CUSTOM_ID_LENGTH).replace(SNOWFLAKE, '*').replace(UUID, '*').replace(DIGITS, '*');
+  return cutText(customId, MAX_CUSTOM_ID_LENGTH).replace(UUID, '*').replace(DIGITS, '*');
 }
 
 /** Deliberately broad: a false positive costs a little error detail, a false negative leaks a credential. */

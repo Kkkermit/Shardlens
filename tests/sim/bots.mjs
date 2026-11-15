@@ -28,6 +28,16 @@ export const BOTS = {
     databases: ['postgres', 'mysql'],
     env: ({ collector }) => ({ SHARDLENS_URL: collector.url, SHARDLENS_INGEST_KEY: collector.ingestKey }),
   },
+  // ShardingManager with two shards, each its own process, on the same standalone collector as ts-guide.
+  'ts-sharded': {
+    main: 'dist/index.js',
+    discordPort: base + 4,
+    collectorPort: collectorBase + 4,
+    shards: 2,
+    copy: { mysql: 'shardlens' },
+    databases: ['postgres', 'mysql'],
+    env: ({ collector }) => ({ SHARDLENS_URL: collector.url, SHARDLENS_INGEST_KEY: collector.ingestKey }),
+  },
   sapphire: {
     main: 'dist/index.js',
     discordPort: base + 3,

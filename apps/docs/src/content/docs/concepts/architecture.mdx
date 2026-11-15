@@ -19,7 +19,7 @@ import { Aside } from '@astrojs/starlight/components';
  │                         • HMAC user hashing  │                 │
  │                         • bounded queue, gzip│── hashed ──┐    │
  └──────────────────────────────────────────────┘  batches   ▼    ▼
-                                    ┌──────────────── Collector (Docker) ────────────────┐
+                                    ┌──────────── Collector (Docker or embedded) ────────┐
                                     │  Ingest API · Webhook receiver · Background jobs   │
                                     │  Query + live API · Dashboard (React)              │
                                     └──────────────────────────┬─────────────────────────┘
@@ -53,7 +53,8 @@ and interactions and server changes last. Every drop is counted and reported in 
   with zod and stores it. Retried batches are recognised by event ID and stored once.
 - **Webhook receiver** verifies Discord's Ed25519 signature, answers `204` immediately and processes afterwards.
 - **Background jobs** run on one collector at a time (an advisory lock elects the leader): minute, hour and day
-  rollups, unique users per salt period, salt creation and destruction, partition creation and retention, and alerts.
+  rollups every minute, unique users per salt period every 5 minutes, salt creation and destruction, partition
+  creation and retention, alerts every minute and scheduled reports.
 - **Query API** answers typed queries. Each query kind maps to a fixed, parameterised SQL template; there is no
   free-form SQL and no grouping by user.
 - **Live API** streams live tiles over Server-Sent Events, fed by `LISTEN/NOTIFY` so it works across collectors.
@@ -61,14 +62,18 @@ and interactions and server changes last. Every drop is counted and reported in 
 
 ## In PostgreSQL
 
-Raw events go into daily partitions that are dropped whole when they expire. Charts read from rollups:
+Raw events go into daily partitions that are dropped whole when they expire (after 35 days by default, 7 to 90 in
+Settings). Charts read from rollups, all in UTC buckets. Every minute the job leader recomputes the last few minutes,
+and the minutes late events landed in, then the hours and days they belong to, so every chart is about a minute behind:
 
-| Range          | Source       | Freshness   |
-| -------------- | ------------ | ----------- |
-| Live tiles     | Memory       | 1–5 seconds |
-| Up to 14 days  | Minute rollup | About 1 minute |
-| Up to 13 months | Hour rollup | About 1 hour |
-| All time       | Day rollup   | About 1 day |
+| What                           | Source        | Kept      | Freshness      |
+| ------------------------------ | ------------- | --------- | -------------- |
+| Live tiles                     | Memory        | 15 minutes | 1–5 seconds   |
+| Minute charts                  | Minute rollup | 14 days   | About 1 minute |
+| Charts of ranges up to 13 months | Hour rollup | 13 months | About 1 minute |
+| Older ranges                   | Day rollup    | For good  | About 1 minute |
+| Unique users                   | Counts of hashed users | Counts for good, hashes until their salt is destroyed | About 5 minutes |
+| Command and server details, reliability | Raw rows | Raw retention | Immediate |
 
 ## Deployment modes
 

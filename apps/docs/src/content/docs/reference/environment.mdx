@@ -13,10 +13,10 @@ Empty values count as unset.
 
 | Variable                   | What it is                                                                                   |
 | -------------------------- | -------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`             | PostgreSQL connection string. Docker Compose builds it from `POSTGRES_PASSWORD`.              |
+| `DATABASE_URL`             | PostgreSQL 16 or newer, for example `postgres://user:password@host:5432/shardlens`. Add `?sslmode=require` for a managed database. Docker Compose builds it from `POSTGRES_PASSWORD`. |
 | `SHARDLENS_PUBLIC_URL`     | The URL people and bots use, for example `https://stats.example.com`. Used for sign-in redirects and links in alerts. |
 | `SHARDLENS_APP_ID`         | Your Discord application ID. The collector serves one application.                            |
-| `SHARDLENS_SESSION_SECRET` | At least 32 characters. Signs dashboard session cookies. `openssl rand -base64 32`            |
+| `SHARDLENS_SESSION_SECRET` | At least 32 characters. Signs the short-lived cookies of Discord sign-in (dashboard sessions themselves are random IDs stored hashed). `openssl rand -base64 32` |
 | `SHARDLENS_SETTINGS_KEY`   | 32 random bytes, base64. Encrypts stored secrets such as alert webhook URLs. `openssl rand -base64 32` |
 
 ## Keys
@@ -56,9 +56,9 @@ The collector logs a warning at start-up when the bot or you would have no way i
 
 | Variable                  | Default   | What it is                                                                          |
 | ------------------------- | --------- | ----------------------------------------------------------------------------------- |
-| `PORT`                    | `8080`    | Port to listen on. Railway and Render set it for you.                                |
-| `HOST`                    | `0.0.0.0` | Address to listen on.                                                               |
-| `SHARDLENS_TRUST_PROXY`   | `false`   | Behind a reverse proxy or load balancer, the number of proxies in front (`1` for one), so client addresses and HTTPS are seen correctly. Docker Compose sets `1`. `true` trusts the whole `X-Forwarded-For` header, which is only safe behind a proxy that replaces it rather than adding to it. |
+| `PORT`                    | `8080`    | Port to listen on. Docker Compose, Railway and Render set it for you.                |
+| `HOST`                    | `0.0.0.0` | Address to listen on. Docker Compose sets it.                                       |
+| `SHARDLENS_TRUST_PROXY`   | `false`   | Behind a reverse proxy or load balancer, the number of proxies in front (`1` for one), so client addresses and HTTPS are seen correctly. Docker Compose uses `1` (Caddy) unless `.env` sets another number. `true` trusts the whole `X-Forwarded-For` header, which is only safe behind a proxy that replaces it rather than adding to it. |
 | `SHARDLENS_DEMO`          | `false`   | `true` lets anyone view the dashboard without signing in, read-only. For a public demo with seeded data only; never with real data. Settings, keys, alerts, audit data and ingest stay locked. |
 | `SHARDLENS_DASHBOARD_DIR` | (bundled) | Serve the dashboard from another folder. Mainly for development.                    |
 | `LOG_LEVEL`               | `info`    | `fatal`, `error`, `warn`, `info`, `debug`, `trace` or `silent`. Per-request logs, which contain URLs, are written at `debug` and `trace` only.                     |
@@ -67,7 +67,7 @@ The collector logs a warning at start-up when the bot or you would have no way i
 
 | Variable         | What it is                                                                                                  |
 | ---------------- | ----------------------------------------------------------------------------------------------------------- |
-| `CLICKHOUSE_URL` | Optional. `http://user:password@host:8123/database` of a ClickHouse server to use as an [analytics store](../../self-hosting/scaling/#clickhouse-preview). The database is created if missing. Never logged. |
+| `CLICKHOUSE_URL` | Optional. `http://user:password@host:8123/database` of a ClickHouse server to use as an [analytics store](../../self-hosting/scaling/#clickhouse-preview). The database is created if missing. `docker-compose.clickhouse.yml` sets it. Never logged. |
 
 ## Your own database
 
@@ -86,5 +86,5 @@ These are read by `docker-compose.yml`, not by the collector itself.
 | ------------------- | ---------------------------------------------------------------------------------- |
 | `SHARDLENS_DOMAIN`  | The domain Caddy gets a certificate for.                                            |
 | `POSTGRES_PASSWORD` | Password for the bundled PostgreSQL. Letters, digits, `-` and `_` only: it goes into `DATABASE_URL`. |
-| `SHARDLENS_IMAGE`   | Collector image to run. Defaults to the published image for the current major version. |
+| `SHARDLENS_IMAGE`   | Collector image to run. Empty or unset, the published image for the current major version. |
 | `CLICKHOUSE_PASSWORD` | Password for the bundled ClickHouse in `docker-compose.clickhouse.yml`. Letters and digits only.     |

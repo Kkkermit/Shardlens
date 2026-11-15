@@ -1,141 +1,12 @@
-import { parseBatch } from '@shardlens/schema';
 import type {
-  APIChatInputApplicationCommandInteraction,
   APIInteraction,
   APIInteractionResponse,
   APIMessageComponentButtonInteraction,
 } from 'discord-api-types/v10';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createShardlensHttp, type ShardlensHttp } from '../src/index.js';
+import { afterEach, describe, expect, it } from 'vitest';
+import { APP_ID, Ctx, GUILD_ID, month, setup, shutdownLenses, slash, snowflake, TOKEN, USER_ID } from './helpers.js';
 
-const APP_ID = '1234567890123456789';
-const GUILD_ID = '112233445566778899';
-const USER_ID = '334455667788990011';
-const SALT_B64 = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8';
-/** Shaped like an interaction token, and made up. */
-const TOKEN = Buffer.from('interaction:1234567890123456789:made-up-for-these-tests').toString('base64url');
-
-function currentMonth() {
-  const d = new Date();
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
-}
-
-/** A snowflake whose timestamp is `msAgo` milliseconds in the past. */
-function snowflake(msAgo = 0) {
-  return ((BigInt(Date.now() - msAgo) - 1_420_070_400_000n) << 22n).toString();
-}
-
-function fakeCollector(mode: 'privacy' | 'audit' = 'privacy') {
-  const batches: { events: Record<string, unknown>[]; raw: string }[] = [];
-  const violations: unknown[] = [];
-  const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-    const url = String(input);
-    if (url.endsWith('/v1/config')) {
-      return Response.json({
-        v: 1,
-        appId: APP_ID,
-        mode,
-        saltPeriod: 'month',
-        salts: [{ period: currentMonth(), salt: SALT_B64 }],
-        sampling: {},
-        serverTime: new Date().toISOString(),
-      });
-    }
-    const raw = await new Response(
-      new Blob([init?.body as Uint8Array<ArrayBuffer>]).stream().pipeThrough(new DecompressionStream('gzip')),
-    ).text();
-    const body = JSON.parse(raw) as { events: Record<string, unknown>[] };
-    const parsed = parseBatch(body);
-    if (!parsed.ok) violations.push(parsed.issues);
-    else if (parsed.errors.length > 0) violations.push(parsed.errors);
-    batches.push({ events: body.events, raw });
-    return Response.json({ accepted: body.events.length, duplicates: 0, rejected: [] }, { status: 202 });
-  });
-  const events = (type?: string) => batches.flatMap((b) => b.events).filter((e) => !type || e.type === type);
-  return {
-    fetch: fetchImpl as unknown as typeof fetch,
-    spy: fetchImpl,
-    events,
-    violations,
-    raw: () => batches.map((b) => b.raw).join(),
-  };
-}
-
-function slash(
-  overrides: Partial<APIChatInputApplicationCommandInteraction> = {},
-): APIChatInputApplicationCommandInteraction {
-  return {
-    id: snowflake(120),
-    application_id: APP_ID,
-    type: 2,
-    token: TOKEN,
-    version: 1,
-    locale: 'en-GB',
-    guild_locale: 'en-US',
-    guild_id: GUILD_ID,
-    guild: { id: GUILD_ID, locale: 'en-US', features: [] },
-    channel: { id: '223344556677889900', type: 0 },
-    channel_id: '223344556677889900',
-    app_permissions: '0',
-    entitlements: [],
-    authorizing_integration_owners: { 0: GUILD_ID },
-    context: 0,
-    attachment_size_limit: 8_388_608,
-    member: {
-      user: { id: USER_ID, username: 'tester', discriminator: '0', global_name: 'Tester', avatar: null },
-      roles: [],
-      permissions: '8',
-      joined_at: '2024-01-01T00:00:00.000Z',
-      deaf: false,
-      mute: false,
-      flags: 0,
-    },
-    data: {
-      id: '445566778899001122',
-      name: 'ticket',
-      type: 1,
-      options: [
-        {
-          name: 'open',
-          type: 1,
-          options: [
-            { name: 'category', type: 3, value: 'billing' },
-            { name: 'reason', type: 3, value: `my card 4111-1111-1111-1111 and ${TOKEN}` },
-          ],
-        },
-      ],
-    },
-    ...overrides,
-  } as APIChatInputApplicationCommandInteraction;
-}
-
-class Ctx {
-  promises: Promise<unknown>[] = [];
-  waitUntil(promise: Promise<unknown>) {
-    this.promises.push(promise);
-  }
-  settle() {
-    return Promise.all(this.promises);
-  }
-}
-
-const lenses: ShardlensHttp[] = [];
-function setup(options: Parameters<typeof createShardlensHttp>[0] = {}, collectorMode?: 'privacy' | 'audit') {
-  const collector = fakeCollector(collectorMode);
-  const lens = createShardlensHttp({
-    endpoint: 'https://collector.test',
-    apiKey: 'slk_ingest_test',
-    fetch: collector.fetch,
-    logger: { warn: () => undefined },
-    ...options,
-  });
-  lenses.push(lens);
-  return { collector, lens };
-}
-
-afterEach(async () => {
-  await Promise.all(lenses.splice(0).map((l) => l.shutdown({ timeoutMs: 50 })));
-});
+afterEach(shutdownLenses);
 
 describe('createShardlensHttp', () => {
   it('does nothing until the first interaction (no timers or network at startup)', () => {
@@ -177,7 +48,7 @@ describe('createShardlensHttp', () => {
       ephemeral: true,
     });
     expect(event?.ackMs).toBeGreaterThanOrEqual(100);
-    expect(event?.user).toMatch(new RegExp(`^h1:${currentMonth()}:[0-9a-f]{32}$`));
+    expect(event?.user).toMatch(new RegExp(`^h1:${month()}:[0-9a-f]{32}$`));
     expect(collector.violations).toEqual([]);
     const raw = collector.raw();
     // Markers that can't turn up by chance in an event ID, a hash or a timestamp.
@@ -196,7 +67,7 @@ describe('createShardlensHttp', () => {
       data: { content: 'ok' },
     });
 
-    const identified = setup({ mode: 'audit' }, 'audit');
+    const identified = setup({ mode: 'audit' }, { mode: 'audit' });
     const ctx = new Ctx();
     await identified.lens.wrapInteractionHandler(answer)(interaction, {}, ctx);
     await ctx.settle();
@@ -207,7 +78,7 @@ describe('createShardlensHttp', () => {
     });
     expect(identified.collector.raw()).not.toContain('Tester');
 
-    const oneSided = setup({ mode: 'audit' }, 'privacy');
+    const oneSided = setup({ mode: 'audit' }, { mode: 'privacy' });
     const ctx2 = new Ctx();
     await oneSided.lens.wrapInteractionHandler(answer)(interaction, {}, ctx2);
     await ctx2.settle();
@@ -358,5 +229,107 @@ describe('createShardlensHttp', () => {
     expect(event).toMatchObject({ name: 'ticket_opened', props: { category: 'billing' }, guild: GUILD_ID });
     expect(event?.user).toMatch(/^h1:/);
     expect(lens.stats().internalErrors.track_invalid).toBe(1);
+  });
+  it('records the custom ID of a modal a command opens, so the modal funnel can join it to the submission', async () => {
+    const { collector, lens } = setup();
+    const ctx = new Ctx();
+    const command = lens.wrapInteractionHandler(
+      async (_i: APIInteraction, _c: Ctx): Promise<APIInteractionResponse> => ({
+        type: 9,
+        data: { custom_id: `feedback:${USER_ID}`, title: 'Feedback', components: [] },
+      }),
+    );
+    const button = lens.wrapInteractionHandler(
+      async (_i: APIInteraction, _c: Ctx): Promise<APIInteractionResponse> => ({
+        type: 9,
+        data: { custom_id: 'report:modal', title: 'Report', components: [] },
+      }),
+    );
+    await command(slash(), ctx);
+    await button(
+      { ...slash(), type: 3, data: { custom_id: 'report:open', component_type: 2 } } as unknown as APIInteraction,
+      ctx,
+    );
+    await ctx.settle();
+    const [opened, clicked] = collector.events('interaction');
+    expect(opened).toMatchObject({ kind: 'chat_input', responseType: 9, customId: 'feedback:*' });
+    // A component keeps its own ID.
+    expect(clicked).toMatchObject({ kind: 'button', responseType: 9, customId: 'report:open' });
+    expect(collector.raw()).not.toContain(USER_ID);
+  });
+
+  it('starts nothing for a PING, such as Discord checking the endpoint URL', async () => {
+    const { collector, lens } = setup();
+    const ctx = new Ctx();
+    const handle = lens.wrapInteractionHandler(async (_i: APIInteraction, _c: Ctx) => ({ type: 1 }));
+    await expect(
+      handle({ id: snowflake(), type: 1, application_id: APP_ID, token: TOKEN, version: 1 } as APIInteraction, ctx),
+    ).resolves.toEqual({ type: 1 });
+    expect(ctx.promises).toEqual([]);
+    expect(collector.spy).not.toHaveBeenCalled();
+  });
+
+  it('answers when an argument throws on reading waitUntil', async () => {
+    const { lens } = setup();
+    const hostile = {
+      get waitUntil(): never {
+        throw new Error('not available here');
+      },
+    };
+    const handle = lens.wrapInteractionHandler(async (_i: APIInteraction, _c: unknown) => ({ type: 4 }));
+    await expect(handle(slash(), hostile)).resolves.toEqual({ type: 4 });
+  });
+
+  it('leaves a Response that is not JSON alone, and still records the interaction', async () => {
+    const { collector, lens } = setup();
+    const ctx = new Ctx();
+    const form = new FormData();
+    form.set('payload_json', JSON.stringify({ type: 4, data: { content: 'file' } }));
+    const handle = lens.wrapInteractionHandler(async (_i: APIInteraction, _c: Ctx) => new Response(form));
+    const res = await handle(slash(), ctx);
+    expect(res.bodyUsed).toBe(false);
+    expect((await res.formData()).get('payload_json')).toContain('file');
+    await ctx.settle();
+    const [event] = collector.events('interaction');
+    expect(event).toMatchObject({ outcome: 'ok' });
+    expect(event).not.toHaveProperty('responseType');
+  });
+
+  it('keeps every event the wire format accepts when a payload has out-of-range values', async () => {
+    const { collector, lens } = setup({ captureOptionValues: ['x'.repeat(33)] });
+    const ctx = new Ctx();
+    const handle = lens.wrapInteractionHandler(async (_i: APIInteraction, _c: Ctx) => ({
+      type: 2 ** 60,
+      data: { flags: 1.5 },
+    }));
+    const interaction = slash({
+      // 20 digits but above 2^63: no collector column holds it.
+      guild_id: '99999999999999999999',
+      channel: { id: '223344556677889900', type: 0.5 } as never,
+    });
+    interaction.data.options = [{ name: 'x'.repeat(33), type: 3, value: 'kept out' }];
+    await handle(interaction, ctx);
+    await handle({ ...slash(), member: undefined, user: undefined } as unknown as APIInteraction, ctx);
+    lens.track('weird_guild', {}, { userId: USER_ID, guildId: '99999999999999999999' }, ctx);
+    await ctx.settle();
+    expect(collector.violations).toEqual([]);
+    const [event, ...others] = collector.events('interaction');
+    // The interaction without a user is not sent: the collector would refuse it.
+    expect(others).toEqual([]);
+    expect(event).not.toHaveProperty('guild');
+    expect(event).not.toHaveProperty('channelType');
+    expect(event).not.toHaveProperty('responseType');
+    expect(event).not.toHaveProperty('ephemeral');
+    expect(event).not.toHaveProperty('optionValues');
+    expect(collector.events('custom')[0]).not.toHaveProperty('guild');
+  });
+
+  it('hashes a custom event user given as a BigInt', async () => {
+    const { collector, lens } = setup();
+    const ctx = new Ctx();
+    lens.track('ticket_opened', {}, { userId: BigInt(USER_ID) as unknown as string }, ctx);
+    await ctx.settle();
+    expect(collector.events('custom')[0]?.user).toMatch(/^h1:/);
+    expect(collector.raw()).not.toContain(USER_ID);
   });
 });

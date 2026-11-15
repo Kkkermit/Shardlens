@@ -44,12 +44,17 @@ Wrapping that whole listener would record every command as successful, because n
 function inside the `try` instead, and leave your `catch` as it is:
 
 ```ts
-const runCommand = lens.wrap(async (interaction) => {
+const runCommand = lens.wrap(async (interaction: ChatInputCommandInteraction) => {
   await commands.get(interaction.commandName)?.execute(interaction);
 });
 ```
 
 The error passes through `wrap`, which records it and throws it on to your `catch`.
+
+Call the wrapped function exactly as the original was called. If a listener calls your handler without `await`
+(`client.on('interactionCreate', (i) => { handle(i); })`), keep it that way and wrap `handle`, not the listener:
+turning a listener `async` changes where a failure goes, because discord.js passes a rejected listener's error to the
+client's `error` event.
 
 ## With a command handler framework
 

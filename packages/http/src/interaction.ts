@@ -81,7 +81,8 @@ const MODAL_SUBMIT = 5;
  */
 const SNOWFLAKE = /^(?:\d{17,18}|[1-8]\d{18}|9[01]\d{17})$/;
 
-export const snowflake = (v: unknown): string | undefined => (typeof v === 'string' && SNOWFLAKE.test(v) ? v : undefined);
+export const snowflake = (v: unknown): string | undefined =>
+  typeof v === 'string' && SNOWFLAKE.test(v) ? v : undefined;
 const integer = (v: unknown) => (Number.isSafeInteger(v) ? (v as number) : undefined);
 
 /** When Discord created the interaction, from its ID; now, for an ID that isn't one. */

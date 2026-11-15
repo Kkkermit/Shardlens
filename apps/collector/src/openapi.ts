@@ -31,7 +31,6 @@ const auditLogFilters = Object.entries(
   (json(AuditLogFilters) as { properties: Record<string, object> }).properties,
 ).map(([name, schema]) => ({ name, in: 'query', required: false, schema }));
 
-
 /**
  * OpenAPI 3.1 description of the collector's HTTP API, generated from the same zod schemas the routes validate with,
  * so the document cannot drift from the code. Served at `/openapi.json` and rendered on the docs site.

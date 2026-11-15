@@ -8,6 +8,7 @@ describe('normaliseCustomId', () => {
     expect(normaliseCustomId('page_3')).toBe('page_*');
     expect(normaliseCustomId('vote:0193f2b4-7c1a-7d4e-9a51-3c2f1e0b9a77:yes')).toBe('vote:*:yes');
     expect(normaliseCustomId('confirm')).toBe('confirm');
+    expect(normaliseCustomId(`role:${'1'.repeat(25)}`)).toBe('role:*');
   });
 
   it('never outputs a digit, never grows past the wire limit (property)', () => {

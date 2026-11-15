@@ -10,10 +10,11 @@ import prompt from '../../../../prompts/install.md?raw';
 
 Open your bot's repository in a coding agent (Claude Code, Cursor, GitHub Copilot, Codex, Windsurf or similar), paste
 the prompt below and let it work. It installs `@shardlens/discordjs`, creates Shardlens next to your client, wraps
-your interaction handler, records prefix commands if you have them, flushes on shutdown and documents the two
-settings. It works out your setup first: TypeScript or JavaScript, ESM or CommonJS, the discord.js guide layout, a
-framework such as Sapphire or a handler of your own, and single-process bots, `ShardingManager`, internal sharding or
-discord-hybrid-sharding.
+your interaction handler, records prefix commands if you have them, flushes on shutdown (in the manager too, for a
+sharded bot) and documents the two settings. It works out your setup first: TypeScript or JavaScript, ESM or CommonJS,
+the discord.js guide layout, a framework such as Sapphire or discordx or a handler of your own, and single-process
+bots, `ShardingManager`, internal sharding or discord-hybrid-sharding. Ask for embedded mode in the same message if you
+want the collector inside your bot instead of on a server.
 
 <Code code={prompt} lang="md" title="Paste this to your agent" wrap />
 
@@ -39,8 +40,8 @@ samples are type-checked against the real packages on every build of these docs.
 
 The prompt only changes your bot. You still need somewhere for the events to go:
 
-1. Start a collector: follow step 1 of the [quick start](../quick-start/), or use
-   [embedded mode](../../self-hosting/embedded/) for a small bot on one host.
+1. Start a collector: follow step 1 of the [quick start](../quick-start/). In
+   [embedded mode](../../self-hosting/embedded/) the collector runs inside your bot, so there is nothing to start.
 2. Set `SHARDLENS_URL` and `SHARDLENS_INGEST_KEY` wherever your bot runs.
 3. Run `npx shardlens doctor` from your bot's folder to check the connection.
 

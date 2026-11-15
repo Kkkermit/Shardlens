@@ -72,6 +72,8 @@ folder inherits the permissions of the folder it is in: put it somewhere other u
 
 - **Bigger bots.** Embedded mode shares your bot's CPU, and the database has one connection. Beyond a few hundred
   servers, or if the dashboard feels slow, use [Docker Compose](../docker-compose/).
+- **Small machines.** PGlite runs PostgreSQL in WebAssembly inside your process: a small bot with an embedded
+  collector used 350 to 550 MB of memory in our tests.
 - **Several processes.** With `ShardingManager` or clusters, run one standalone collector and point every process at
   it. An embedded collector belongs to one process.
 - **Public dashboards and webhook events** need HTTPS in front, which a reverse proxy gives you more easily with the

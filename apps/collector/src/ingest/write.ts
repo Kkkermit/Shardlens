@@ -439,6 +439,7 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
 
   for (const period of periods) await ensureUniquesPartition(tx, period);
 
+  /** Inserts one row per event: a row already there is a retried event. `fresh` collects the new rows' IDs. */
   const counted = async (table: string, cols: readonly string[], rows: unknown[][], fresh?: Set<string>) => {
     const inserted = await insertRows(
       tx,
@@ -534,24 +535,14 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
   }
   await insertRows(tx, 'gauges', GAUGE_COLUMNS, gaugeRows);
   result.accepted += singleRowEvents;
-  // One row per event: a row already there is a retried event.
-  const oneRowEach = async (table: string, columns: readonly string[], rows: unknown[][]) => {
-    const inserted = await insertRows(tx, table, columns, rows);
-    result.accepted += inserted;
-    result.duplicates += rows.length - inserted;
-  };
-  await oneRowEach('shard_events', ['app_id', 'ts', 'shard', 'state', 'close_code', 'replayed'], shardRows);
-  await oneRowEach('entitlements', ENTITLEMENT_COLUMNS, entitlementRows);
-  await oneRowEach(
+  await counted('shard_events', ['app_id', 'ts', 'shard', 'state', 'close_code', 'replayed'], shardRows);
+  await counted('entitlements', ENTITLEMENT_COLUMNS, entitlementRows);
+  await counted(
     'subscriptions',
     ['id', 'ts', 'app_id', 'action', 'status', 'sku_ids', 'user_hash', 'period_start', 'period_end'],
     subscriptionRows,
   );
-  await oneRowEach(
-    'command_permissions',
-    ['id', 'ts', 'app_id', 'guild_id', 'command_id', 'overwrites'],
-    permissionRows,
-  );
+  await counted('command_permissions', ['id', 'ts', 'app_id', 'guild_id', 'command_id', 'overwrites'], permissionRows);
 
   for (const { event: e } of ordered) {
     const ts = new Date(e.ts);

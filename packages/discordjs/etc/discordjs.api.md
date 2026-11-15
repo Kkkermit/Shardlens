@@ -51,40 +51,34 @@ export type MetricGroup = 'interactions' | 'guilds' | 'rest' | 'gateway' | 'proc
 // @public
 export function normaliseRoute(route: string): string;
 
-// @public (undocumented)
+// @public
 export interface PrivacyCommand {
     data: RESTPostAPIChatInputApplicationCommandsJSONBody;
     handle(interaction: ChatInputCommandInteraction): Promise<boolean>;
 }
 
-// @public (undocumented)
+// @public
 export interface PrivacyCommandOptions {
-    // (undocumented)
     name?: string | undefined;
     policyUrl?: string | undefined;
 }
 
-// @public (undocumented)
+// @public
 export interface Shardlens {
-    // (undocumented)
     readonly client: ShardlensClient;
-    // (undocumented)
     flush(): Promise<void>;
     forgetUser(userId: string): Promise<{
         erased: number;
     } | undefined>;
     handlerFinished(interaction: BaseInteraction, result?: HandlerResult): void;
     handlerStarted(interaction: BaseInteraction): void;
-    // (undocumented)
     isOptedOut(userId: string): boolean;
-    // (undocumented)
     on(event: 'error', listener: (name: string, error: unknown) => void): () => void;
     optIn(userId: string): void;
     optOut(userId: string): void;
     shutdown(options?: {
         timeoutMs?: number;
     }): Promise<void>;
-    // (undocumented)
     stats(): ShardlensStats;
     track<N extends CustomEventName>(name: N, props?: CustomEventProps<N>, context?: TrackContext): void;
     trackMessageCommand(message: Message, run: MessageCommandRun): void;
@@ -94,7 +88,7 @@ export interface Shardlens {
 
 export { ShardlensExporter }
 
-// @public (undocumented)
+// @public
 export interface ShardlensOptions {
     apiKey?: string | undefined;
     auditIncludeProfile?: boolean | undefined;
@@ -115,6 +109,7 @@ export interface ShardlensOptions {
     optedOut?: Iterable<string | bigint> | undefined;
     refreshGuildCounts?: boolean | undefined;
     release?: string | undefined;
+    // @deprecated
     saltPeriod?: SaltPeriod | undefined;
     sampleRate?: Readonly<Record<string, number>> | undefined;
     spool?: {
@@ -125,15 +120,12 @@ export interface ShardlensOptions {
 
 // @public
 export interface ShardlensStats extends ClientStats {
-    // (undocumented)
     pendingInteractions: number;
 }
 
 // @public
 export interface TrackContext {
-    // (undocumented)
     guildId?: string | null | undefined;
-    // (undocumented)
     userId?: string | undefined;
 }
 

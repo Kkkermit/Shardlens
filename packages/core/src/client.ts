@@ -339,6 +339,7 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
   #retryAt = 0;
   #batchCap: number;
   #flushing: Promise<void> | undefined;
+  #spilling: Promise<void> | undefined;
   #flushScheduled = false;
   #flushTimer: unknown;
   #configTimer: unknown;
@@ -595,6 +596,13 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
         .catch((error: unknown) => this.count('flush', error))
         .finally(() => {
           this.#flushing = undefined;
+        });
+    } else if (this.#spool && this.#queue.size >= this.#maxQueue - this.#batchCap) {
+      // A request can hang for 10 seconds, while memory fills up and starts dropping events: spool them meanwhile.
+      this.#spilling ??= this.#spill(false)
+        .catch((error: unknown) => this.count('spool_write', error))
+        .finally(() => {
+          this.#spilling = undefined;
         });
     }
     return this.#flushing;
@@ -897,6 +905,7 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
       this.#drainPendingSalt();
       if (this.#queue.size > 0) this.#scheduleFlush();
     } catch (error) {
+      if (this.#closed) return; // given up by shutdown: not an outage
       this.count('config', error);
       this.#collectorDown(error);
       this.#scheduleConfig(backoffMs(this.#configAttempt++, this.#random));
@@ -1030,8 +1039,19 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
         result = 'refused';
       }
       if (result === 'retry' || result === 'audit_off') return false;
+      let lost = typeof result === 'number' ? result : events.length;
       if (typeof result === 'number') this.#replayed += events.length - result;
-      this.#extraDropped.invalid += typeof result === 'number' ? result : events.length;
+      else if (result === 'too_large' && events.length > 1) {
+        // A proxy in front of the collector may take less than it does: put the batch back in two halves.
+        const half = Math.ceil(events.length / 2);
+        try {
+          if (await spool.write(events.slice(0, half))) lost -= half;
+          if (await spool.write(events.slice(half))) lost -= events.length - half;
+        } catch (error) {
+          this.count('spool_write', error);
+        }
+      }
+      this.#extraDropped.invalid += lost;
       try {
         await spool.ack(batch.id);
       } catch (error) {
@@ -1082,7 +1102,10 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
     return new TextEncoder().encode(JSON.stringify(envelope));
   }
 
-  /** Sends one batch from the queue. Returns true when the batch left the queue for good (sent, or dropped). */
+  /**
+   * Sends one batch from the queue, putting back what should be tried again. Returns false when sending must wait for
+   * the backoff.
+   */
   async #sendBatch(batch: QueuedItem<E>[]): Promise<boolean> {
     let items = batch.filter((i) => !this.#isErased(i.item));
     let events: WireEvent[] = [];

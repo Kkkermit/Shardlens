@@ -135,9 +135,11 @@ describe('docs stay in step with the code', () => {
     expect(json).toContain('interaction_error');
     expect(json).not.toMatch(/"groupBy"[^}]*"user"/);
     // The ingest body is the published batch schema, privacy-mode rule included.
-    const ingestBody = (doc.paths['/v1/ingest'] as unknown as {
-      post: { requestBody: { content: { 'application/json': { schema: Record<string, unknown> } } } };
-    }).post.requestBody.content['application/json'].schema;
+    const ingestBody = (
+      doc.paths['/v1/ingest'] as unknown as {
+        post: { requestBody: { content: { 'application/json': { schema: Record<string, unknown> } } } };
+      }
+    ).post.requestBody.content['application/json'].schema;
     expect(ingestBody).toEqual(batchJsonSchema());
     expect(JSON.stringify(ingestBody.then)).toContain('actor');
   });

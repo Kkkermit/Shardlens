@@ -1011,7 +1011,7 @@ describe('retention', () => {
       expect(Date.parse(cut.from)).toBeGreaterThan(Date.now() - 7 * DAY - 60_000);
     } finally {
       await h.db.query('UPDATE apps SET raw_retention_days = 35 WHERE app_id = $1', [APP_ID]);
-      await h.db.query('DROP TABLE IF EXISTS "interactions_' + day.replace(/-/g, '') + '"');
+      await h.db.query(`DROP TABLE IF EXISTS "interactions_${day.replace(/-/g, '')}"`);
     }
   });
 });

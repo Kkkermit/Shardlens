@@ -5,7 +5,7 @@ import { type Jobs, startJobs } from './jobs/scheduler.js';
 import { LiveHub } from './live.js';
 import { KeyStore, seedKey } from './security/auth.js';
 import { buildServer } from './server.js';
-import { ClickHouseStore } from './storage/clickhouse.js';
+import type { ClickHouseStore } from './storage/clickhouse.js';
 import { activeSalts, ensurePartitions } from './storage/maintenance.js';
 import type { SaltPeriod } from './storage/periods.js';
 import { createSink, SinkMirror } from './storage/sink.js';
@@ -70,7 +70,10 @@ export async function startCollector(
 
   const live = new LiveHub(db);
   const liveShared = await live.start();
-  const analytics = config.clickhouseUrl ? new ClickHouseStore(config.clickhouseUrl) : undefined;
+  // Loaded only when configured: embedded mode and most installs never need the ClickHouse client.
+  const analytics: ClickHouseStore | undefined = config.clickhouseUrl
+    ? new (await import('./storage/clickhouse.js')).ClickHouseStore(config.clickhouseUrl)
+    : undefined;
   let sink: SinkMirror | undefined;
   let server: FastifyInstance | undefined;
   let jobs: Jobs | undefined;

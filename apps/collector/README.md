@@ -3,14 +3,25 @@
 The [Shardlens](https://github.com/Kkkermit/Shardlens) collector: ingest, rollups, the query API, live updates and the
 dashboard. Shardlens is self-hosted, privacy-first analytics and health monitoring for discord.js bots.
 
-Most people run the collector as a container next to PostgreSQL. See the
-[quick start](https://kkkermit.github.io/Shardlens/getting-started/quick-start/): `npx shardlens init`, then
-`docker compose up -d`.
+## Run it with Docker
+
+Most people run the collector as a container next to PostgreSQL 16 or newer, behind Caddy for HTTPS. The
+[quick start](https://kkkermit.github.io/Shardlens/getting-started/quick-start/) has the whole setup:
+
+```sh
+npx shardlens init --domain stats.example.com --app-id <your application ID>
+cd shardlens && docker compose up -d
+```
+
+The image is `ghcr.io/kkkermit/shardlens-collector`. It is configured with
+[environment variables](https://kkkermit.github.io/Shardlens/reference/environment/), applies its database migrations
+when it starts, and serves the dashboard on the same port as the API.
 
 ## Embedded mode
 
 This package also runs the whole collector inside a small bot's own process, on an in-process PostgreSQL
-([PGlite](https://pglite.dev/)) stored in one folder. No Docker and no database server.
+([PGlite](https://pglite.dev/)) stored in one folder. No Docker and no database server. It needs Node.js 24.11 or
+newer.
 
 ```sh
 npm install @shardlens/collector @electric-sql/pglite @shardlens/discordjs
@@ -27,10 +38,14 @@ createShardlens(client, { endpoint: collector.url, apiKey: collector.ingestKey }
 
 Keep the data folder private and out of version control: it holds the database and the generated keys.
 
+Either way, the collector can also [copy every event into your own database](https://kkkermit.github.io/Shardlens/self-hosting/your-own-database/)
+(MongoDB, MySQL, MariaDB, PostgreSQL or SQLite).
+
 ## Links
 
 - [Embedded mode](https://kkkermit.github.io/Shardlens/self-hosting/embedded/) ·
   [Docker Compose](https://kkkermit.github.io/Shardlens/self-hosting/docker-compose/) ·
+  [upgrading](https://kkkermit.github.io/Shardlens/self-hosting/upgrading/) ·
   [security](https://kkkermit.github.io/Shardlens/operations/security/)
 - Using an AI coding agent? Point it at [`llms.txt`](https://kkkermit.github.io/Shardlens/llms.txt), the docs as plain
   text.

@@ -277,6 +277,62 @@ export const scenarios = {
     },
   },
 
+  // Two shards: server 1 is on shard 0, servers 2 to 4 on shard 1, DMs on shard 0. The bot is stopped with SIGINT to
+  // the manager alone, which has to pass it on for the shards to flush.
+  'ts-sharded': {
+    appId: '1100000000000000004',
+    registered: [
+      ['ping', 1],
+      ['server', 1],
+      ['stats', 1],
+      ['echo', 1],
+      ['roulette', 1],
+    ],
+    async run(w) {
+      const E = tally();
+      const [g1, g2, g3] = w.guilds;
+      const U = w.users;
+      for (let i = 0; i < 9; i++) {
+        w.slash(U[i], [g1, g2, g3][i % 3], 'ping');
+        E.slash('ping', 'ok');
+        await w.sleep(40);
+      }
+      for (let i = 0; i < 3; i++) {
+        w.slash(U[i + 3], i ? g2 : g1, 'server');
+        E.slash('server', 'ok');
+        await w.sleep(40);
+      }
+      for (let i = 0; i < 4; i++) {
+        w.slash(U[i + 5], i % 2 ? g1 : g3, 'echo', [{ type: 3, name: 'input', value: 'the secret plan, card 4111' }]);
+        E.slash('echo', 'ok');
+        await w.sleep(40);
+      }
+      for (let i = 0; i < 3; i++) {
+        w.slash(U[i], i ? g2 : g1, 'roulette');
+        E.slash('roulette', 'error');
+        await w.sleep(40);
+      }
+      // Counts every shard's servers through the manager.
+      for (let i = 0; i < 2; i++) {
+        w.slash(U[9], i ? g1 : g2, 'stats');
+        E.slash('stats', 'ok');
+        await w.sleep(300);
+      }
+      for (let i = 0; i < 2; i++) {
+        w.slash(U[12], null, 'ping');
+        E.slash('ping', 'ok');
+        await w.sleep(40);
+      }
+      w.joinGuild();
+      E.join();
+      await w.sleep(300);
+      w.leaveGuild(g3);
+      E.leave();
+      await w.sleep(2_000);
+      return E.done();
+    },
+  },
+
   sapphire: {
     appId: '1100000000000000003',
     async run(w) {

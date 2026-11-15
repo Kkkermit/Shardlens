@@ -44,7 +44,8 @@ Shardlens shows how much of the budget the last 10 minutes used. An [alert](../.
 ## Rate limits
 
 discord.js queues requests to respect rate limits, so `429`s are rare unless several processes share a token or a
-shared resource is busy. Shardlens records each rate limit by scope (`user`, `global` or `shared`) and route.
+shared resource is busy. Shardlens records each request discord.js held back for a rate limit, by route and whether
+the global limit was the reason, and counts every `429` response in the REST table and the invalid-request budget.
 
 ## What Discord doesn't tell bots
 

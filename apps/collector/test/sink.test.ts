@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { uuidv7 } from '@shardlens/core';
 import { COLLECTED_FIELDS, type Event, Event as EventSchema } from '@shardlens/schema';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import type { z } from 'zod';
 import { loadConfig } from '../src/env.js';
 import {
@@ -267,6 +267,29 @@ describe('sink mirror', () => {
     await expect(mirror.erase(APP, [Buffer.from(HEX, 'hex')])).rejects.toThrow(/unreachable/);
     state.failInit = false;
     await expect(mirror.erase(APP, [Buffer.from(HEX, 'hex')])).resolves.toBe(0);
+  });
+
+  it('fails an erase after 20 seconds when the database stops answering, instead of hanging', async () => {
+    vi.useFakeTimers();
+    try {
+      const sink: EventSink = {
+        name: 'partitioned',
+        // A database behind a network partition: no answer, and no error either.
+        write: () => new Promise(() => undefined),
+        erase: () => new Promise(() => undefined),
+        expire: async () => 0,
+        close: async () => undefined,
+      };
+      const mirror = new SinkMirror(sink);
+      mirror.push(ctx, [command(), command(HEX)]);
+      void mirror.flush();
+      const erasing = mirror.erase(APP, [Buffer.from(HEX, 'hex')]);
+      const outcome = expect(erasing).rejects.toThrow(/unreachable; erase it again later/);
+      await vi.advanceTimersByTimeAsync(20_000);
+      await outcome;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('drops and counts copies once its buffer is full, without throwing', () => {

@@ -85,7 +85,7 @@ export async function drive(bot, { dir, logs, databases, collectorMain }) {
   const here = import.meta.dirname;
 
   const discord = startNode([join(here, 'fake-discord/server.mjs')], {
-    env: { ...process.env, SIM_PORT: String(config.discordPort), SIM_BOT: bot },
+    env: { ...process.env, SIM_PORT: String(config.discordPort), SIM_BOT: bot, SIM_SHARDS: String(config.shards ?? 1) },
     log: log('discord'),
   });
   const { guilds } = await until('the fake Discord', () => sim('/_sim/status'), 15_000);
@@ -122,10 +122,12 @@ export async function drive(bot, { dir, logs, databases, collectorMain }) {
 
   await config.prepare?.({ guilds });
   const started = Date.now();
-  const botProcess = startNode(['--require', join(here, 'fake-discord/preload.cjs'), config.main], {
+  const botProcess = startNode([config.main], {
     cwd: dir,
     env: {
       ...process.env,
+      // Not `--require`: a ShardingManager's shard processes don't inherit it, and would call the real Discord.
+      NODE_OPTIONS: `--require ${JSON.stringify(join(here, 'fake-discord/preload.cjs'))}`,
       SIM_API: `http://127.0.0.1:${config.discordPort}/api`,
       SIM_LISTEN: config.embedded ? `${config.embedded.port}:${config.collectorPort}` : '',
       DISCORD_TOKEN: token,

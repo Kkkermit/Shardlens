@@ -11,8 +11,8 @@ import { Aside, TabItem, Tabs } from '@astrojs/starlight/components';
 
 | What       | Version                                                           |
 | ---------- | ----------------------------------------------------------------- |
-| Node.js    | 22.12 or later (24 LTS recommended)                               |
-| discord.js | 14 and 15                                                         |
+| Node.js    | 22.12 or later (24 LTS recommended; 24.11 for embedded mode)      |
+| discord.js | 14.12 or later, and 15                                            |
 | Intents    | `Guilds` only. No privileged intents.                             |
 | Collector  | Any server with Docker, or Railway or Render. PostgreSQL 16 or 17 |
 
@@ -44,7 +44,8 @@ plain JavaScript.
   </TabItem>
 </Tabs>
 
-`discord.js` is a peer dependency: the SDK uses the copy your bot already has.
+`discord.js` is a peer dependency: the SDK uses the copy your bot already has. Releases before 14.12 use an older REST
+client whose responses Shardlens can't read, so it needs 14.12 or later.
 
 ## Packages
 

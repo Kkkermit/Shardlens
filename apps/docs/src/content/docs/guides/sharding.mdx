@@ -10,6 +10,7 @@ import internal from '../../../../snippets/sharding-internal.ts?raw';
 import hybrid from '../../../../snippets/sharding-hybrid.ts?raw';
 import manager from '../../../../snippets/sharding-manager.ts?raw';
 import stopping from '../../../../snippets/sharding-stop.ts?raw';
+import stoppingHybrid from '../../../../snippets/sharding-stop-hybrid.ts?raw';
 
 Shardlens works with every common sharding setup without extra configuration. Create one Shardlens instance per
 discord.js `Client`, in the process where that client runs.
@@ -17,7 +18,7 @@ discord.js `Client`, in the process where that client runs.
 | Setup                   | Where `createShardlens` goes                     | How events are tagged                         |
 | ----------------------- | ------------------------------------------------ | --------------------------------------------- |
 | Internal sharding       | Your bot file, once                              | Each event carries its guild's shard          |
-| `ShardingManager`       | The shard file (not the manager), once per shard | `client.shard.ids`                            |
+| `ShardingManager`       | The shard file (not the manager), once per shard | The shards that process runs                  |
 | discord-hybrid-sharding | The cluster file, once per cluster               | The cluster's shard list                      |
 | Several machines        | Each process                                     | `source.instance` tells hosts apart           |
 
@@ -54,9 +55,11 @@ from the manager, and wait for the processes to finish:
 
 <Code code={stopping} lang="ts" title="manager.ts" />
 
-With discord-hybrid-sharding, do the same for `manager.clusters`: call `cluster.kill()`, then wait for
-`cluster.thread.process` to exit, as in the
-[example's manager](https://github.com/Kkkermit/Shardlens/tree/main/examples/hybrid-sharding/src/manager.ts).
+With discord-hybrid-sharding (in its default `mode: 'process'`), do the same for `manager.clusters`, as in the
+[example's manager](https://github.com/Kkkermit/Shardlens/tree/main/examples/hybrid-sharding/src/manager.ts):
+
+<Code code={stoppingHybrid} lang="ts" title="manager.ts" />
+
 `lens.shutdown()` can be called twice (once for each signal): every call waits for the same flush.
 
 ## What happens across shards

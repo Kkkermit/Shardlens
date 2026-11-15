@@ -51,6 +51,15 @@ seconds (1,000 events at most) and then drops them, counting the drops. If this 
 - `503`: the collector is busy. The SDK waits for `Retry-After` and retries, so no events are lost while the queue has
   room.
 
+## Alerts or reports don't arrive
+
+The alert history (**Alerts**) and the **Last sent** column of **Reports** say why:
+
+- `discord returned 404`: the webhook was deleted. Create a new one and save the alert or report again.
+- `could not reach Discord (…)`: the collector can't connect to `discord.com`. The code says why, for example
+  `ENOTFOUND` (no DNS) or `ECONNREFUSED`; a firewall that only allows inbound traffic is the usual cause.
+- `The saved webhook could not be decrypted`: `SHARDLENS_SETTINGS_KEY` changed. Save the webhook again.
+
 ## Webhook events stopped
 
 Discord turns webhook events off when the endpoint keeps failing.
@@ -90,7 +99,7 @@ The collector writes one JSON object per line (`docker compose logs collector`).
 | `Live tiles are not shared …`         | warning | PostgreSQL refused `LISTEN` at startup, so with several collectors each one's live tiles show only its own traffic until a retry in the background succeeds. |
 | `Live tiles lost their LISTEN connection …` | warning | The connection that shares live tiles broke (a database restart, say). The collector subscribes again, waiting up to 30 seconds between tries. |
 | `this collector is now the job leader` | info   | This instance runs the background jobs (rollups, alerts, retention). Exactly one instance does.                           |
-| `events rejected`                     | warning | A batch was accepted but some events were dropped. `reasons` counts them: `too_old` (older than your raw-data retention, 35 days by default), `in_future` (more than a day ahead), `unknown_salt_period`, `invalid_event`. |
+| `events rejected`                     | warning | A batch was accepted but some events were dropped. `reasons` counts them: `too_old` (older than your raw-data retention, 35 days at most), `in_future` (more than a day ahead), `unknown_salt_period` (hashed with a salt that was destroyed), `invalid_event`, `refused_by_database` (a value PostgreSQL would not store). |
 | `input refused by the database`       | warning | A request carried a value PostgreSQL would not store. It was answered with `400`; nothing was saved from it.              |
 | `clock skew corrected for batch`      | warning | The bot's clock is more than 5 minutes off. Timestamps were corrected; fix the clock (NTP).                               |
 | `Discord sign-in failed`              | warning | The OAuth exchange failed. `reason` names the error, usually a wrong client secret or redirect URL.                       |
@@ -104,6 +113,9 @@ The collector writes one JSON object per line (`docker compose logs collector`).
 | `job failed`                          | error   | A background job threw. `job` names it; it runs again on its next schedule. `partitions in use` means a long query kept a table locked for 2 seconds while retention dropped old data: it tries again a minute later instead of holding ingest up. |
 | `rows the database could not aggregate were skipped` | error | A rollup statement refused its data (a sum out of range). `skipped` names the statement and window; every other metric was still rolled up. |
 | `webhook event processing failed`     | error   | A Discord webhook event was acknowledged but could not be stored.                                                         |
+| `<database> sink … failed: …`         | warning | The copy of events in [your own database](../../self-hosting/your-own-database/) could not be set up or written (`component: sink`). Logged at most once a minute, with any password removed; copies wait in memory and are retried. |
+| `<database> sink is behind: …`        | warning | Your database was down or slow for long enough that 20,000 copies were waiting, so newer ones were dropped. The count is in the message. |
+| `ClickHouse insert failed …`          | warning | The [ClickHouse](../../self-hosting/scaling/#clickhouse-preview) copy could not be written (`component: clickhouse`). Rows wait in memory and are retried; the count of dropped rows is in the message. |
 | `leader election failed`              | error   | This instance could not check the job lock. It retries every 30 seconds.                                                  |
 
 Logs never contain keys, tokens, cookies, request bodies or user IDs. Per-request lines ("incoming request") contain

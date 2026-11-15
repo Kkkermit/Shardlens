@@ -92,13 +92,43 @@ Sapphire runs commands itself and emits an event at each step, so there is nothi
 `handlerStarted(interaction)` and `handlerFinished(interaction, { durationMs, error })` record exactly what `wrap()`
 would. Use them with any framework that tells you when a handler starts and ends.
 
+## discordx
+
+discordx runs every slash command, context menu, component and simple (prefix) command through its guards, and a
+command's error comes back out of `next()`. One global guard, in front of any you have, covers both kinds of command:
+
+```ts
+import { createShardlens } from '@shardlens/discordjs';
+import { BaseInteraction } from 'discord.js';
+import { type GuardFunction, SimpleCommandMessage } from 'discordx';
+
+const lens = createShardlens(bot, { endpoint: process.env.SHARDLENS_URL, apiKey: process.env.SHARDLENS_INGEST_KEY });
+
+const shardlensGuard: GuardFunction = async (arg, _client, next) => {
+  if (arg instanceof SimpleCommandMessage) {
+    // The command's own name: aliases and the per-server prefix are already resolved.
+    await lens.wrapMessageCommand(arg.info.name, () => next())(arg.message);
+  } else if (arg instanceof BaseInteraction) {
+    await lens.wrap((_interaction: BaseInteraction) => next())(arg);
+  } else {
+    await next(); // events
+  }
+};
+bot.guards = [shardlensGuard, ...bot.guards];
+```
+
+Leave `bot.executeInteraction()` and `bot.executeCommand()` as they are.
+
 ## Other frameworks and hand-made handlers
 
-The same rule works for any layout (discordx, CommandKit, Necord, a loader you wrote):
+The same rule works for any layout (CommandKit, Necord, a loader you wrote):
 
 - Find the one place a matched command's code is called. Wrap that call with `lens.wrap()` (interactions) or
-  `lens.wrapMessageCommand()` (prefix commands), or, if the framework catches errors itself, report the result:
-  `handlerFinished()` for interactions, `trackMessageCommand(message, { command, durationMs, failed })` for messages.
+  `lens.wrapMessageCommand()` (prefix commands), and call the wrapped function exactly as the original was called:
+  inside the same `try`, awaited only if it was awaited. If the framework has middleware that runs around every
+  command (CommandKit middleware, Necord interceptors), wrap its `next()` there, as for discordx above. If the
+  framework catches errors itself, report the result instead: `handlerFinished()` for interactions,
+  `trackMessageCommand(message, { command, durationMs, failed })` for messages.
 - If slash and prefix commands share one function, `lens.wrap()` records only the interactions it is given and runs
   everything else untouched. Record the prefix side with `trackMessageCommand` where you still have the `Message`.
 - Prefix that comes from your database (a per-server prefix), aliases, mentions as a prefix: none of it matters to
@@ -108,6 +138,9 @@ The same rule works for any layout (discordx, CommandKit, Necord, a loader you w
 
 - **Top-level `await`, or a `main()` function:** either works. Call `createShardlens` before `client.login()`.
 - **A `Client` subclass:** call it in the constructor, or right after `new MyClient()`.
+- **[Embedded mode](../../self-hosting/embedded/) with no top-level `await`** (CommonJS, or a `main()` function):
+  start the collector and create `lens` in that function, before `client.login()`. Listeners registered earlier
+  can't see a local `lens`: keep it on the client and use `client.lens` inside them.
 - **TypeScript compiled to CommonJS** (tsc, tsup, esbuild): `require('@shardlens/discordjs')` works, and so does
   `require('@shardlens/collector/embedded')` on Node 24.
 - **`ShardingManager`, internal sharding, discord-hybrid-sharding:** see [Sharding](../sharding/). The rule is the same:

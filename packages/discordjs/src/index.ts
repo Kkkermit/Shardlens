@@ -47,7 +47,9 @@ import { appInfo, commandRegistry, defaultInstance, detectSource, gaugeWindow, o
 import { FileSpool } from './spool.js';
 import { clampedInt, LruMap, SDK_NAME, SDK_VERSION, SNOWFLAKE } from './util.js';
 
-export type { ShardlensExporter } from '@shardlens/core';
+// Re-exported so typed custom events can be declared on this package, which the bot depends on: with pnpm and other
+// strict layouts `@shardlens/core` can't be resolved from the bot's own code.
+export type { CustomEvents, ShardlensExporter } from '@shardlens/core';
 export type { MessageCommandInfo, MessageCommandRun } from './message-commands.js';
 export type { MetricGroup, ShardlensOptions } from './options.js';
 export { createPrivacyCommand, type PrivacyCommand, type PrivacyCommandOptions } from './privacy-command.js';

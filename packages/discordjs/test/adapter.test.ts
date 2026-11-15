@@ -442,6 +442,25 @@ describe('interactions', () => {
     expect(collector.events('interaction')[0]).toMatchObject({ outcome: 'no_response' });
   });
 
+  it("attributes a component's late failure to the command that created its message", async () => {
+    const { collector, client, lens } = setup();
+    await settle();
+    const command = slash(client);
+    client.emit(Events.InteractionCreate, command);
+    await command.reply({ content: 'here is a button' });
+    const button = Reflect.construct(ButtonInteraction, [client, rawButton(command.id)]) as ButtonInteraction;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    client.emit(Events.InteractionCreate, button);
+    lens.handlerStarted(button);
+    // The row goes after 10 seconds; the handler fails later still.
+    vi.advanceTimersByTime(10_001);
+    vi.useRealTimers();
+    lens.handlerFinished(button, { error: new TypeError('late') });
+    await settle();
+    await lens.flush();
+    expect(collector.events('interaction_error')).toMatchObject([{ command: 'ticket', errorClass: 'TypeError' }]);
+  });
+
   it('drops opted-out users in-process', async () => {
     const { collector, client, lens } = setup();
     await settle();
@@ -594,6 +613,22 @@ describe('REST', () => {
       retryAfter: 1200,
     });
     expect(collector.raw()).not.toContain(CHANNEL_ID);
+  });
+
+  it('records a global wait as global, as @discordjs/rest reports it with scope "user"', async () => {
+    const { collector, client, lens } = setup();
+    await settle();
+    client.rest.emit(RESTEvents.RateLimited, {
+      global: true,
+      scope: 'user',
+      route: '/channels/:id/messages',
+      method: 'post',
+      limit: 50,
+      retryAfter: 900,
+      sublimitTimeout: 0,
+    } as never);
+    await lens.flush();
+    expect(collector.events('rate_limit')).toMatchObject([{ scope: 'global', global: true }]);
   });
 
   it('keeps a window within the wire limit of 2,000 rows when routes overflow', async () => {

@@ -754,6 +754,39 @@ describe('spool', () => {
     expect(client.stats().queueDepth).toBe(60);
   });
 
+  it('moves events to the spool while a request hangs, before memory would drop them', async () => {
+    const spool = memorySpool();
+    const hanging = (async (input: string | URL | Request) => {
+      if (String(input).endsWith('/v1/config')) return fakeCollector().fetch(input);
+      return new Promise<Response>(() => undefined);
+    }) as typeof fetch;
+    const { client } = makeClient({ fetch: hanging, spool, maxQueueSize: 100, maxBatchSize: 20 });
+    await settle();
+    for (let i = 0; i < 20; i++) client.enqueue(custom(), 2);
+    void client.flush(); // takes those 20 and never hears back
+    for (let i = 0; i < 300; i++) {
+      client.enqueue(custom(), 2);
+      if (i % 10 === 9) await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    await settle();
+    expect(client.stats().dropped.p2).toBe(0);
+    expect(spool.size() + client.stats().queueDepth).toBe(300);
+  });
+
+  it('splits a spooled batch the collector finds too large instead of dropping it', async () => {
+    const spool = memorySpool();
+    await spool.write([custom('a'), custom('b'), custom('c'), custom('d')]);
+    await spool.write([custom('alone')]);
+    const collector = fakeCollector({ ingest: [{ status: 413 }, { status: 413 }] });
+    const { client } = makeClient({ fetch: collector.fetch, spool });
+    await settle();
+    await client.flush();
+    // 4 is too large and goes back as 2 + 2; then the single event is too large on its own and is dropped.
+    expect(collector.sent.map((s) => s.body.events.length - 1)).toEqual([4, 1, 2, 2]);
+    expect(spool.size()).toBe(0);
+    expect(client.stats()).toMatchObject({ replayed: 4, dropped: { invalid: 1 } });
+  });
+
   it('counts the spooled events the collector rejects, and only the rest as replayed', async () => {
     const spool = memorySpool();
     await spool.write([custom('a'), custom('b'), custom('c')]);
@@ -1088,6 +1121,18 @@ describe('hostile options and collectors', () => {
     // Giving up is not an outage.
     expect(warnings.some((w) => w.includes("can't reach"))).toBe(false);
     expect(client.stats().internalErrors.network).toBeUndefined();
+  });
+
+  it('does not report an outage when shutdown gives up on a settings request', async () => {
+    const hanging = ((_input: string | URL | Request, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+      })) as typeof fetch;
+    const { client, warnings } = makeClient({ fetch: hanging });
+    await client.shutdown({ timeoutMs: 20 });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(warnings).toEqual([]);
+    expect(client.stats().internalErrors).toEqual({});
   });
 
   it('sends nothing after shutdown, and does not report an outage when asked to flush', async () => {

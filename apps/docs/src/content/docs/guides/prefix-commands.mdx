@@ -21,8 +21,18 @@ name when the command has subcommands.
 
 ## If your bot catches errors itself
 
-Report the run after it finishes instead. `failed: true` records a failure your own `catch` handled; `error` records
-the error's class and Discord error code as well:
+Wrap the call inside your `try`: the error passes through the wrapper, which records it, and on to your `catch`.
+
+```ts
+try {
+  await lens.wrapMessageCommand(command.name, (m: Message) => command.execute(m, args))(message);
+} catch {
+  await message.reply('Something went wrong.');
+}
+```
+
+Where a wrapper doesn't fit, report the run once it is over. `failed: true` records a failure your own `catch`
+handled; `error` records the error's class and Discord error code as well:
 
 ```ts
 const started = performance.now();

@@ -2,6 +2,9 @@ import pg from 'pg';
 import { insertRows } from '../../db.js';
 import type { EventSink, StoredEvent } from '../sink.js';
 
+/** A database that stops answering fails the query instead of holding every copy behind it. */
+const QUERY_TIMEOUT_MS = 30_000;
+const DELETE_CHUNK = 5_000;
 const COLUMNS = ['id', 'ts', 'app_id', 'env', 'bot_release', 'type', 'guild_id', 'user_hash', 'salt_period', 'data'];
 
 /**
@@ -14,7 +17,13 @@ export class PostgresSink implements EventSink {
   readonly #table: string;
 
   constructor(url: string, table: string) {
-    this.#pool = new pg.Pool({ connectionString: url, max: 4, application_name: 'shardlens-sink' });
+    this.#pool = new pg.Pool({
+      connectionString: url,
+      max: 4,
+      application_name: 'shardlens-sink',
+      connectionTimeoutMillis: 10_000,
+      query_timeout: QUERY_TIMEOUT_MS,
+    });
     this.#pool.on('error', () => undefined);
     this.#table = table;
   }
@@ -66,8 +75,17 @@ export class PostgresSink implements EventSink {
   }
 
   async expire(before: Date): Promise<number> {
-    const res = await this.#pool.query(`DELETE FROM "${this.#table}" WHERE ts < $1`, [before]);
-    return res.rowCount ?? 0;
+    // In chunks, so a large expiry fits the query timeout and never holds a long lock.
+    const t = this.#table;
+    let deleted = 0;
+    for (;;) {
+      const res = await this.#pool.query(
+        `DELETE FROM "${t}" WHERE id IN (SELECT id FROM "${t}" WHERE ts < $1 LIMIT ${DELETE_CHUNK})`,
+        [before],
+      );
+      deleted += res.rowCount ?? 0;
+      if ((res.rowCount ?? 0) < DELETE_CHUNK) return deleted;
+    }
   }
 
   async close(): Promise<void> {

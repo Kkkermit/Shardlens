@@ -11,7 +11,8 @@ const lens = createShardlens(client, {
   endpoint: process.env.SHARDLENS_URL!,
   apiKey: process.env.SHARDLENS_INGEST_KEY!,
   optedOut: await loadOptOuts(), // users who opted out before this restart
-  onOptOutChange: (userId, optedOut) => void saveOptOut(userId, optedOut),
+  // It may be async: a failed save is counted (see lens.on('error')), never thrown into your bot.
+  onOptOutChange: (userId, optedOut) => saveOptOut(userId, optedOut),
 });
 
 const privacy = createPrivacyCommand(lens, { policyUrl: 'https://example.com/privacy' });

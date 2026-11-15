@@ -219,7 +219,10 @@ function attach(options: ShardlensHttpOptions): ShardlensHttp {
       } catch {
         // a broken logger must not break the SDK
       }
-      client = new ShardlensClient({ sdk: { name: SDK_NAME, version: SDK_VERSION }, logger: { warn: () => undefined } });
+      client = new ShardlensClient({
+        sdk: { name: SDK_NAME, version: SDK_VERSION },
+        logger: { warn: () => undefined },
+      });
       client.count('init', error);
     }
     // One forwarder for every listener, so one added before the client existed can still be removed later.
@@ -321,7 +324,8 @@ function attach(options: ShardlensHttpOptions): ShardlensHttp {
         }
         // BigInt IDs from a database are accepted, as for `optedOut`.
         const given: unknown = context?.userId;
-        const userId = (typeof given === 'string' || typeof given === 'bigint') && given !== '' ? String(given) : undefined;
+        const userId =
+          (typeof given === 'string' || typeof given === 'bigint') && given !== '' ? String(given) : undefined;
         if (userId && optedOut.has(userId)) return;
         const guild = snowflake(context?.guildId);
         // Stamped now, not when the user hash is ready: that can be much later if the collector is unreachable.

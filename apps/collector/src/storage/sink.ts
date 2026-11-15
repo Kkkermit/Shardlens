@@ -65,6 +65,8 @@ const EXPIRE_EVERY_MS = 6 * 60 * 60_000;
 const WARN_EVERY_MS = 60_000;
 /** Consecutive failed writes while the database is reachable before rows are tried one by one. */
 const POISON_AFTER = 3;
+/** How long an erase waits for the sink: a person's erase request must fail, so it is retried, rather than hang. */
+const ERASE_TIMEOUT_MS = 20_000;
 
 /**
  * Fields the data-collected register marks as identifying (`personal: 'yes'`), by event type: audit-mode `actor` and the
@@ -216,7 +218,7 @@ export class SinkMirror {
       if (wanted.length === 0) return;
       if (this.#buffer.length + wanted.length > MAX_BUFFER) {
         this.dropped += wanted.length;
-        this.#report('buffer', new Error(`buffer full, ${this.dropped} copies dropped so far`));
+        this.#say(`${this.#sink.name} sink is behind: its buffer is full, ${this.dropped} copies dropped so far`);
         return;
       }
       for (const event of wanted) this.#buffer.push(toStoredEvent(ctx, event));
@@ -243,13 +245,26 @@ export class SinkMirror {
       return before - this.#buffer.length;
     };
     let removed = unbuffer();
-    // A batch being written now either lands (and the delete below removes it) or comes back to the buffer. Only that
-    // batch is waited for: under steady load the buffer never empties, and waiting for it would hang the request.
-    // The batch after it was taken from the buffer once it held none of this person's copies.
-    await this.#writing;
-    removed += unbuffer();
-    if (!(await this.#init())) throw new Error(`${this.#sink.name} sink is unreachable; erase it again later`);
-    return removed + (await this.#sink.erase(appId, [...hex]));
+    const unreachable = `${this.#sink.name} sink is unreachable; erase it again later`;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(unreachable)), ERASE_TIMEOUT_MS);
+    });
+    const erase = async () => {
+      // A batch being written now either lands (and the delete below removes it) or comes back to the buffer. Only
+      // that batch is waited for: under steady load the buffer never empties, and waiting for it would hang the
+      // request. The batch after it was taken from the buffer once it held none of this person's copies.
+      await this.#writing;
+      removed += unbuffer();
+      if (!(await this.#init())) throw new Error(unreachable);
+      return removed + (await this.#sink.erase(appId, [...hex]));
+    };
+    try {
+      // A database that stopped answering (a network partition) never fails a query on its own.
+      return await Promise.race([erase(), timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async expire(now = new Date()): Promise<number> {
@@ -334,10 +349,15 @@ export class SinkMirror {
   }
 
   #report(what: string, error: unknown): void {
+    const message = error instanceof Error ? error.message : 'unknown error';
+    this.#say(`${this.#sink.name} sink ${what} failed: ${withoutCredentials(message)}`);
+  }
+
+  /** At most once a minute: while the database is down, every flush fails. */
+  #say(message: string): void {
     const now = Date.now();
     if (now - this.#warnedAt < WARN_EVERY_MS) return;
     this.#warnedAt = now;
-    const message = error instanceof Error ? error.message : 'unknown error';
-    this.#warn(`${this.#sink.name} sink ${what} failed: ${withoutCredentials(message)}`);
+    this.#warn(message);
   }
 }

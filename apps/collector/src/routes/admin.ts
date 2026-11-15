@@ -11,6 +11,12 @@ import { adminAudit, requireAdmin } from './guard.js';
 
 const BADGES = ['servers', 'users-monthly', 'commands-daily'] as const;
 
+/** A kept event carries the weight 1 / rate, and the wire refuses weights over `MAX_EVENT_WEIGHT`. */
+const SampleRate = z
+  .number()
+  .min(1 / MAX_EVENT_WEIGHT)
+  .max(1);
+
 export const SettingsPatch = z
   .object({
     // Not `TimeZone.optional()`: its default would reset the zone to UTC on every save that leaves it out.
@@ -33,10 +39,7 @@ export const SettingsPatch = z
         z.object({ amount: z.number().nonnegative().max(1_000_000), currency: z.string().regex(/^[A-Z]{3}$/) }),
       )
       .optional(),
-    // A kept event carries the weight 1 / rate, and the wire refuses weights over MAX_EVENT_WEIGHT.
-    sampling: z
-      .record(z.string().max(32), z.number().min(1 / MAX_EVENT_WEIGHT).max(1))
-      .optional(),
+    sampling: z.record(z.string().max(32), SampleRate).optional(),
     badges: z.array(z.enum(BADGES)).max(BADGES.length).optional(),
   })
   .strict();
