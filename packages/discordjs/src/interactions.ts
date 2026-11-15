@@ -1,5 +1,6 @@
 import {
   compact,
+  cutText,
   MAX_CUSTOM_ID_LENGTH,
   normaliseCustomId,
   redactSecrets,
@@ -60,21 +61,23 @@ interface TrackerContext {
   optedOut: ReadonlySet<string>;
 }
 
-type FlatOption = { name: string; value?: unknown };
+type FlatOption = { name: string; value?: unknown; type?: number };
 
 /** A custom ID as it is recorded: secrets redacted, then the bot's normaliser (or the default one), then capped. */
 function recordedCustomId(customId: string, options: ShardlensOptions): string {
   const normalise = options.normaliseCustomId ?? normaliseCustomId;
-  return normalise(redactSecrets(customId)).slice(0, MAX_CUSTOM_ID_LENGTH);
+  return cutText(normalise(redactSecrets(customId)), MAX_CUSTOM_ID_LENGTH);
 }
 
 function flattenOptions(
-  data: readonly { name: string; value?: unknown; options?: readonly unknown[] }[],
+  data: readonly { name: string; value?: unknown; type?: unknown; options?: readonly unknown[] }[],
 ): FlatOption[] {
   const out: FlatOption[] = [];
   for (const o of data) {
     if (o.options && o.options.length > 0) out.push(...flattenOptions(o.options as typeof data));
-    else if (o.value !== undefined) out.push({ name: o.name, value: o.value });
+    else if (o.value !== undefined) {
+      out.push({ name: o.name, value: o.value, ...(typeof o.type === 'number' ? { type: o.type } : {}) });
+    }
   }
   return out;
 }
@@ -118,7 +121,7 @@ function describeInteraction(
       commandScope: i.commandGuildId ? ('guild' as const) : ('global' as const),
       options: leaves.map((o) => o.name).slice(0, 25),
       optionValues: capturedValues(
-        leaves.map((o) => [o.name, o.value] as const),
+        leaves.map((o) => [o.name, o.value, o.type] as const),
         options.captureOptionValues,
       ),
     });

@@ -260,7 +260,7 @@ describe('ShardlensClient', () => {
     expect(warnings.some((w) => w.includes('no longer in audit mode'))).toBe(true);
   });
 
-  it('sends what is queued before asking for an erasure, so nothing is stored after it', async () => {
+  it("drops a user's unsent events before asking for an erasure, and keeps everyone else's", async () => {
     const order: string[] = [];
     const collector = fakeCollector();
     const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -274,9 +274,33 @@ describe('ShardlensClient', () => {
     }) as typeof fetch;
     const { client } = makeClient({ fetch: fetchImpl });
     await settle();
+    const erasedHash = await client.hashUser('112233445566778899');
     client.enqueueWithUser('112233445566778899', Date.now(), 3, (user) => ({ ...custom(), user }) as WireEvent);
+    client.enqueueWithUser('998877665544332211', Date.now(), 3, (user) => ({ ...custom(), user }) as WireEvent);
     await expect(client.forgetUser('112233445566778899')).resolves.toEqual({ erased: 1 });
-    expect(order).toEqual(['ingest', 'erase']);
+    await client.flush();
+    expect(order).toEqual(['erase', 'ingest']);
+    const users = collector.sent.flatMap((s) => s.body.events).flatMap((e) => (e.user ? [e.user] : []));
+    expect(users).toHaveLength(1);
+    expect(users).not.toContain(erasedHash);
+  });
+
+  it("never sends an erased user's events that were waiting to be retried", async () => {
+    const collector = fakeCollector({ ingest: [{ status: 503, headers: { 'retry-after': '0' } }] });
+    const { client } = makeClient({ fetch: collector.fetch, random: () => 0 });
+    await settle();
+    const erasedHash = await client.hashUser('112233445566778899');
+    client.enqueueWithUser('112233445566778899', Date.now(), 3, (user) => ({ ...custom(), user }) as WireEvent);
+    await settle();
+    await client.flush();
+    expect(client.stats().queueDepth).toBe(1);
+    await client.forgetUser('112233445566778899');
+    client.enqueue(custom('after_erasure'), 2);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    await client.flush();
+    const events = collector.sent.slice(1).flatMap((s) => s.body.events);
+    expect(events.map((e) => e.type)).toContain('custom');
+    expect(events.map((e) => e.user)).not.toContain(erasedHash);
   });
 
   it('pauses and warns once when the key is rejected', async () => {
@@ -547,6 +571,41 @@ describe('spool', () => {
   }
   const down = Array.from({ length: 50 }, () => ({ status: 503, headers: { 'retry-after': '60' } }));
 
+  it('moves events to the spool when the collector has been unreachable since startup', async () => {
+    const spool = memorySpool();
+    const { client } = makeClient({
+      fetch: (() => Promise.reject(new TypeError('fetch failed'))) as typeof fetch,
+      spool,
+      maxQueueSize: 10,
+    });
+    await settle();
+    for (let i = 0; i < 10; i++) client.enqueue(custom(), 2);
+    await client.flush();
+    expect(client.stats().queueDepth).toBe(5);
+    expect(spool.size()).toBe(5);
+  });
+
+  it("removes an erased user's events from the spool", async () => {
+    const spool = Object.assign(memorySpool(), {
+      async drop(match: (event: WireEvent) => boolean) {
+        let n = 0;
+        for (const [id, events] of spool.batches) {
+          const keep = events.filter((e) => !match(e));
+          n += events.length - keep.length;
+          spool.batches.set(id, keep);
+        }
+        return n;
+      },
+    });
+    const collector = fakeCollector();
+    const { client } = makeClient({ fetch: collector.fetch, spool });
+    await settle();
+    const hash = await client.hashUser('112233445566778899');
+    await spool.write([{ ...custom(), user: hash } as WireEvent, custom('someone_else')]);
+    await client.forgetUser('112233445566778899');
+    expect(spool.all().map((e) => e.name)).toEqual(['someone_else']);
+  });
+
   it('moves events to the spool during an outage and on shutdown, and never writes identities to disk', async () => {
     const spool = memorySpool();
     const collector = fakeCollector({
@@ -720,6 +779,212 @@ describe('exporters', () => {
     await client.flush();
     expect(collector.sent).toHaveLength(1);
     expect(client.stats().internalErrors['exporter:broken']).toBe(1);
+  });
+});
+
+describe('hostile options and collectors', () => {
+  it('runs with options of the wrong type, as environment variables and config files give', async () => {
+    const collector = fakeCollector();
+    const exporter = { name: 'single', observe: vi.fn() };
+    const { client, warnings } = makeClient({
+      fetch: collector.fetch,
+      environment: 1 as unknown as string,
+      release: 42 as unknown as string,
+      exporters: exporter as unknown as ClientOptions['exporters'],
+    });
+    await settle();
+    client.enqueue(custom(), 2);
+    await client.flush();
+    expect(collector.sent[0]?.body.app).toMatchObject({ env: '1', release: '42' });
+    expect(exporter.observe).toHaveBeenCalled();
+    expect(warnings.some((w) => w.includes('exporters must be an array'))).toBe(true);
+
+    const odd = makeClient({ fetch: collector.fetch, environment: {} as unknown as string });
+    expect(odd.warnings.some((w) => w.includes('environment must be a string'))).toBe(true);
+  });
+
+  it('counts a batch that fails while it is being built instead of losing it silently', async () => {
+    const collector = fakeCollector();
+    const hostile = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error('boom');
+        },
+      },
+    );
+    const { client } = makeClient({ fetch: collector.fetch, source: () => hostile as never });
+    await settle();
+    client.enqueue(custom(), 2);
+    await client.flush();
+    expect(client.stats().dropped.invalid).toBe(1);
+    expect(client.stats().internalErrors.send).toBe(1);
+  });
+
+  it('copes with a 400 reply whose rejected list holds nulls', async () => {
+    const collector = fakeCollector({ ingest: [{ status: 400, body: { rejected: [null, { index: 0 }] } }] });
+    const { client } = makeClient({ fetch: collector.fetch });
+    await settle();
+    client.enqueue(custom(), 2);
+    client.enqueue(custom(), 2);
+    await client.flush();
+    expect(client.stats().internalErrors).toEqual({});
+    expect(client.stats().dropped.invalid).toBe(1);
+    expect(collector.sent).toHaveLength(2);
+  });
+
+  it('never retries sooner than its backoff, whatever Retry-After says', async () => {
+    const collector = fakeCollector({
+      ingest: [
+        { status: 503, headers: { 'retry-after': '0' } },
+        { status: 429, headers: { 'retry-after': new Date(Date.now() - 60_000).toUTCString() } },
+      ],
+    });
+    const { client } = makeClient({ fetch: collector.fetch });
+    await settle();
+    client.enqueue(custom(), 2);
+    for (let i = 0; i < 5; i++) await client.flush();
+    expect(collector.sent).toHaveLength(1);
+  });
+
+  it('reads at most a bounded reply from the collector', async () => {
+    let pulled = 0;
+    const endless = () =>
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          pulled++;
+          controller.enqueue(new Uint8Array(16 * 1024).fill(32));
+        },
+      });
+    const collector = fakeCollector();
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).endsWith('/v1/ingest')) {
+        await collector.fetch(input, init);
+        return new Response(endless(), { status: 202 });
+      }
+      return collector.fetch(input, init);
+    }) as typeof fetch;
+    const { client } = makeClient({ fetch: fetchImpl });
+    await settle();
+    client.enqueue(custom(), 2);
+    await client.flush();
+    expect(collector.sent).toHaveLength(1);
+    expect(pulled).toBeLessThan(10);
+
+    pulled = 0;
+    const hugeConfig = makeClient({
+      fetch: (async () => new Response(endless(), { status: 200 })) as typeof fetch,
+    });
+    await settle();
+    expect(hugeConfig.client.ready).toBe(false);
+    expect(pulled).toBeLessThan(20);
+  });
+
+  it("asks again soon when the collector has no salt yet for this clock's period, and warns about the skew", async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    let configs = 0;
+    const lastMonth = new Date();
+    lastMonth.setUTCMonth(lastMonth.getUTCMonth() - 1, 1);
+    const previous = `${lastMonth.getUTCFullYear()}-${String(lastMonth.getUTCMonth() + 1).padStart(2, '0')}`;
+    const collector = fakeCollector({
+      config: {
+        v: 1,
+        appId: APP_ID,
+        mode: 'privacy',
+        saltPeriod: 'month',
+        salts: [{ period: previous, salt: SALT_B64 }],
+        sampling: {},
+        serverTime: new Date(Date.now() - 120_000).toISOString(),
+      },
+    });
+    const { client, warnings } = makeClient({
+      fetch: ((input: string | URL | Request, init?: RequestInit) => {
+        if (String(input).endsWith('/v1/config')) configs++;
+        return collector.fetch(input, init);
+      }) as typeof fetch,
+      random: () => 0,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(configs).toBe(1);
+    expect(warnings.some((w) => w.includes('120 s ahead of'))).toBe(true);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(configs).toBe(2);
+    expect(client.ready).toBe(true);
+  });
+
+  it('shuts down with a null or non-numeric timeout, still sending what is queued', async () => {
+    const collector = fakeCollector();
+    const { client } = makeClient({ fetch: collector.fetch });
+    await settle();
+    client.enqueue(custom(), 2);
+    await expect(client.shutdown(null as unknown as undefined)).resolves.toBeUndefined();
+    expect(collector.sent).toHaveLength(1);
+
+    const second = makeClient({ fetch: collector.fetch });
+    await settle();
+    second.client.enqueue(custom(), 2);
+    await second.client.shutdown({ timeoutMs: Number.NaN });
+    expect(collector.sent).toHaveLength(2);
+  });
+
+  it('aborts a request still hanging when shutdown is over, so the process can exit', async () => {
+    let aborted = false;
+    const hanging = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).endsWith('/v1/config')) return fakeCollector().fetch(input, init);
+      return new Promise<Response>((_resolve, reject) => {
+        const abort = () => {
+          aborted = true;
+          reject(new DOMException('aborted', 'AbortError'));
+        };
+        if (init?.signal?.aborted) abort();
+        else init?.signal?.addEventListener('abort', abort);
+      });
+    }) as typeof fetch;
+    const { client } = makeClient({ fetch: hanging });
+    await settle();
+    client.enqueue(custom(), 2);
+    void client.flush();
+    await client.shutdown({ timeoutMs: 50 });
+    expect(aborted).toBe(true);
+  });
+
+  it('shows audit identities as hidden in dry-run output', async () => {
+    const lines: string[] = [];
+    const client = new ShardlensClient({
+      dryRun: true,
+      mode: 'audit',
+      sdk: { name: '@shardlens/test', version: '0.0.0' },
+      logger: { warn: () => undefined, info: (m) => lines.push(m) },
+    });
+    clients.push(client);
+    await settle();
+    client.enqueue({ ...custom(), actor: { userId: '112233445566778899', username: 'someone' } } as WireEvent, 2);
+    await client.flush();
+    const printed = lines.join('\n');
+    expect(printed).toContain('"actor":"[hidden]"');
+    expect(printed).not.toContain('112233445566778899');
+    expect(printed).not.toContain('someone');
+  });
+
+  it('hands error listeners a copy without tokens, request bodies or URLs that hold them', () => {
+    const { client } = makeClient({ fetch: fakeCollector().fetch });
+    const seen: unknown[] = [];
+    client.on('error', (_name, error) => seen.push(error));
+    const token = 'aW50ZXJhY3Rpb246MTIzNDU2Nzg5MDEyMzQ1Njc4OTpzZWNyZXQ';
+    const url = `https://discord.com/api/v10/interactions/112233445566778899/${token}/callback`;
+    const apiError = Object.assign(new Error(`Unknown interaction at ${url}`), {
+      name: 'DiscordAPIError[10062]',
+      code: 10062,
+      status: 404,
+      method: 'POST',
+      url,
+      requestBody: { json: { content: 'private message text' } },
+    });
+    client.count('privacyCommand', apiError);
+    const [copy] = seen as (Error & Record<string, unknown>)[];
+    expect(copy).toMatchObject({ name: 'DiscordAPIError[10062]', code: 10062, status: 404, method: 'POST' });
+    expect(JSON.stringify({ ...copy, message: copy?.message, stack: copy?.stack })).not.toContain(token);
+    expect(copy?.requestBody).toBeUndefined();
   });
 });
 

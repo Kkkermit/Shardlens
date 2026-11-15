@@ -41,7 +41,11 @@ export interface ShardlensHttpOptions {
   auditIncludeProfile?: boolean | undefined;
   /** Informational; the collector decides. Default `'month'`. */
   saltPeriod?: SaltPeriod | undefined;
-  /** Option names whose values may be recorded (truncated to 100 characters, secrets redacted). Default none. */
+  /**
+   * Option names whose values may be recorded. Values of user, channel, role, mentionable and attachment options, and
+   * any value holding a Discord ID, are never recorded; strings are cut to 100 characters, secrets redacted. Default
+   * none.
+   */
   captureOptionValues?: readonly string[] | undefined;
   /** Replaces the default custom-ID normaliser. */
   normaliseCustomId?: ((customId: string) => string) | undefined;
@@ -50,8 +54,8 @@ export interface ShardlensHttpOptions {
   release?: string | undefined;
   /** A label for this deployment in SDK health, for example the Worker name. Default `'http'`. */
   instance?: string | undefined;
-  /** Users who opted out earlier. Their events are dropped in-process. */
-  optedOut?: Iterable<string> | undefined;
+  /** Users who opted out earlier. Their events are dropped in-process. BigInt IDs from a database are accepted. */
+  optedOut?: Iterable<string | bigint> | undefined;
   /** Sample rate per event type in (0, 1]. */
   sampleRate?: Readonly<Record<string, number>> | undefined;
   exporters?: readonly ShardlensExporter[] | undefined;
@@ -116,32 +120,76 @@ function findWaitUntil(args: readonly unknown[]): WaitUntilContext | undefined {
  * until the first interaction, which suits runtimes such as Cloudflare Workers that forbid I/O at startup.
  */
 export function createShardlensHttp(options: ShardlensHttpOptions): ShardlensHttp {
+  // Options come from Worker bindings and environment variables: anything malformed is ignored, never thrown into a
+  // handler.
+  return attach(typeof options === 'object' && options !== null ? options : {});
+}
+
+function attach(options: ShardlensHttpOptions): ShardlensHttp {
+  const list = (value: unknown): unknown[] => {
+    if (value === undefined || value === null || typeof value === 'string') return [];
+    try {
+      return typeof (value as Iterable<unknown>)[Symbol.iterator] === 'function'
+        ? [...(value as Iterable<unknown>)]
+        : [];
+    } catch {
+      return [];
+    }
+  };
   const describeOptions = {
     mode: options.mode ?? 'privacy',
     auditIncludeProfile: options.auditIncludeProfile ?? true,
-    captureOptionValues: new Set(options.captureOptionValues ?? []),
-    normaliseCustomId: options.normaliseCustomId ?? normaliseCustomId,
+    captureOptionValues: new Set(list(options.captureOptionValues).map(String)),
+    normaliseCustomId: typeof options.normaliseCustomId === 'function' ? options.normaliseCustomId : normaliseCustomId,
   } as const;
-  const optedOut = new Set(options.optedOut ?? []);
+  // BigInt IDs from a database client compare as strings, like Discord's.
+  const optedOut = new Set(list(options.optedOut).map(String));
   const listeners = new Set<(name: string, error: unknown) => void>();
   let client: ShardlensClient | undefined;
 
+  const create = (): ShardlensClient => {
+    try {
+      return new ShardlensClient({
+        endpoint: options.endpoint,
+        apiKey: options.apiKey,
+        exporters: options.exporters,
+        sdk: { name: SDK_NAME, version: SDK_VERSION },
+        mode: describeOptions.mode,
+        source: () => ({ shards: [], instance: String(options.instance ?? 'http').slice(0, 128) }),
+        ...(options.environment !== undefined ? { environment: options.environment } : {}),
+        ...(options.release !== undefined ? { release: options.release } : {}),
+        ...(options.sampleRate !== undefined ? { sampleRate: options.sampleRate } : {}),
+        ...(options.dryRun !== undefined ? { dryRun: options.dryRun } : {}),
+        ...(options.logger !== undefined ? { logger: options.logger } : {}),
+        ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
+      });
+    } catch (error) {
+      // Built once either way: retried on every interaction, a failing constructor would fail every interaction too.
+      try {
+        (options.logger ?? console).warn(`Shardlens: could not start (${errorClass(error)}); nothing is recorded.`);
+      } catch {
+        // a broken logger must not break the SDK
+      }
+      const fallback = new ShardlensClient({
+        sdk: { name: SDK_NAME, version: SDK_VERSION },
+        logger: { warn: () => undefined },
+      });
+      fallback.count('init', error);
+      return fallback;
+    }
+  };
+  /** Counts an SDK failure from inside a catch block, where nothing may throw again. */
+  const failed = (name: string, error: unknown) => {
+    try {
+      transport().count(name, error);
+    } catch {
+      // nothing left to report to
+    }
+  };
+
   const transport = (): ShardlensClient => {
     if (client) return client;
-    client = new ShardlensClient({
-      endpoint: options.endpoint,
-      apiKey: options.apiKey,
-      exporters: options.exporters,
-      sdk: { name: SDK_NAME, version: SDK_VERSION },
-      mode: describeOptions.mode,
-      source: () => ({ shards: [], instance: (options.instance ?? 'http').slice(0, 128) }),
-      ...(options.environment !== undefined ? { environment: options.environment } : {}),
-      ...(options.release !== undefined ? { release: options.release } : {}),
-      ...(options.sampleRate !== undefined ? { sampleRate: options.sampleRate } : {}),
-      ...(options.dryRun !== undefined ? { dryRun: options.dryRun } : {}),
-      ...(options.logger !== undefined ? { logger: options.logger } : {}),
-      ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
-    });
+    client = create();
     // One forwarder for every listener, so one added before the client existed can still be removed later.
     client.on('error', (name, error) => {
       for (const listener of listeners) {
@@ -161,11 +209,11 @@ export function createShardlensHttp(options: ShardlensHttpOptions): ShardlensHtt
     await c.flush();
   };
   const sendLater = (ctx: WaitUntilContext | undefined) => {
-    const work = flush().catch((error: unknown) => transport().count('flush', error));
+    const work = flush().catch((error: unknown) => failed('flush', error));
     try {
       ctx?.waitUntil(work);
     } catch (error) {
-      transport().count('wait_until', error);
+      failed('wait_until', error);
     }
   };
 
@@ -210,7 +258,7 @@ export function createShardlensHttp(options: ShardlensHttpOptions): ShardlensHtt
             record(interaction, started, Date.now(), { error });
             sendLater(ctx);
           } catch (inner) {
-            transport().count('record', inner);
+            failed('record', inner);
           }
           throw error;
         }
@@ -226,14 +274,14 @@ export function createShardlensHttp(options: ShardlensHttpOptions): ShardlensHtt
                 record(interaction, started, finished, { body });
                 return flush();
               })
-              .catch((error: unknown) => transport().count('record', error));
+              .catch((error: unknown) => failed('record', error));
             ctx?.waitUntil(later);
           } else {
             record(interaction, started, finished, { body: result });
             sendLater(ctx);
           }
         } catch (error) {
-          transport().count('record', error);
+          failed('record', error);
         }
         return result;
       };
@@ -258,13 +306,13 @@ export function createShardlensHttp(options: ShardlensHttpOptions): ShardlensHtt
         else c.enqueue(build(), 2);
         if (waitUntil) sendLater(waitUntil);
       } catch (error) {
-        transport().count('track', error);
+        failed('track', error);
       }
     },
 
-    optOut: (userId) => void optedOut.add(userId),
-    optIn: (userId) => void optedOut.delete(userId),
-    isOptedOut: (userId) => optedOut.has(userId),
+    optOut: (userId) => void optedOut.add(String(userId)),
+    optIn: (userId) => void optedOut.delete(String(userId)),
+    isOptedOut: (userId) => optedOut.has(String(userId)),
     forgetUser: async (userId) => {
       const c = transport();
       await c.idle();

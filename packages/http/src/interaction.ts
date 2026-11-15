@@ -1,4 +1,12 @@
-import { avatarHash, compact, MAX_CUSTOM_ID_LENGTH, redactSecrets, uuidv7 } from '@shardlens/core';
+import {
+  avatarHash,
+  compact,
+  cutText,
+  MAX_CUSTOM_ID_LENGTH,
+  recordedOptionValue,
+  redactSecrets,
+  uuidv7,
+} from '@shardlens/core';
 
 /**
  * The parts of a raw Discord interaction payload Shardlens reads. `APIInteraction` from `discord-api-types` (and the
@@ -100,9 +108,9 @@ function leaves(options: readonly RawOption[] | undefined, path: { group?: strin
 }
 
 const snowflake = (v: unknown) => (typeof v === 'string' && /^\d{17,20}$/.test(v) ? v : undefined);
-const short = (v: unknown, n: number) => (typeof v === 'string' && v.length > 0 ? v.slice(0, n) : undefined);
+const short = (v: unknown, n: number) => (typeof v === 'string' && v.length > 0 ? cutText(v, n) : undefined);
 const customId = (v: unknown, options: DescribeOptions) =>
-  options.normaliseCustomId(redactSecrets(String(v ?? ''))).slice(0, MAX_CUSTOM_ID_LENGTH);
+  cutText(options.normaliseCustomId(redactSecrets(String(v ?? ''))), MAX_CUSTOM_ID_LENGTH);
 
 /**
  * Turns a raw interaction into the wire fields Shardlens keeps, exactly as the discord.js adapter does. Returns
@@ -151,17 +159,17 @@ export function describeRawInteraction(
       const values: Record<string, string | number | boolean> = {};
       for (const o of all) {
         if (!options.captureOptionValues.has(o.name)) continue;
-        if (typeof o.value === 'string') values[o.name] = redactSecrets(o.value).slice(0, 100);
-        else if (typeof o.value === 'number' || typeof o.value === 'boolean') values[o.name] = o.value;
+        const recorded = recordedOptionValue(o.value, o.type);
+        if (recorded !== undefined) values[o.name] = recorded;
       }
       fields = {
         kind: 'chat_input',
         command: short(data.name, 32),
-        group: path.group?.slice(0, 32),
-        sub: path.sub?.slice(0, 32),
+        group: short(path.group, 32),
+        sub: short(path.sub, 32),
         commandId: snowflake(data.id),
         commandScope,
-        options: all.map((o) => o.name.slice(0, 32)).slice(0, 25),
+        options: all.map((o) => cutText(String(o.name), 32)).slice(0, 25),
         optionValues: Object.keys(values).length > 0 ? values : undefined,
       };
     } else if (data.type === 2 || data.type === 3) {
@@ -180,7 +188,7 @@ export function describeRawInteraction(
       kind: 'autocomplete',
       command: short(data.name, 32),
       commandId: snowflake(data.id),
-      options: focused ? [focused.slice(0, 32)] : [],
+      options: focused ? [cutText(String(focused), 32)] : [],
     };
   } else if (i.type === MESSAGE_COMPONENT) {
     const source = i.message?.interaction?.name?.split(' ')[0];

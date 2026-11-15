@@ -1,4 +1,4 @@
-import { avatarHash, compact, redactSecrets } from '@shardlens/core';
+import { avatarHash, compact, cutText, recordedOptionValue } from '@shardlens/core';
 import type { Actor } from '@shardlens/schema';
 import { PermissionFlagsBits, type PermissionsBitField, type User } from 'discord.js';
 import type { ShardlensOptions } from './options.js';
@@ -23,18 +23,18 @@ export function memberTier(
   return permissions.has(PermissionFlagsBits.ManageGuild) ? 'manager' : 'member';
 }
 
-/** Values of the options named in `captureOptionValues` only, with secrets redacted and strings cut to 100 characters. */
+/** Values of the options named in `captureOptionValues` only, as {@link recordedOptionValue} allows. */
 export function capturedValues(
-  entries: Iterable<readonly [string, unknown]>,
+  entries: Iterable<readonly [name: string, value: unknown, type?: number | undefined]>,
   allow: readonly string[] | undefined,
 ): Record<string, Value> | undefined {
   if (!allow || allow.length === 0) return undefined;
   const allowed = new Set(allow);
   const values: Record<string, Value> = {};
-  for (const [name, value] of entries) {
+  for (const [name, value, type] of entries) {
     if (!allowed.has(name) || name.length > 32) continue;
-    if (typeof value === 'string') values[name] = redactSecrets(value).slice(0, 100);
-    else if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) values[name] = value;
+    const recorded = recordedOptionValue(value, type);
+    if (recorded !== undefined) values[name] = recorded;
   }
   return Object.keys(values).length > 0 ? values : undefined;
 }
@@ -48,7 +48,7 @@ export function auditActor(
   const profile = options.auditIncludeProfile !== false;
   return compact({
     userId: user.id,
-    username: profile ? user.username.slice(0, 64) : undefined,
+    username: profile ? cutText(user.username, 64) : undefined,
     avatar: profile ? avatarHash(user.avatar) : undefined,
   });
 }

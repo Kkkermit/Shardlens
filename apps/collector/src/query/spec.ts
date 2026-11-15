@@ -67,7 +67,7 @@ function isTimeZone(tz: string): boolean {
 
 /** A time zone name with no default, for a settings patch that may leave it out. */
 export const TimeZoneName = z.string().max(64).refine(isTimeZone, 'unknown time zone');
-export const TimeZone = TimeZoneName.default('UTC');
+const TimeZone = TimeZoneName.default('UTC');
 
 const Range = z
   .object({ from: Iso, to: Iso })

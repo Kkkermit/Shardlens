@@ -26,6 +26,7 @@ export class BoundedQueue<T> {
     laneSize(priority: Priority): number;
     // (undocumented)
     push(item: T, priority: Priority): void;
+    removeWhere(match: (item: T) => boolean): number;
     requeue(items: readonly QueuedItem<T>[]): void;
     // (undocumented)
     get size(): number;
@@ -108,6 +109,9 @@ export type CustomProps = Record<string, CustomPropValue>;
 // @public (undocumented)
 export type CustomPropValue = string | number | boolean | null;
 
+// @public
+export function cutText(text: string, max: number): string;
+
 // @public (undocumented)
 export type DataMode = 'privacy' | 'audit';
 
@@ -124,6 +128,7 @@ export function errorCode(error: unknown): number | undefined;
 export interface EventSpool {
     // (undocumented)
     ack(id: string): Promise<void>;
+    drop?(match: (event: WireEvent) => boolean): Promise<number>;
     next(): Promise<{
         id: string;
         events: WireEvent[];
@@ -337,6 +342,9 @@ export interface QueuedItem<T> {
     // (undocumented)
     priority: Priority;
 }
+
+// @public
+export function recordedOptionValue(value: unknown, type?: number): string | number | boolean | undefined;
 
 // @public
 export function redactSecrets(text: string): string;

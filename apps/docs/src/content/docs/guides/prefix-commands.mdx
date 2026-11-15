@@ -46,8 +46,8 @@ error rate and the Prometheus and OpenTelemetry exporters all count it. On the *
 From the message, the SDK reads the author's ID (hashed in your bot, as for interactions), the server, the channel
 type, the server's language and the author's permissions (for the admin, manager or member split). From your call, it
 takes the command name, subcommand, the names of the arguments you list in `options` and, only for names in
-[`captureOptionValues`](../../getting-started/configuration/), their values. Never the message text, attachments,
-mentions or the prefix itself. The full list is on [Data collected](../../concepts/data-collected/).
+[`captureOptionValues`](../../getting-started/configuration/), their values, except any holding a Discord ID such as a
+mention. Never the message text, attachments, mentions or the prefix itself. The full list is on [Data collected](../../concepts/data-collected/).
 
 A message has no response deadline, no user language and no entitlements, so prefix commands are left out of the
 3-second deadline figures, response time, the **Reliability** page and premium share. Their failures show on the

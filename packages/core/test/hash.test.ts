@@ -50,14 +50,18 @@ describe('UserHasher', () => {
     expect(hasher.hasSalt('2026-11')).toBe(false);
   });
 
-  it('keeps only the two most recent periods', async () => {
+  it('keeps only the three most recent periods', async () => {
     const hasher = new UserHasher();
-    await hasher.setSalt('2026-10', SALT);
-    await hasher.setSalt('2026-11', SALT);
-    await hasher.setSalt('2026-12', SALT);
-    expect(hasher.hasSalt('2026-10')).toBe(false);
-    expect(hasher.hasSalt('2026-11')).toBe(true);
-    expect(hasher.hasSalt('2026-12')).toBe(true);
+    for (const label of ['2026-09', '2026-10', '2026-11', '2026-12']) await hasher.setSalt(label, SALT);
+    expect(hasher.hasSalt('2026-09')).toBe(false);
+    expect(hasher.labels()).toEqual(['2026-10', '2026-11', '2026-12']);
+  });
+
+  it("keeps the next period's salt, which the collector sends just before a boundary", async () => {
+    const hasher = new UserHasher();
+    // The collector lists the current, previous and next salts; the SDK installs them in reverse.
+    for (const label of ['2026-12', '2026-10', '2026-11']) await hasher.setSalt(label, SALT);
+    for (const label of ['2026-10', '2026-11', '2026-12']) expect(await hasher.hash('42', label)).toMatch(/^h1:/);
   });
 
   it('never serves a cached hash after the salt changes', async () => {
@@ -75,6 +79,7 @@ describe('UserHasher', () => {
     await hasher.setSalt('2026-11', SALT);
     await hasher.setSalt('2026-10', OTHER_SALT);
     await hasher.setSalt('2026-12', SALT);
+    await hasher.setSalt('2027-01', SALT);
     expect(hasher.hasSalt('2026-10')).toBe(true);
     expect(hasher.hasSalt('2026-11')).toBe(false);
   });

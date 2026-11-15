@@ -1,4 +1,4 @@
-import { redactSecrets, uuidv7 } from '@shardlens/core';
+import { cutText, redactSecrets, uuidv7 } from '@shardlens/core';
 import type { EventInput, GuildInfo } from '@shardlens/schema';
 import type { Client, Guild } from 'discord.js';
 import { shardForGuild } from './util.js';
@@ -30,7 +30,7 @@ function guildInfo(g: Guild): GuildInfo {
   const premiumTier = Math.min(3, Math.max(0, Number(g.premiumTier) || 0));
   return {
     guild: g.id,
-    name: redactSecrets(String(g.name ?? '')).slice(0, 100),
+    name: cutText(redactSecrets(String(g.name ?? '')), 100),
     icon: g.icon ? g.icon.slice(0, 64) : null,
     memberCount: Math.max(0, g.memberCount ?? 0),
     large: Boolean(g.large),

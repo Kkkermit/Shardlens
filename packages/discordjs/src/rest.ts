@@ -26,6 +26,12 @@ function isWebResponse(value: unknown): value is Response {
   return typeof Response !== 'undefined' && value instanceof Response;
 }
 
+/**
+ * Where each Shardlens `makeRequest` wrapper sends calls on to. Kept outside the wrapper so a wrapper that is no longer
+ * on top (a second Shardlens on the same client installed after it) can still be spliced out of the chain.
+ */
+const nextRequest = new WeakMap<MakeRequest, { next: MakeRequest }>();
+
 export interface RestHooks {
   /** Builds the `rest_window` event for the period since the last drain, or `undefined` if nothing happened. */
   drain(): RestWindowInput | undefined;
@@ -92,6 +98,8 @@ export function installRestHooks(
     }
 
     const webClone = isWebResponse(response) ? response : undefined;
+    // @discordjs/rest gives every `response` listener the same clone, so it is the bot's too when the bot listens.
+    const shared = rest.listenerCount(RESTEvents.Response) > 1;
     let bodyHandled = false;
 
     if (request.route === CALLBACK_ROUTE && opts.tracker) {
@@ -119,7 +127,16 @@ export function installRestHooks(
           let code: number | undefined;
           if (webClone) {
             bodyHandled = true;
-            const err = (await webClone.json().catch(() => undefined)) as { code?: unknown } | undefined;
+            // Our own copy when others listen: reading the shared clone would leave them an unusable body.
+            let source: Response | undefined = webClone;
+            if (shared) {
+              try {
+                source = webClone.clone();
+              } catch {
+                source = undefined; // another listener already read it
+              }
+            }
+            const err = (await source?.json().catch(() => undefined)) as { code?: unknown } | undefined;
             code = typeof err?.code === 'number' ? err.code : undefined;
           }
           const timedOut = code === 10062 || (code === undefined && status === 404);
@@ -132,8 +149,9 @@ export function installRestHooks(
       }
     }
 
-    // Free the tee'd copy of real clones so discord.js isn't holding every response twice.
-    if (webClone && !bodyHandled && !webClone.bodyUsed) await webClone.body?.cancel().catch(() => undefined);
+    // Free the tee'd copy of real clones so discord.js isn't holding every response twice, unless another listener
+    // may still read it.
+    if (webClone && !shared && !bodyHandled && !webClone.bodyUsed) await webClone.body?.cancel().catch(() => undefined);
   });
 
   const onRateLimited = opts.safe(
@@ -186,11 +204,11 @@ export function installRestHooks(
   // Time every HTTP call through the documented `makeRequest` option. The same `headers` object reaches the
   // `response` event, so it links timing to the bucketed route without reading any header.
   const restOptions = rest.options as { makeRequest: MakeRequest };
-  const original = restOptions.makeRequest;
+  const link = { next: restOptions.makeRequest };
   const wrapped: MakeRequest = async (url, init) => {
     const started = performance.now();
     try {
-      return await original(url, init);
+      return await link.next(url, init);
     } finally {
       try {
         const ref = init?.headers;
@@ -200,6 +218,7 @@ export function installRestHooks(
       }
     }
   };
+  nextRequest.set(wrapped, link);
   restOptions.makeRequest = wrapped;
 
   return {
@@ -227,7 +246,17 @@ export function installRestHooks(
       rest.off(RESTEvents.Response, onResponse);
       rest.off(RESTEvents.RateLimited, onRateLimited);
       rest.off(RESTEvents.InvalidRequestWarning, onInvalid);
-      if (restOptions.makeRequest === wrapped) restOptions.makeRequest = original;
+      if (restOptions.makeRequest === wrapped) {
+        restOptions.makeRequest = link.next;
+        return;
+      }
+      // Another Shardlens wrapped ours: take ours out of the middle of the chain.
+      for (let outer = nextRequest.get(restOptions.makeRequest); outer; outer = nextRequest.get(outer.next)) {
+        if (outer.next === wrapped) {
+          outer.next = link.next;
+          return;
+        }
+      }
     },
   };
 }

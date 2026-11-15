@@ -79,6 +79,27 @@ describe('BoundedQueue', () => {
     expect(q.dropped[3]).toBe(1);
   });
 
+  it('requeues a batch into a very large queue without paying per item', () => {
+    const q = new BoundedQueue<number>(1_000_000);
+    for (let i = 0; i < 999_000; i++) q.push(i, 3);
+    const batch = q.take(499);
+    const started = performance.now();
+    q.requeue(batch);
+    expect(performance.now() - started).toBeLessThan(50);
+    expect(q.take(2).map((x) => x.item)).toEqual([0, 1]);
+    expect(q.size).toBe(998_998);
+  });
+
+  it('removes the items a predicate picks, from every lane', () => {
+    const q = new BoundedQueue<string>(10);
+    q.push('a:1', 3);
+    q.push('b:1', 2);
+    q.push('a:2', 0);
+    expect(q.removeWhere((item) => item.startsWith('a:'))).toBe(2);
+    expect(q.size).toBe(1);
+    expect(q.take(10).map((x) => x.item)).toEqual(['b:1']);
+  });
+
   it('rejects a non-positive capacity', () => {
     expect(() => new BoundedQueue(0)).toThrow(RangeError);
   });

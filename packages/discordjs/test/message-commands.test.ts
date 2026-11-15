@@ -168,6 +168,19 @@ describe('message (prefix) commands', () => {
     expect(collector.raw()).not.toContain('private');
   });
 
+  it('never keeps an argument value holding a Discord ID, such as a mention', async () => {
+    const { collector, client, lens } = setup({ captureOptionValues: ['target', 'duration'] });
+    await settle();
+    lens.trackMessageCommand(message(client).message, {
+      command: 'mute',
+      optionValues: { target: '<@998877665544332211>', duration: '10m' },
+    });
+    await settle();
+    await lens.flush();
+    expect(collector.events('message_command')[0]?.optionValues).toEqual({ duration: '10m' });
+    expect(collector.raw()).not.toContain('998877665544332211');
+  });
+
   it('drops opted-out users and records a direct message as a DM', async () => {
     const { collector, client, lens } = setup();
     await settle();

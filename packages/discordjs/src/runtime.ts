@@ -1,6 +1,6 @@
 import { hostname } from 'node:os';
 import type { monitorEventLoopDelay } from 'node:perf_hooks';
-import { type SourceInfo, uuidv7 } from '@shardlens/core';
+import { cutText, type SourceInfo, uuidv7 } from '@shardlens/core';
 import type { EventInput } from '@shardlens/schema';
 import { type Client, version as djsVersion, Routes } from 'discord.js';
 import { localShardCount, managerShardCount, shardIds, shardPings } from './gateway.js';
@@ -77,14 +77,14 @@ export async function appInfo(client: Client<true>): Promise<EventInput> {
     id: uuidv7(),
     ts: Date.now(),
     type: 'app_info',
-    name: String(app.name ?? 'unknown').slice(0, 100),
+    name: cutText(String(app.name ?? 'unknown'), 100),
     approximateGuildCount: app.approximateGuildCount ?? null,
     approximateUserInstallCount: app.approximateUserInstallCount ?? null,
     approximateUserAuthorizationCount: app.approximateUserAuthorizationCount ?? null,
     dashboardUserIds: dashboardUserIds.slice(0, 100),
     eventWebhooksStatus: app.eventWebhooksStatus ?? null,
     skus: skus
-      ? [...skus.values()].slice(0, 200).map((s) => ({ id: s.id, name: s.name.slice(0, 100), type: Number(s.type) }))
+      ? [...skus.values()].slice(0, 200).map((s) => ({ id: s.id, name: cutText(s.name, 100), type: Number(s.type) }))
       : [],
     ...(typeof limit?.remaining === 'number' ? { sessionStartRemaining: limit.remaining } : {}),
     ...(typeof limit?.total === 'number' ? { sessionStartTotal: limit.total } : {}),
@@ -102,7 +102,7 @@ export async function commandRegistry(client: Client<true>): Promise<EventInput>
     type: 'command_registry',
     commands: [...commands.values()].slice(0, 5000).map((c) => ({
       id: c.id,
-      name: c.name.slice(0, 32),
+      name: cutText(c.name, 32),
       type: Number(c.type),
       ...(c.guildId ? { guild: c.guildId } : {}),
       subcommands: (c.options ?? [])

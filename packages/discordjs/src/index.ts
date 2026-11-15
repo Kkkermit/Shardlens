@@ -153,15 +153,50 @@ export interface Shardlens {
  * The SDK never throws into your bot: every failure is caught and counted.
  */
 export function createShardlens(client: Client, options: ShardlensOptions): Shardlens {
-  const disabled = new Set<MetricGroup>(options.disable ?? []);
+  // Options are often built from environment variables and config files: anything malformed is ignored with a
+  // warning, never thrown into the bot's startup.
+  return attach(client, typeof options === 'object' && options !== null ? options : {});
+}
+
+function attach(client: Client, options: ShardlensOptions): Shardlens {
+  const warned = new Set<string>();
+  const warn = (key: string, message: string) => {
+    if (warned.has(key)) return;
+    warned.add(key);
+    try {
+      (options.logger ?? console).warn(message);
+    } catch {
+      // a broken logger must not break the SDK
+    }
+  };
+  const list = (value: unknown, name: string): unknown[] => {
+    if (value === undefined || value === null) return [];
+    if (typeof value !== 'string' && typeof (value as Iterable<unknown>)[Symbol.iterator] === 'function') {
+      try {
+        return [...(value as Iterable<unknown>)];
+      } catch {
+        // falls through to the warning
+      }
+    }
+    warn(name, `Shardlens: ${name} must be a list; it is ignored.`);
+    return [];
+  };
+  const disabled = new Set(list(options.disable, 'disable') as MetricGroup[]);
   const mode = options.mode ?? 'privacy';
   const instance = defaultInstance();
+  const spoolDir = typeof options.spool === 'string' ? options.spool : options.spool?.dir;
+  if (options.spool !== undefined && typeof spoolDir !== 'string') {
+    warn('spool', "Shardlens: spool must be { dir: './shardlens-spool' }; events are kept in memory only.");
+  }
 
   const transport = new ShardlensClient<EventInput>({
     endpoint: options.endpoint,
     apiKey: options.apiKey,
     exporters: options.exporters,
-    spool: options.spool ? new FileSpool(options.spool.dir, options.spool.maxBytes) : undefined,
+    spool:
+      typeof spoolDir === 'string'
+        ? new FileSpool(spoolDir, typeof options.spool === 'object' ? options.spool.maxBytes : undefined)
+        : undefined,
     sdk: { name: SDK_NAME, version: SDK_VERSION },
     mode,
     source: () => detectSource(client, instance),
@@ -191,7 +226,8 @@ export function createShardlens(client: Client, options: ShardlensOptions): Shar
   const enqueue = (event: EventInput, priority: 0 | 1 | 2 | 3) => transport.enqueue(event, priority);
   const shardCount = () => totalShards(client);
 
-  const optedOut = new Set<string>(options.optedOut ?? []);
+  // IDs loaded from a database may be BigInts (Prisma, for one): compared as strings, like Discord's.
+  const optedOut = new Set(list(options.optedOut, 'optedOut').map(String));
   const tracker = disabled.has('interactions')
     ? undefined
     : new InteractionTracker({ client: transport, options: { ...options, mode }, count, shardCount, optedOut });
@@ -399,10 +435,17 @@ export function createShardlens(client: Client, options: ShardlensOptions): Shar
   if (!disabled.has('process')) every(GAUGE_INTERVAL_MS, 'gauges', () => enqueue(gaugeWindow(client, loop), 0));
   if (options.refreshGuildCounts && !disabled.has('guilds')) {
     const refresher = new CountRefresher();
+    let refreshing = false;
     every(COUNT_REFRESH_MS, 'refreshGuildCounts', async () => {
-      if (!client.isReady()) return;
-      const event = await refresher.next(client);
-      if (event) enqueue(event, 2);
+      // While Discord is slow, calls would pile up past the documented 30 a minute.
+      if (!client.isReady() || refreshing) return;
+      refreshing = true;
+      try {
+        const event = await refresher.next(client);
+        if (event) enqueue(event, 2);
+      } finally {
+        refreshing = false;
+      }
     });
   }
   every(APP_INFO_INTERVAL_MS, 'appInfo', sendAppInfo);
@@ -473,10 +516,11 @@ export function createShardlens(client: Client, options: ShardlensOptions): Shar
 
     wrap<A extends [BaseInteraction, ...unknown[]], R>(handler: (...args: A) => R | Promise<R>) {
       return async (...args: A): Promise<Awaited<R>> => {
-        // A handler shared by slash and prefix commands may get something else first; that is not recorded here.
-        const interaction = isInteraction(args[0]) ? args[0] : undefined;
         const started = performance.now();
+        // A handler shared by slash and prefix commands may get something else first; that is not recorded here.
+        let interaction: Interaction | undefined;
         try {
+          interaction = isInteraction(args[0]) ? args[0] : undefined;
           if (interaction) tracker?.handlerStarted(interaction);
         } catch (error) {
           count('wrap', error);
@@ -553,18 +597,20 @@ export function createShardlens(client: Client, options: ShardlensOptions): Shar
     },
 
     optOut(userId) {
-      if (optedOut.has(userId)) return;
-      optedOut.add(userId);
-      tracker?.dropPending(userId);
-      notifyOptOut(userId, true);
+      const id = String(userId);
+      if (optedOut.has(id)) return;
+      optedOut.add(id);
+      tracker?.dropPending(id);
+      notifyOptOut(id, true);
     },
 
     optIn(userId) {
-      if (optedOut.delete(userId)) notifyOptOut(userId, false);
+      const id = String(userId);
+      if (optedOut.delete(id)) notifyOptOut(id, false);
     },
 
     isOptedOut(userId) {
-      return optedOut.has(userId);
+      return optedOut.has(String(userId));
     },
 
     forgetUser(userId) {

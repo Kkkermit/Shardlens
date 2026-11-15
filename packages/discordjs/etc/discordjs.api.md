@@ -112,7 +112,7 @@ export interface ShardlensOptions {
     mode?: 'privacy' | 'audit' | undefined;
     normaliseCustomId?: ((customId: string) => string) | undefined;
     onOptOutChange?: ((userId: string, optedOut: boolean) => void) | undefined;
-    optedOut?: Iterable<string> | undefined;
+    optedOut?: Iterable<string | bigint> | undefined;
     refreshGuildCounts?: boolean | undefined;
     release?: string | undefined;
     saltPeriod?: SaltPeriod | undefined;

@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -11,6 +11,19 @@ import { CountRefresher } from '../src/guilds.js';
 import { createShardlens } from '../src/index.js';
 import { FileSpool } from '../src/spool.js';
 import { APP_ID, currentMonth, GUILD_ID, makeDiscordClient, rawGuild, SALT_B64 } from './helpers.js';
+
+// A read-only volume, which even root can't delete from: tests run as root in containers, where chmod doesn't stop it.
+const fsFaults = vi.hoisted(() => ({ readOnly: false }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const fs = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...fs,
+    unlink: (path: Parameters<typeof fs.unlink>[0]) =>
+      fsFaults.readOnly
+        ? Promise.reject(Object.assign(new Error('read-only file system'), { code: 'EROFS' }))
+        : fs.unlink(path),
+  };
+});
 
 const dirs: string[] = [];
 const cleanup: (() => Promise<void> | void)[] = [];
@@ -79,6 +92,67 @@ describe('FileSpool', () => {
     await spool.write([ev('first')]);
     await spool.write([ev('second')]);
     expect(readdirSync(dir)).toHaveLength(2);
+  });
+
+  it('stays under its cap, and evicts only when really full, with several processes on one folder', async () => {
+    const dir = join(tempDir(), 'spool');
+    const processes = Array.from({ length: 8 }, () => new FileSpool(dir, 10_000));
+    const total = () => readdirSync(dir).reduce((n, f) => n + statSync(join(dir, f)).size, 0);
+    for (let round = 0; round < 10; round++) {
+      for (const spool of processes) await spool.write([ev(`p_${round}`), ev(`p_${round}`)]);
+    }
+    expect(total()).toBeLessThanOrEqual(10_000);
+
+    // One process replays (and deletes) most of the folder; another, which counted it full, must not evict now.
+    const [a, b] = processes as [FileSpool, FileSpool];
+    for (let i = 0; i < readdirSync(dir).length - 1; i++) {
+      const batch = await a.next();
+      if (batch) await a.ack(batch.id);
+    }
+    const left = new Set(readdirSync(dir));
+    await b.write([ev('fresh')]);
+    for (const name of left) expect(readdirSync(dir)).toContain(name);
+  });
+
+  it("never hands out a segment again once accepted, even when it can't be deleted", async () => {
+    const dir = join(tempDir(), 'spool');
+    const spool = new FileSpool(dir);
+    await spool.write([ev('first')]);
+    await spool.write([ev('second')]);
+    const first = await spool.next();
+    fsFaults.readOnly = true; // the segment stays on disk
+    try {
+      await expect(spool.ack(first?.id as string)).rejects.toThrow('read-only');
+      const next = await spool.next();
+      expect(next?.id).not.toBe(first?.id);
+      expect((next?.events[0] as (WireEvent & { name: string }) | undefined)?.name).toBe('second');
+    } finally {
+      fsFaults.readOnly = false;
+    }
+  });
+
+  it('cleans up temp files a failed write or a crash left behind', async () => {
+    const dir = join(tempDir(), 'spool');
+    await new FileSpool(dir).write([ev()]);
+    const orphan = join(dir, 'seg-0000000000001-000001.ndjson.tmp');
+    writeFileSync(orphan, '{"partial');
+    utimesSync(orphan, new Date(Date.now() - 120_000), new Date(Date.now() - 120_000));
+    const fresh = join(dir, 'seg-0000000000002-000002.ndjson.tmp');
+    writeFileSync(fresh, '{"being written');
+    await new FileSpool(dir).next();
+    expect(readdirSync(dir)).not.toContain('seg-0000000000001-000001.ndjson.tmp');
+    expect(readdirSync(dir)).toContain('seg-0000000000002-000002.ndjson.tmp');
+  });
+
+  it('removes the events a predicate picks, such as an erased user', async () => {
+    const dir = join(tempDir(), 'spool');
+    const spool = new FileSpool(dir);
+    await spool.write([{ ...ev('gone'), user: 'h1:x:a' } as WireEvent, ev('kept')]);
+    await spool.write([{ ...ev('gone'), user: 'h1:x:a' } as WireEvent]);
+    expect(await spool.drop((e) => (e as WireEvent & { user?: string }).user === 'h1:x:a')).toBe(2);
+    const batch = await spool.next();
+    expect(batch?.events.map((e) => (e as WireEvent & { name: string }).name)).toEqual(['kept']);
+    expect(readdirSync(dir)).toHaveLength(1);
   });
 
   it('only ever deletes its own segment files', async () => {

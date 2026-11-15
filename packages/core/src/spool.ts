@@ -11,4 +11,9 @@ export interface EventSpool {
   /** The oldest stored batch, or `undefined` when the spool is empty. */
   next(): Promise<{ id: string; events: WireEvent[] } | undefined>;
   ack(id: string): Promise<void>;
+  /**
+   * Removes the stored events `match` accepts, such as those of a user who asked for erasure, and resolves to how many.
+   * Optional: without it, an erasure doesn't reach events already on disk.
+   */
+  drop?(match: (event: WireEvent) => boolean): Promise<number>;
 }

@@ -37,8 +37,9 @@ Audit mode has to be switched on in the collector as well, and it changes what y
 <ConfigOption name="captureOptionValues" />
 
 By default Shardlens records which options were used, never what was typed. Allow-list options whose values are safe
-and useful (a language, a difficulty) and never free-text options. Values are passed through secret redaction before
-they are sent.
+and useful (a language, a difficulty) and never free-text options. User, channel, role, mentionable and attachment
+options are never recorded even when allow-listed, nor is any value holding a Discord ID, which a user can type. Values
+are passed through secret redaction and cut to 100 characters before they are sent.
 
 ### Custom IDs
 
@@ -73,6 +74,8 @@ are dropped first once that fills up. With `spool: { dir: './shardlens-spool' }`
 - When the collector answers again, spooled batches are sent first, oldest first, and deleted only once accepted.
   The collector ignores events it already has, so a replay never counts anything twice.
 - Spool files hold hashed events only. User IDs, and audit-mode identities, are never written to disk.
+- The shards of one bot can share the folder: `maxBytes` caps the folder, and any of them replays what is there.
+- Erasing a user (`forgetUser`, `/privacy erase`) also removes their events from the spool.
 
 ### Member counts
 

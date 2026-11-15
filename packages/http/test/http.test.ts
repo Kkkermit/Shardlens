@@ -224,6 +224,55 @@ describe('createShardlensHttp', () => {
     expect(collector.events('interaction')[0]).toMatchObject({ outcome: 'timeout', deferred: true });
   });
 
+  it('answers every interaction even when an option has the wrong type', async () => {
+    for (const bad of [
+      { environment: 1 as unknown as string },
+      { exporters: { name: 'single', observe: () => undefined } as never },
+      { optedOut: 5 as never, captureOptionValues: 7 as never },
+    ]) {
+      const { lens } = setup(bad);
+      const failure = new Error('handler failed');
+      const ok = lens.wrapInteractionHandler(async (_i: APIInteraction, _c: Ctx) => ({ type: 4 }));
+      const broken = lens.wrapInteractionHandler(async (_i: APIInteraction, _c: Ctx) => {
+        throw failure;
+      });
+      const ctx = new Ctx();
+      await expect(ok(slash(), ctx)).resolves.toEqual({ type: 4 });
+      await expect(broken(slash(), ctx)).rejects.toBe(failure);
+      expect(() => lens.track('still_works')).not.toThrow();
+      expect(() => lens.stats()).not.toThrow();
+      await ctx.settle();
+    }
+  });
+
+  it('never records user, channel or role options, nor a value holding a Discord ID, and cuts on whole characters', async () => {
+    const { collector, lens } = setup({ captureOptionValues: ['target', 'room', 'note', 'reason', 'emoji'] });
+    const handle = lens.wrapInteractionHandler(async (_i: APIInteraction, _c: Ctx) => ({ type: 4 }));
+    const ctx = new Ctx();
+    const interaction = slash();
+    interaction.data.options = [
+      { name: 'target', type: 6, value: '998877665544332211' },
+      { name: 'room', type: 7, value: '223344556677889900' },
+      { name: 'note', type: 3, value: 'see 998877665544332211' },
+      { name: 'reason', type: 3, value: 'spam' },
+      { name: 'emoji', type: 3, value: `${'x'.repeat(99)}😀` },
+    ];
+    await handle(interaction, ctx);
+    await ctx.settle();
+    expect(collector.events('interaction')[0]?.optionValues).toEqual({ reason: 'spam', emoji: 'x'.repeat(99) });
+    expect(collector.raw()).not.toContain('998877665544332211');
+  });
+
+  it('accepts opted-out IDs as BigInts', async () => {
+    const { collector, lens } = setup({ optedOut: [BigInt(USER_ID)] });
+    expect(lens.isOptedOut(USER_ID)).toBe(true);
+    const handle = lens.wrapInteractionHandler(async (_i: APIInteraction, _c: Ctx) => ({ type: 4 }));
+    const ctx = new Ctx();
+    await handle(slash(), ctx);
+    await ctx.settle();
+    expect(collector.events('interaction')).toHaveLength(0);
+  });
+
   it('records handler errors by class and re-throws them unchanged', async () => {
     const { collector, lens } = setup();
     class TicketError extends Error {

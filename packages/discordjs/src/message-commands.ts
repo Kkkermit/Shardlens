@@ -1,4 +1,4 @@
-import { compact, errorClass, errorCode, redactSecrets, uuidv7 } from '@shardlens/core';
+import { compact, cutText, errorClass, errorCode, redactSecrets, uuidv7 } from '@shardlens/core';
 import type { EventInput } from '@shardlens/schema';
 import type { Message } from 'discord.js';
 import type { ShardlensOptions } from './options.js';
@@ -17,7 +17,10 @@ export interface MessageCommandInfo {
   sub?: string | undefined;
   /** Names of the arguments the user gave. */
   options?: readonly string[] | undefined;
-  /** Argument values. Only names listed in `captureOptionValues` are kept; strings are cut to 100 characters. */
+  /**
+   * Argument values. Only names listed in `captureOptionValues` are kept, never a value holding a Discord ID (pass a
+   * mentioned user or channel as an argument name, not a value); strings are cut to 100 characters.
+   */
   optionValues?: Readonly<Record<string, string | number | boolean>> | undefined;
 }
 
@@ -33,8 +36,10 @@ export interface MessageCommandRun extends MessageCommandInfo {
 
 const name = (value: unknown): string | undefined => {
   if (typeof value !== 'string') return undefined;
-  const clean = redactSecrets(value.trim());
-  return clean.length > 0 && clean.length <= 32 ? clean : undefined;
+  // The length check first: redaction looks at the whole text, and a bot could pass a long string by mistake.
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > 32) return undefined;
+  return cutText(redactSecrets(trimmed), 32);
 };
 
 /**

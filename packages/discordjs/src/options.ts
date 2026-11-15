@@ -40,7 +40,8 @@ export interface ShardlensOptions {
   maxBatchSize?: number | undefined;
   /**
    * Option names whose values may be recorded, for slash commands and for the `optionValues` you pass with message
-   * commands (values are truncated to 100 characters). Default none.
+   * commands. Values of user, channel, role, mentionable and attachment options, and any value holding a Discord ID,
+   * are never recorded; strings are cut to 100 characters. Default none.
    */
   captureOptionValues?: readonly string[] | undefined;
   /** Replaces the default custom-ID normaliser (numbers and IDs become `*`). */
@@ -57,8 +58,11 @@ export interface ShardlensOptions {
   disable?: readonly MetricGroup[] | undefined;
   /** Where SDK warnings go. Default `console`. */
   logger?: Logger | undefined;
-  /** Users who opted out earlier (for example loaded from your database). Their events are dropped in-process. */
-  optedOut?: Iterable<string> | undefined;
+  /**
+   * Users who opted out earlier (for example loaded from your database). Their events are dropped in-process. BigInt
+   * IDs, as some database clients return them, are accepted.
+   */
+  optedOut?: Iterable<string | bigint> | undefined;
   /** Called when a user opts out or back in, so you can persist the choice. */
   onOptOutChange?: ((userId: string, optedOut: boolean) => void) | undefined;
   /**
