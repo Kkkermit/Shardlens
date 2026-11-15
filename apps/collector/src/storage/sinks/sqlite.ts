@@ -1,11 +1,18 @@
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import type { EventSink, StoredEvent } from '../sink.js';
+
+/** Rows deleted per statement, so a large expiry never holds the event loop (the bot's, in embedded mode) for long. */
+const DELETE_CHUNK = 2_000;
 
 /**
  * A SQLite file, through Node's built-in `node:sqlite` (no extra dependency). Times are ISO 8601 text in UTC, so they
  * sort and compare as text; the event itself is JSON text in `data`, readable with SQLite's JSON functions.
+ *
+ * `node:sqlite` is synchronous. Writes come in batches of at most 500 rows, and expiry deletes in small chunks with a
+ * pause between them, so the event loop is never held for long.
  */
 export class SqliteSink implements EventSink {
   readonly name = 'sqlite';
@@ -39,6 +46,7 @@ export class SqliteSink implements EventSink {
         salt_period TEXT,
         data TEXT NOT NULL
       ) WITHOUT ROWID;
+      CREATE INDEX IF NOT EXISTS "${t}_ts" ON "${t}" (ts);
       CREATE INDEX IF NOT EXISTS "${t}_app_ts" ON "${t}" (app_id, ts);
       CREATE INDEX IF NOT EXISTS "${t}_type_ts" ON "${t}" (type, ts);
       CREATE INDEX IF NOT EXISTS "${t}_user" ON "${t}" (user_hash);`);
@@ -85,8 +93,17 @@ export class SqliteSink implements EventSink {
   }
 
   async expire(before: Date): Promise<number> {
-    const res = this.#ready().prepare(`DELETE FROM "${this.#table}" WHERE ts < ?`).run(before.toISOString());
-    return Number(res.changes);
+    const t = this.#table;
+    const chunk = this.#ready().prepare(
+      `DELETE FROM "${t}" WHERE id IN (SELECT id FROM "${t}" WHERE ts < ? ORDER BY ts LIMIT ${DELETE_CHUNK})`,
+    );
+    let deleted = 0;
+    for (;;) {
+      const n = Number(chunk.run(before.toISOString()).changes);
+      deleted += n;
+      if (n < DELETE_CHUNK || !this.#db) return deleted;
+      await yieldToEventLoop();
+    }
   }
 
   async close(): Promise<void> {

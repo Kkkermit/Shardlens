@@ -1,4 +1,4 @@
-import type { Event } from '@shardlens/schema';
+import { COLLECTED_FIELDS, type Event } from '@shardlens/schema';
 import { parseUserHash } from '../ingest/codes.js';
 
 /**
@@ -6,8 +6,8 @@ import { parseUserHash } from '../ingest/codes.js';
  * MariaDB, PostgreSQL, SQLite) or into code they write. PostgreSQL (or PGlite) stays the collector's own store and
  * the dashboard's source; a sink is a copy for the owner's own queries (ADR 0019).
  *
- * Copies are privacy-safe: users are the same salted hashes PostgreSQL stores, audit identities are removed, and
- * erasure and retention reach the sink too.
+ * Copies are privacy-safe: users are the same salted hashes PostgreSQL stores, every field the data-collected register
+ * marks as identifying is removed, and erasure and retention reach the sink too.
  */
 
 /** One event as a sink stores it. */
@@ -24,7 +24,7 @@ export interface StoredEvent {
   userHash: string | null;
   /** Salt period of `userHash`, such as `2026-11`. */
   saltPeriod: string | null;
-  /** The validated event, without audit-mode identities. */
+  /** The validated event, without the fields that identify a person. */
   data: Record<string, unknown>;
 }
 
@@ -55,13 +55,41 @@ export interface SinkSettings {
 }
 
 export const SINK_URL = /^(mongodb(\+srv)?|mysql|mariadb|postgres(ql)?|sqlite):/i;
-export const SINK_TABLE = /^[A-Za-z_][A-Za-z0-9_]{0,62}$/;
+/** At most 48 characters, so `<table>_app_ts` and the other index names fit MySQL's 64. */
+export const SINK_TABLE = /^[A-Za-z_][A-Za-z0-9_]{0,47}$/;
 export const DEFAULT_SINK_TABLE = 'shardlens_events';
 const MAX_BUFFER = 20_000;
 const BATCH = 500;
 const FLUSH_MS = 2_000;
 const EXPIRE_EVERY_MS = 6 * 60 * 60_000;
 const WARN_EVERY_MS = 60_000;
+/** Consecutive failed writes while the database is reachable before rows are tried one by one. */
+const POISON_AFTER = 3;
+
+/**
+ * Fields the data-collected register marks as identifying (`personal: 'yes'`), by event type: audit-mode `actor` and the
+ * app team's IDs in `app_info`. They stay in the collector (encrypted, or for sign-in only) and are never copied.
+ */
+const IDENTIFYING = new Map<string, Set<string>>();
+for (const field of COLLECTED_FIELDS) {
+  if (field.personal !== 'yes') continue;
+  const set = IDENTIFYING.get(field.object) ?? new Set<string>();
+  set.add(field.field);
+  IDENTIFYING.set(field.object, set);
+}
+/** Nested objects that have register entries of their own. */
+const NESTED: Readonly<Record<string, string>> = { info: 'guild_info' };
+
+function withoutIdentifying(object: string, value: Record<string, unknown>): Record<string, unknown> {
+  const hidden = IDENTIFYING.get(object);
+  const out: Record<string, unknown> = {};
+  for (const [key, v] of Object.entries(value)) {
+    if (hidden?.has(key)) continue;
+    const nested = NESTED[key];
+    out[key] = nested && v && typeof v === 'object' ? withoutIdentifying(nested, v as Record<string, unknown>) : v;
+  }
+  return out;
+}
 
 /** Removes a password from anything URL-shaped, so driver errors can be logged. */
 export function withoutCredentials(text: string): string {
@@ -94,12 +122,12 @@ function guildOf(event: Event): string | null {
   return 'guild' in event && typeof event.guild === 'string' ? event.guild : null;
 }
 
-/** The copy of one accepted event. Audit identities (`actor`) never leave the collector's encrypted store. */
+/** The copy of one accepted event, without the fields that identify a person. */
 export function toStoredEvent(
   ctx: { appId: string; env: string; release: string | undefined },
   event: Event,
 ): StoredEvent {
-  const { actor: _actor, ...data } = event as Event & { actor?: unknown };
+  const data = withoutIdentifying(event.type, event as unknown as Record<string, unknown>);
   const user = 'user' in event && typeof event.user === 'string' ? parseUserHash(event.user) : undefined;
   return {
     id: event.id,
@@ -130,7 +158,8 @@ export class SinkMirror {
   #timers: ReturnType<typeof setInterval>[] = [];
   #warn: (message: string) => void = () => undefined;
   #warnedAt = 0;
-  /** Copies dropped because the buffer was full. */
+  #failures = 0;
+  /** Copies dropped because the buffer was full, or because the database refused them. */
   dropped = 0;
 
   constructor(sink: EventSink, settings: Pick<SinkSettings, 'retentionDays' | 'events'> = {}) {
@@ -198,6 +227,7 @@ export class SinkMirror {
     await this.#flushing?.catch(() => undefined);
     this.#buffer = this.#buffer.filter(keep);
     removed -= this.#buffer.length;
+    if (!(await this.#init())) throw new Error(`${this.#sink.name} sink is unreachable; erase it again later`);
     return Math.max(0, removed) + (await this.#sink.erase(appId, [...hex]));
   }
 
@@ -236,16 +266,39 @@ export class SinkMirror {
       const batch = this.#buffer.splice(0, BATCH);
       try {
         await this.#sink.write(batch);
+        this.#failures = 0;
       } catch (error) {
+        this.#report('write', error);
+        // The database answers set-up but keeps refusing this batch: some row in it is bad. Write the rows one by one
+        // and drop only those it refuses, so one bad row can't hold up everything behind it.
+        if (++this.#failures >= POISON_AFTER) {
+          this.#failures = 0;
+          await this.#writeEach(batch);
+          continue;
+        }
         // Back to the front, oldest first, as far as the buffer allows; the rest is dropped and counted.
         const room = Math.max(0, MAX_BUFFER - this.#buffer.length);
         this.dropped += Math.max(0, batch.length - room);
         this.#buffer = [...batch.slice(Math.max(0, batch.length - room)), ...this.#buffer];
         this.#ready = false;
-        this.#report('write', error);
         return;
       }
     }
+  }
+
+  async #writeEach(batch: readonly StoredEvent[]): Promise<void> {
+    let refused = 0;
+    for (const event of batch) {
+      try {
+        await this.#sink.write([event]);
+      } catch {
+        refused++;
+      }
+    }
+    if (refused === 0) return;
+    this.dropped += refused;
+    this.#warnedAt = 0;
+    this.#report('write', new Error(`dropped ${refused} copies the database refused`));
   }
 
   #report(what: string, error: unknown): void {

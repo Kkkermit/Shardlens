@@ -74,7 +74,7 @@ The collector logs a warning at start-up when the bot or you would have no way i
 | Variable                        | Default            | What it is                                                                                                                                        |
 | ------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `SHARDLENS_SINK_URL`            | off                | Optional. A `mongodb://`, `mongodb+srv://`, `mysql://`, `mariadb://`, `postgres://` or `sqlite:` URL to [copy every event into](../../self-hosting/your-own-database/). Never logged. |
-| `SHARDLENS_SINK_TABLE`          | `shardlens_events` | Table or collection the copies go to. Letters, digits and underscores.                                                                           |
+| `SHARDLENS_SINK_TABLE`          | `shardlens_events` | Table or collection the copies go to. Letters, digits and underscores, up to 48 characters.                                                                           |
 | `SHARDLENS_SINK_RETENTION_DAYS` | `35`               | Days copies are kept, 1 to 3,650.                                                                                                                 |
 | `SHARDLENS_SINK_EVENTS`         | every type         | Comma-separated event types to copy, for example `interaction,message_command,custom`.                                                           |
 

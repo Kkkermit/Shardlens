@@ -116,8 +116,9 @@ db.shardlens_events.aggregate([
 
 The copy follows the same rules as the collector:
 
-- Users are the same salted hashes, never user IDs. In audit mode, who ran a command stays in the collector's
-  encrypted store and is not copied.
+- Users are the same salted hashes, never user IDs. Nothing the [data register](../../concepts/data-collected/)
+  marks as identifying is copied: in audit mode, who ran a command stays in the collector's encrypted store, and your
+  app team's IDs (used for dashboard sign-in) stay in the collector.
 - Erasure reaches the copy: `forgetUser()`, `/privacy erase` and the dashboard's erase delete a person's rows from
   your database as well, and the request fails (so it is retried) if your database can't be reached.
 - Copies are deleted after `SHARDLENS_SINK_RETENTION_DAYS`. If you keep them longer than about a month, their hashes
@@ -131,6 +132,8 @@ Your privacy policy should name the database you copy to. `npx shardlens privacy
 - Only events accepted from the moment the sink is turned on are copied. Nothing is backfilled.
 - Copies wait in memory (up to 20,000 events) while your database is down, and are dropped and counted after that.
   The collector's own store is unaffected.
+- If your database keeps refusing a batch while it is reachable (a column too narrow, a strict-mode error), the rows
+  are tried one by one and only those it refuses are dropped and logged, so one bad row never holds up the rest.
 - Webhook events from Discord (installs and removals sent to the collector directly) are not copied.
 
 <Aside type="tip">

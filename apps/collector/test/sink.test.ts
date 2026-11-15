@@ -3,8 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { uuidv7 } from '@shardlens/core';
-import type { Event } from '@shardlens/schema';
+import { COLLECTED_FIELDS, type Event, Event as EventSchema } from '@shardlens/schema';
 import { afterAll, describe, expect, it } from 'vitest';
+import type { z } from 'zod';
 import { loadConfig } from '../src/env.js';
 import {
   createSink,
@@ -91,6 +92,27 @@ describe('stored copies', () => {
     expect(join).toMatchObject({ guildId: GUILD, userHash: null, saltPeriod: null });
   });
 
+  it('never carry a field the data-collected register marks as identifying', () => {
+    // Driven by the register, so a future identifying field is covered without touching this test.
+    const types = new Set(EventSchema.options.map((o) => (o.shape.type as z.ZodLiteral<string>).value));
+    const identifying = COLLECTED_FIELDS.filter((f) => f.personal === 'yes' && types.has(f.object));
+    expect(identifying.map((f) => `${f.object}.${f.field}`)).toEqual(
+      expect.arrayContaining(['interaction.actor', 'message_command.actor', 'app_info.dashboardUserIds']),
+    );
+    for (const field of identifying) {
+      const event = {
+        id: uuidv7(),
+        ts: Date.now(),
+        weight: 1,
+        type: field.object,
+        [field.field]: ['334455667788990011'],
+      };
+      const stored = toStoredEvent(ctx, event as unknown as Event);
+      expect(stored.data, `${field.object}.${field.field}`).not.toHaveProperty(field.field);
+      expect(JSON.stringify(stored)).not.toContain('334455667788990011');
+    }
+  });
+
   it('never log a password from a connection URL', () => {
     expect(withoutCredentials('failed: mongodb+srv://bot:s3cret@cluster0.example.net/db')).toBe(
       'failed: mongodb+srv://***@cluster0.example.net/db',
@@ -127,8 +149,21 @@ describe('SQLite sink', () => {
     await sink.close();
   });
 
+  it('expires a large backlog in chunks', async () => {
+    const sink = await createSink(`sqlite:${join(dir, 'big.db')}`);
+    await sink.init?.();
+    const old = Date.now() - 400 * 86_400_000;
+    for (let i = 0; i < 9; i++) {
+      await sink.write(Array.from({ length: 500 }, () => toStoredEvent(ctx, command(HEX, { ts: old }))));
+    }
+    expect(await sink.expire(new Date(Date.now() - 35 * 86_400_000))).toBe(4_500);
+    await sink.close();
+  });
+
   it('refuses table names and URLs it does not know', async () => {
     await expect(createSink(`sqlite:${join(dir, 'x.db')}`, 'events; DROP TABLE x')).rejects.toThrow(/identifier/);
+    // Long enough that `<table>_app_ts` would pass MySQL's 64-character limit.
+    await expect(createSink(`sqlite:${join(dir, 'x.db')}`, 'a'.repeat(49))).rejects.toThrow(/identifier/);
     await expect(createSink('redis://localhost:6379')).rejects.toThrow(/must start with/);
   });
 });
@@ -173,6 +208,43 @@ describe('sink mirror', () => {
     await mirror.flush();
     expect(rows.size).toBe(1);
     await mirror.stop();
+  });
+
+  it('drops only the rows the database keeps refusing, so one bad row never holds up the rest', async () => {
+    const { sink, rows } = memorySink();
+    const bad = command(HEX, { command: 'poison' });
+    const write = sink.write.bind(sink);
+    sink.write = async (events) => {
+      if (events.some((e) => e.id === bad.id)) throw new Error('Data too long for column');
+      await write(events);
+    };
+    const mirror = new SinkMirror(sink);
+    mirror.push(ctx, [command(), bad, command()]);
+    for (let i = 0; i < 3; i++) await mirror.flush();
+    expect(rows.size).toBe(2);
+    expect(rows.has(bad.id)).toBe(false);
+    expect(mirror.dropped).toBe(1);
+  });
+
+  it('keeps everything while the database is down, however many times it fails', async () => {
+    const { sink, rows, state } = memorySink();
+    const mirror = new SinkMirror(sink);
+    state.failInit = true;
+    mirror.push(ctx, [command(), command()]);
+    for (let i = 0; i < 5; i++) await mirror.flush();
+    expect(mirror.dropped).toBe(0);
+    state.failInit = false;
+    await mirror.flush();
+    expect(rows.size).toBe(2);
+  });
+
+  it('fails an erase while the database is unreachable, so the caller retries it', async () => {
+    const { sink, state } = memorySink();
+    state.failInit = true;
+    const mirror = new SinkMirror(sink);
+    await expect(mirror.erase(APP, [Buffer.from(HEX, 'hex')])).rejects.toThrow(/unreachable/);
+    state.failInit = false;
+    await expect(mirror.erase(APP, [Buffer.from(HEX, 'hex')])).resolves.toBe(0);
   });
 
   it('drops and counts copies once its buffer is full, without throwing', () => {

@@ -31,6 +31,7 @@ export class MysqlSink implements EventSink {
          user_hash CHAR(32) NULL,
          salt_period VARCHAR(10) NULL,
          data JSON NOT NULL,
+         KEY \`${t}_ts\` (ts),
          KEY \`${t}_app_ts\` (app_id, ts),
          KEY \`${t}_type_ts\` (type, ts),
          KEY \`${t}_user\` (user_hash)

@@ -41,6 +41,7 @@ export class MongoSink implements EventSink {
     await this.#client.connect();
     const collection = this.#client.db(this.#database).collection<Doc>(this.#table);
     await collection.createIndexes([
+      { key: { ts: 1 } },
       { key: { appId: 1, ts: 1 } },
       { key: { type: 1, ts: 1 } },
       { key: { userHash: 1 }, sparse: true },

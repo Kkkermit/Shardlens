@@ -1,7 +1,8 @@
-import { avatarHash, compact, errorClass, errorCode, redactSecrets, uuidv7 } from '@shardlens/core';
+import { compact, errorClass, errorCode, redactSecrets, uuidv7 } from '@shardlens/core';
 import type { EventInput } from '@shardlens/schema';
-import { type Message, PermissionFlagsBits } from 'discord.js';
+import type { Message } from 'discord.js';
 import type { ShardlensOptions } from './options.js';
+import { auditActor, capturedValues, memberTier } from './run-details.js';
 import { shardForGuild } from './util.js';
 
 type MessageCommandInput = Extract<EventInput, { type: 'message_command' }>;
@@ -49,28 +50,9 @@ export function describeMessageCommand(
   const command = name(run.command);
   if (!command) return undefined;
 
-  const allow = new Set(options.captureOptionValues ?? []);
-  const values: Record<string, string | number | boolean> = {};
-  for (const [key, value] of Object.entries(run.optionValues ?? {})) {
-    if (!allow.has(key) || key.length > 32) continue;
-    if (typeof value === 'string') values[key] = redactSecrets(value).slice(0, 100);
-    else if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) values[key] = value;
-  }
-
-  const permissions = message.member?.permissions;
-  const memberTier = !message.inGuild()
-    ? 'dm'
-    : !permissions
-      ? undefined
-      : permissions.has(PermissionFlagsBits.Administrator)
-        ? 'admin'
-        : permissions.has(PermissionFlagsBits.ManageGuild)
-          ? 'manager'
-          : 'member';
   const failed = run.error !== undefined || run.failed === true;
   const code = run.error === undefined ? undefined : errorCode(run.error);
   const ms = typeof run.durationMs === 'number' && Number.isFinite(run.durationMs) ? run.durationMs : undefined;
-  const profile = options.auditIncludeProfile !== false;
 
   return compact({
     id: uuidv7(message.createdTimestamp),
@@ -83,23 +65,17 @@ export function describeMessageCommand(
       .map(name)
       .filter((o): o is string => o !== undefined)
       .slice(0, 25),
-    optionValues: Object.keys(values).length > 0 ? values : undefined,
+    optionValues: capturedValues(Object.entries(run.optionValues ?? {}), options.captureOptionValues),
     guild: message.guildId ?? undefined,
     channelType: message.channel?.type,
     guildLocale: message.guild?.preferredLocale ? String(message.guild.preferredLocale).slice(0, 10) : undefined,
-    memberTier: memberTier as MessageCommandInput['memberTier'],
+    // An uncached member has no readable permissions: the tier is left out rather than guessed.
+    memberTier: memberTier(message.inGuild(), message.member?.permissions, undefined),
     outcome: failed ? ('error' as const) : ('ok' as const),
     errorClass: run.error === undefined ? undefined : errorClass(run.error),
     errorCode: code,
     handlerMs: ms === undefined ? undefined : Math.max(0, Math.round(ms)),
     shard: message.guild?.shardId ?? (message.guildId ? shardForGuild(message.guildId, shardCount) : 0),
-    actor:
-      options.mode === 'audit'
-        ? compact({
-            userId: message.author.id,
-            username: profile ? message.author.username.slice(0, 64) : undefined,
-            avatar: profile ? avatarHash(message.author.avatar) : undefined,
-          })
-        : undefined,
+    actor: auditActor(message.author, options),
   });
 }

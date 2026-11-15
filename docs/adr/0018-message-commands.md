@@ -29,8 +29,9 @@ bot's own prefix and command list. Non-negotiable 2 says message content is neve
   (`COMMAND_KINDS_SQL`). A separate table would have meant a second copy of each of those queries.
 - **Interaction-only figures exclude kind 9.** The Reliability page (totals and error codes), the
   `missed_deadline_rate` alert, defer and ephemeral rates, and premium share describe Discord interactions and leave
-  message commands out, so a busy prefix bot can't dilute its missed-deadline rate. The `error_rate` alert and
-  per-command failure rates include them. Language and install-type breakdowns skip their empty values.
+  message commands out (`INTERACTIONS_ONLY_SQL`), so a busy prefix bot can't dilute its missed-deadline rate. The
+  `error_rate` alert and per-command failure rates include them. Language and install-type breakdowns leave message
+  commands out, since they have neither.
 - **Audit mode and opt-outs apply.** In audit mode the event carries the same `actor` as an interaction, encrypted
   into `audit_log` with kind 9; `privacyViolation()` rejects an actor on a privacy-mode batch. Opt-outs and
   `disable: ['interactions']` cover message commands.

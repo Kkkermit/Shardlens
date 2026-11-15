@@ -1,5 +1,6 @@
 import type { Db } from '../db.js';
 import { postToDiscordWebhook } from '../discord-webhook.js';
+import { INTERACTIONS_ONLY_SQL } from '../ingest/codes.js';
 import { auditCipher } from '../security/crypto.js';
 
 /** Minimum time between two notifications for the same rule. */
@@ -28,8 +29,8 @@ export async function evaluateMetric(db: Db, appId: string, metric: string, wind
     case 'missed_deadline_rate':
     case 'error_rate': {
       const cond = metric === 'missed_deadline_rate' ? 'outcome IN (2, 3)' : 'outcome <> 0';
-      // Message commands (kind 9) have no deadline to miss, so they don't count towards that rate.
-      const scope = metric === 'missed_deadline_rate' ? ' AND kind <> 9' : '';
+      // Message commands have no deadline to miss, so they don't count towards that rate.
+      const scope = metric === 'missed_deadline_rate' ? ` AND ${INTERACTIONS_ONLY_SQL}` : '';
       const r = await db.query<{ v: number | null }>(
         `SELECT 100.0 * sum(weight) FILTER (WHERE ${cond}) / nullif(sum(weight), 0) AS v
            FROM interactions WHERE app_id = $1 AND ts > now() - $2::interval${scope}`,

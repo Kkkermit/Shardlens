@@ -86,9 +86,9 @@ async function eraseUser(
       erased += res.rowCount ?? 0;
     }
     // The ClickHouse and sink copies too. If one fails the request fails, so the caller retries (deletes are
-    // idempotent).
+    // idempotent). Copies aren't added to `erased`, which counts the collector's own rows.
     await deps.analytics?.erase(appId, hashes);
-    erased += (await deps.sink?.erase(appId, hashes)) ?? 0;
+    await deps.sink?.erase(appId, hashes);
   }
   if (input.userId && deps.config.auditKey) {
     const cipher = auditCipher(deps.config.auditKey);

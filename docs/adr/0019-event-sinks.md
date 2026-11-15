@@ -27,12 +27,16 @@ them with their own data and keep them longer. That doesn't need the dashboard t
   `ON DUPLICATE KEY UPDATE id = id`, `ON CONFLICT DO NOTHING` or `INSERT OR IGNORE` elsewhere). Retried batches are
   pushed again and stored once, so the sink needs no knowledge of which rows PostgreSQL found new.
 - **Never in the way of ingest.** `SinkMirror` buffers up to 20,000 copies, writes in the background in batches of
-  500, and drops and counts copies once full. A sink that is unreachable at start-up is retried; the collector starts
-  anyway. Failures are logged at most once a minute, with any password in a URL removed.
-- **Same privacy rules.** Copies carry the salted hash (32 hex characters and its period), never a user ID. Audit-mode
-  `actor` is removed before anything is copied. Erasure deletes a person's copies, including those still in the buffer,
-  and fails the request if the sink can't be reached so the caller retries. Copies expire after
-  `SHARDLENS_SINK_RETENTION_DAYS` (default 35, like raw rows; at most 3,650).
+  500, and drops and counts copies once full. A batch refused three times in a row while the database answers set-up
+  is written row by row, and only the rows it refuses are dropped, so one bad row can't block the queue. A sink that is
+  unreachable at start-up is retried; the collector starts anyway. Failures are logged at most once a minute, with any
+  password in a URL removed.
+- **Same privacy rules.** Copies carry the salted hash (32 hex characters and its period), never a user ID. Every
+  field the data-collected register marks `personal: 'yes'` is removed before anything is copied (audit-mode `actor`,
+  `app_info.dashboardUserIds`), driven by the register so a new identifying field is covered without code changes.
+  Erasure deletes a person's copies, including those still in the buffer, and fails the request if the sink can't be
+  reached so the caller retries. Copies expire after `SHARDLENS_SINK_RETENTION_DAYS` (default 35, like raw rows; at
+  most 3,650), through an index on `ts`; SQLite deletes in chunks so the event loop is never held for long.
 - **Generic layout.** One table (or collection) with indexed columns (`id`, `ts`, `app_id`, `env`, `bot_release`,
   `type`, `guild_id`, `user_hash`, `salt_period`) and the whole event in `data`. In MongoDB the event's fields are the
   document's own. New event types need no migration.

@@ -83,6 +83,31 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
   // Guild lifecycle must be applied in order, inside the transaction.
   const ordered: Indexed[] = [];
 
+  /**
+   * One run's unique-user rows (everyone, the command, the server, plus `extra` scopes) and, unless it was autocomplete,
+   * the server's first and last activity.
+   */
+  const countRun = (
+    user: { period: string; bytes: Buffer },
+    ts: Date,
+    command: string | undefined,
+    guild: string | undefined,
+    activity: boolean,
+    extra: readonly [string, string][],
+  ) => {
+    const day = ts.toISOString().slice(0, 10);
+    const scopes: [string, string][] = [['global', '*']];
+    if (command) scopes.push(['command', command]);
+    if (guild) scopes.push(['guild', guild]);
+    scopes.push(...extra);
+    for (const [scope, key] of scopes) uniqueRows.push([ctx.appId, user.period, day, scope, key, user.bytes]);
+    if (guild && activity) {
+      const at = ts.getTime();
+      const t = commandTimes.get(guild);
+      commandTimes.set(guild, { first: Math.min(t?.first ?? at, at), last: Math.max(t?.last ?? at, at) });
+    }
+  };
+
   /** Who ran a command, encrypted: only when the batch and the app are both in audit mode, within audit retention. */
   const audit = (
     e: Extract<Event, { type: 'interaction' | 'message_command' }>,
@@ -160,17 +185,10 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
           e.shard ?? null,
           e.weight,
         ]);
-        const day = ts.toISOString().slice(0, 10);
-        const scopes: [string, string][] = [['global', '*']];
-        if (e.command && e.kind !== 'autocomplete') scopes.push(['command', e.command]);
-        if (e.guild) scopes.push(['guild', e.guild]);
-        scopes.push(['locale', e.locale]);
-        if (e.install) scopes.push(['install', e.install]);
-        for (const [scope, key] of scopes) uniqueRows.push([ctx.appId, user.period, day, scope, key, user.bytes]);
-        if (e.guild && e.kind !== 'autocomplete') {
-          const t = commandTimes.get(e.guild);
-          commandTimes.set(e.guild, { first: Math.min(t?.first ?? e.ts, e.ts), last: Math.max(t?.last ?? e.ts, e.ts) });
-        }
+        const command = e.kind === 'autocomplete' ? undefined : e.command;
+        const extra: [string, string][] = [['locale', e.locale]];
+        if (e.install) extra.push(['install', e.install]);
+        countRun(user, ts, command, e.guild, e.kind !== 'autocomplete', extra);
         audit(e, ts, KIND[e.kind], e.customId, e.ackMs);
         result.interactions += e.weight;
         if (e.outcome !== 'ok') result.errors += e.weight;
@@ -221,17 +239,7 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
           e.shard ?? null,
           e.weight,
         ]);
-        const day = ts.toISOString().slice(0, 10);
-        const scopes: [string, string][] = [
-          ['global', '*'],
-          ['command', e.command],
-        ];
-        if (e.guild) scopes.push(['guild', e.guild]);
-        for (const [scope, key] of scopes) uniqueRows.push([ctx.appId, user.period, day, scope, key, user.bytes]);
-        if (e.guild) {
-          const t = commandTimes.get(e.guild);
-          commandTimes.set(e.guild, { first: Math.min(t?.first ?? e.ts, e.ts), last: Math.max(t?.last ?? e.ts, e.ts) });
-        }
+        countRun(user, ts, e.command, e.guild, true, []);
         audit(e, ts, KIND.message_command, undefined, undefined);
         result.interactions += e.weight;
         if (e.outcome !== 'ok') result.errors += e.weight;

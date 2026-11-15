@@ -35,6 +35,7 @@ export class PostgresSink implements EventSink {
          data jsonb NOT NULL
        )`,
     );
+    await this.#pool.query(`CREATE INDEX IF NOT EXISTS "${t}_ts" ON "${t}" (ts)`);
     await this.#pool.query(`CREATE INDEX IF NOT EXISTS "${t}_app_ts" ON "${t}" (app_id, ts)`);
     await this.#pool.query(`CREATE INDEX IF NOT EXISTS "${t}_type_ts" ON "${t}" (type, ts)`);
     await this.#pool.query(`CREATE INDEX IF NOT EXISTS "${t}_user" ON "${t}" (user_hash) WHERE user_hash IS NOT NULL`);

@@ -1,7 +1,8 @@
-import { avatarHash, compact, normaliseCustomId, redactSecrets, type ShardlensClient, uuidv7 } from '@shardlens/core';
+import { compact, normaliseCustomId, redactSecrets, type ShardlensClient, uuidv7 } from '@shardlens/core';
 import type { EventInput } from '@shardlens/schema';
-import { ApplicationIntegrationType, type Interaction, PermissionFlagsBits } from 'discord.js';
+import { ApplicationIntegrationType, type Interaction } from 'discord.js';
 import type { ShardlensOptions } from './options.js';
+import { auditActor, capturedValues, memberTier } from './run-details.js';
 import { LruMap, shardForGuild } from './util.js';
 
 type InteractionInput = Extract<EventInput, { type: 'interaction' }>;
@@ -73,15 +74,7 @@ function describeInteraction(
   const guildInstalled = owners[String(ApplicationIntegrationType.GuildInstall)] !== undefined;
   const userInstalled = owners[String(ApplicationIntegrationType.UserInstall)] !== undefined;
   const normalise = options.normaliseCustomId ?? normaliseCustomId;
-  const memberTier = !i.inGuild()
-    ? 'dm'
-    : i.memberPermissions?.has(PermissionFlagsBits.Administrator)
-      ? 'admin'
-      : i.memberPermissions?.has(PermissionFlagsBits.ManageGuild)
-        ? 'manager'
-        : 'member';
   const context = i.context;
-  const profile = options.auditIncludeProfile !== false;
   const common = compact({
     id: uuidv7(i.createdTimestamp),
     ts: i.createdTimestamp,
@@ -93,29 +86,15 @@ function describeInteraction(
     channelType: i.channel?.type,
     locale: String(i.locale).slice(0, 10),
     guildLocale: i.guildLocale ? String(i.guildLocale).slice(0, 10) : undefined,
-    memberTier: memberTier as InteractionBase['memberTier'],
+    memberTier: memberTier(i.inGuild(), i.memberPermissions, 'member'),
     premium: (i.entitlements?.size ?? 0) > 0,
     options: [] as string[],
     shard: i.guild?.shardId ?? (i.guildId ? shardForGuild(i.guildId, shardCount) : 0),
-    actor:
-      options.mode === 'audit'
-        ? compact({
-            userId: i.user.id,
-            username: profile ? i.user.username.slice(0, 64) : undefined,
-            avatar: profile ? avatarHash(i.user.avatar) : undefined,
-          })
-        : undefined,
+    actor: auditActor(i.user, options),
   });
 
   if (i.isChatInputCommand()) {
     const leaves = flattenOptions(i.options.data);
-    const allow = new Set(options.captureOptionValues ?? []);
-    const values: Record<string, string | number | boolean> = {};
-    for (const o of leaves) {
-      if (!allow.has(o.name)) continue;
-      if (typeof o.value === 'string') values[o.name] = redactSecrets(o.value).slice(0, 100);
-      else if (typeof o.value === 'number' || typeof o.value === 'boolean') values[o.name] = o.value;
-    }
     return compact({
       ...common,
       kind: 'chat_input' as const,
@@ -125,7 +104,10 @@ function describeInteraction(
       commandId: i.commandId,
       commandScope: i.commandGuildId ? ('guild' as const) : ('global' as const),
       options: leaves.map((o) => o.name).slice(0, 25),
-      optionValues: Object.keys(values).length > 0 ? values : undefined,
+      optionValues: capturedValues(
+        leaves.map((o) => [o.name, o.value] as const),
+        options.captureOptionValues,
+      ),
     });
   }
   if (i.isUserContextMenuCommand() || i.isMessageContextMenuCommand()) {
