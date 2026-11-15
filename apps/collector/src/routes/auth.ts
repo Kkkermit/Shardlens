@@ -1,6 +1,6 @@
-import { Discord, generateCodeVerifier, generateState } from 'arctic';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { createSession, destroySession, readSession } from '../security/auth.js';
+import { discordOAuth, randomToken } from '../security/discord-oauth.js';
 import type { Deps } from '../server.js';
 
 const STATE_COOKIE = 'shardlens_oauth_state';
@@ -38,23 +38,18 @@ export async function authRoutes(app: FastifyInstance, deps: Deps): Promise<void
   const secure = deps.config.publicUrl.protocol === 'https:';
   const cookie = { httpOnly: true, secure, sameSite: 'lax' as const, path: '/auth', maxAge: 600, signed: true };
   const discord = deps.config.discord
-    ? new Discord(
-        deps.config.discord.clientId,
-        deps.config.discord.clientSecret,
-        new URL('/auth/discord/callback', deps.config.publicUrl).toString(),
-      )
+    ? discordOAuth(deps.config.discord, new URL('/auth/discord/callback', deps.config.publicUrl).toString())
     : undefined;
   const authLimit = { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } };
   const fail = (reply: FastifyReply, reason: string) => reply.redirect(`/login?error=${encodeURIComponent(reason)}`);
 
   app.get('/auth/discord', authLimit, async (_req, reply) => {
     if (!discord) return reply.code(404).send({ error: 'discord_login_not_configured' });
-    const state = generateState();
-    const verifier = generateCodeVerifier();
-    const url = discord.createAuthorizationURL(state, verifier, ['identify']);
+    const state = randomToken();
+    const verifier = randomToken();
     reply.setCookie(STATE_COOKIE, state, cookie);
     reply.setCookie(VERIFIER_COOKIE, verifier, cookie);
-    return reply.redirect(url.toString());
+    return reply.redirect(discord.authorizationUrl(state, verifier).toString());
   });
 
   app.get('/auth/discord/callback', authLimit, async (req, reply) => {
@@ -75,9 +70,9 @@ export async function authRoutes(app: FastifyInstance, deps: Deps): Promise<void
     }
     let userId: string;
     try {
-      const tokens = await discord.validateAuthorizationCode(query.code, verifierCookie.value ?? '');
+      const accessToken = await discord.accessToken(query.code, verifierCookie.value ?? '');
       const res = await fetch('https://discord.com/api/v10/users/@me', {
-        headers: { authorization: `Bearer ${tokens.accessToken()}` },
+        headers: { authorization: `Bearer ${accessToken}` },
         signal: AbortSignal.timeout(10_000),
       });
       if (!res.ok) return fail(reply, 'discord_error');

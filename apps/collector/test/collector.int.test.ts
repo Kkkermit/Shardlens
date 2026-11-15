@@ -1,9 +1,10 @@
+import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { bucketOf, uuidv7 } from '@shardlens/core';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { signInProblems } from '../src/app.js';
 import { createPool, migrate } from '../src/db.js';
 import { evaluateMetric } from '../src/jobs/alerts.js';
@@ -1045,6 +1046,85 @@ describe('dashboard login', () => {
       payload: { kind: 'overview' },
     });
     expect(q.statusCode).toBe(200);
+  });
+
+  it('signs in with Discord: state checked, PKCE sent, the secret to Discord only, no token kept', async () => {
+    const admin = '334455667788990022';
+    const app = await buildServer({
+      db: h.db,
+      live: h.live,
+      keys: new KeyStore(h.db),
+      config: { ...h.config, discord: { clientId: APP_ID, clientSecret: 'shh-client-secret' }, extraAdmins: [admin] },
+    });
+    const calls: { url: string; init: RequestInit | undefined }[] = [];
+    let tokenAnswer = () => Response.json({ access_token: 'discord-access-token', token_type: 'Bearer' });
+    const discord = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (url === 'https://discord.com/api/oauth2/token') return tokenAnswer();
+      if (url === 'https://discord.com/api/v10/users/@me') return Response.json({ id: admin, username: 'someone' });
+      throw new Error(`unexpected request to ${url}`);
+    });
+    try {
+      const start = await app.inject({ method: 'GET', url: '/auth/discord' });
+      expect(start.statusCode).toBe(302);
+      const authorize = new URL(String(start.headers.location));
+      expect(authorize.origin + authorize.pathname).toBe('https://discord.com/oauth2/authorize');
+      const asked = Object.fromEntries(authorize.searchParams);
+      expect(asked).toMatchObject({
+        response_type: 'code',
+        client_id: APP_ID,
+        redirect_uri: 'https://stats.example.com/auth/discord/callback',
+        scope: 'identify',
+        code_challenge_method: 'S256',
+      });
+      expect(asked.state).toMatch(/^[\w-]{43}$/);
+      const cookies = Object.fromEntries(start.cookies.map((c) => [c.name, c.value]));
+      const callback = (state: string) =>
+        app.inject({ method: 'GET', url: `/auth/discord/callback?code=the-code&state=${state}`, cookies });
+
+      // A callback with a state this browser was never given goes nowhere near Discord.
+      const forged = await callback('a'.repeat(43));
+      expect(forged.headers.location).toBe('/login?error=invalid_state');
+      expect(calls).toEqual([]);
+
+      const done = await callback(asked.state as string);
+      expect(done.statusCode).toBe(302);
+      expect(done.headers.location).toBe('/');
+      const exchange = calls.find((c) => c.url === 'https://discord.com/api/oauth2/token');
+      const sent = new URLSearchParams(exchange?.init?.body as URLSearchParams);
+      expect(Object.fromEntries(sent)).toMatchObject({
+        grant_type: 'authorization_code',
+        code: 'the-code',
+        redirect_uri: 'https://stats.example.com/auth/discord/callback',
+      });
+      // PKCE: the verifier sent now hashes to the challenge sent at the start.
+      const verifier = sent.get('code_verifier') as string;
+      expect(createHash('sha256').update(verifier).digest('base64url')).toBe(asked.code_challenge);
+      const headers = new Headers(exchange?.init?.headers);
+      expect(headers.get('authorization')).toBe(
+        `Basic ${Buffer.from(`${APP_ID}:shh-client-secret`).toString('base64')}`,
+      );
+      expect(exchange?.init?.redirect).toBe('error');
+      const profile = calls.find((c) => c.url.endsWith('/users/@me'));
+      expect(new Headers(profile?.init?.headers).get('authorization')).toBe('Bearer discord-access-token');
+
+      const session = done.cookies.find((c) => c.name === 'shardlens_session');
+      expect(session).toMatchObject({ httpOnly: true, secure: true, sameSite: 'Lax' });
+      const me = await app.inject({ method: 'GET', url: '/auth/me', cookies: { shardlens_session: session!.value } });
+      expect(me.json()).toMatchObject({ authenticated: true, method: 'discord' });
+      const stored = await h.db.query('SELECT * FROM sessions');
+      expect(JSON.stringify(stored.rows)).not.toContain('discord-access-token');
+
+      // Discord refuses the code (used twice, or expired): no session, and only the error's name is known.
+      tokenAnswer = () => Response.json({ error: 'invalid_grant' }, { status: 400 });
+      const refused = await callback(asked.state as string);
+      expect(refused.headers.location).toBe('/login?error=discord_error');
+      expect(refused.cookies.find((c) => c.name === 'shardlens_session')).toBeUndefined();
+    } finally {
+      discord.mockRestore();
+      await app.close();
+    }
   });
 
   it('sends a strict Content-Security-Policy', async () => {

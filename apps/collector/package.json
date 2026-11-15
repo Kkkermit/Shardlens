@@ -56,7 +56,6 @@
     "@fastify/static": "^10.1.11",
     "@shardlens/core": "workspace:*",
     "@shardlens/schema": "workspace:*",
-    "arctic": "^3.7.0",
     "fastify": "^5.12.8",
     "mongodb": "^7.9.0",
     "mysql2": "^3.24.6",

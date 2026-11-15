@@ -25,3 +25,5 @@ bot process):
 - `/openapi.json` describes the ingest body with the published batch schema, including the privacy-mode rule, and
   carries the collector's version instead of `0.0.0`.
 - Docker Compose reads `SHARDLENS_TRUST_PROXY` from `.env` (default `1`), and `.env.example` lists every variable.
+- Discord sign-in no longer uses the `arctic` library, which its author has withdrawn: installing the collector prints
+  no "package no longer supported" warnings. The requests to Discord are the same.
