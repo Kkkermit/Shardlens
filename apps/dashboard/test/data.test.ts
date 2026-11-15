@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { formatX, pivot, xRange } from '../src/chart-data';
-import { ago, agoHour, date, dateTime, label, ms, num, pct } from '../src/format';
+import { ago, agoHour, commandLabel, date, dateTime, label, ms, num, pct } from '../src/format';
 
 describe('pivot', () => {
   it('aligns grouped points on a shared x axis, filling gaps with zero', () => {
@@ -51,6 +51,13 @@ describe('format', () => {
     expect(label('channel', '11')).toBe('Public thread or forum post');
     expect(label('locale', 'en-GB')).toBe('en-GB');
     expect(label('install', null)).toBe('(none)');
+  });
+
+  it('writes a slash only in front of slash commands', () => {
+    expect(commandLabel('ping', ['chat_input'])).toBe('/ping');
+    expect(commandLabel('ban', ['chat_input', 'message_command'])).toBe('/ban');
+    expect(commandLabel('roll', ['message_command'])).toBe('roll');
+    expect(commandLabel('Profile', ['user_context'])).toBe('Profile');
   });
 });
 

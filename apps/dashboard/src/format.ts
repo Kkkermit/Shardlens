@@ -95,3 +95,8 @@ export function label(dimension: string, key: string | null | undefined): string
   if (key === null || key === undefined || key === '') return '(none)';
   return LABELS[dimension]?.[key] ?? key;
 }
+
+/** A command's name as people type it: `/ping` once it has run as a slash command, plain for prefix commands and menus. */
+export function commandLabel(name: string, kinds: readonly string[]): string {
+  return kinds.includes('chat_input') ? `/${name}` : name;
+}

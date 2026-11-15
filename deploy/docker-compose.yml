@@ -23,7 +23,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgres://shardlens:${POSTGRES_PASSWORD}@postgres:5432/shardlens
-      SHARDLENS_TRUST_PROXY: 'true'
+      SHARDLENS_TRUST_PROXY: '1'
       HOST: 0.0.0.0
       PORT: '8080'
     read_only: true

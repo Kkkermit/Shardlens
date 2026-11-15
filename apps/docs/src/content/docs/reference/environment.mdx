@@ -58,7 +58,7 @@ The collector logs a warning at start-up when the bot or you would have no way i
 | ------------------------- | --------- | ----------------------------------------------------------------------------------- |
 | `PORT`                    | `8080`    | Port to listen on. Railway and Render set it for you.                                |
 | `HOST`                    | `0.0.0.0` | Address to listen on.                                                               |
-| `SHARDLENS_TRUST_PROXY`   | `false`   | `true` behind a reverse proxy or load balancer, so client addresses and HTTPS are seen correctly. Docker Compose sets it. |
+| `SHARDLENS_TRUST_PROXY`   | `false`   | Behind a reverse proxy or load balancer, the number of proxies in front (`1` for one), so client addresses and HTTPS are seen correctly. Docker Compose sets `1`. `true` trusts the whole `X-Forwarded-For` header, which is only safe behind a proxy that replaces it rather than adding to it. |
 | `SHARDLENS_DEMO`          | `false`   | `true` lets anyone view the dashboard without signing in, read-only. For a public demo with seeded data only; never with real data. Settings, keys, alerts, audit data and ingest stay locked. |
 | `SHARDLENS_DASHBOARD_DIR` | (bundled) | Serve the dashboard from another folder. Mainly for development.                    |
 | `LOG_LEVEL`               | `info`    | `fatal`, `error`, `warn`, `info`, `debug`, `trace` or `silent`. Per-request logs, which contain URLs, are written at `debug` and `trace` only.                     |

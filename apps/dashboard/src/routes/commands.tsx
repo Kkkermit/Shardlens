@@ -5,7 +5,7 @@ import { pivot } from '../chart-data';
 import { BarList, Heatmap, TimeChart } from '../components/charts';
 import { DataTable } from '../components/DataTable';
 import { Delta, ErrorNote, GuildIcon, Loading, PageHead, Panel, RangePicker, Tile } from '../components/ui';
-import { agoHour, label, ms, num, pct } from '../format';
+import { agoHour, commandLabel, label, ms, num, pct } from '../format';
 import { useRange } from '../range';
 
 interface CommandRow {
@@ -19,7 +19,17 @@ interface CommandRow {
   lastUsed: string | null;
   uniqueUsersThisPeriod: number | null;
   registered: boolean;
+  /** Interaction kinds the command ran as, or is registered as: `chat_input`, `message_command`, `user_context`... */
+  kinds: string[];
 }
+
+/** Badges for every way a command runs other than as a slash command. */
+const OTHER_KINDS: Record<string, string> = {
+  message_command: 'prefix',
+  user_context: 'user menu',
+  message_context: 'message menu',
+  primary_entry_point: 'entry point',
+};
 
 export function CommandsPage() {
   const r = useRange();
@@ -55,8 +65,15 @@ export function CommandsPage() {
                 render: (row) => (
                   <>
                     <Link to="/commands/$name" params={{ name: row.command }}>
-                      /{row.command}
+                      {commandLabel(row.command, row.kinds)}
                     </Link>{' '}
+                    {row.kinds
+                      .filter((kind) => OTHER_KINDS[kind])
+                      .map((kind) => (
+                        <span key={kind} className="badge">
+                          {OTHER_KINDS[kind]}
+                        </span>
+                      ))}{' '}
                     {row.registered && row.runs === 0 ? <span className="badge">unused</span> : null}
                   </>
                 ),
@@ -128,6 +145,7 @@ interface CommandDetail {
     handlerP95Ms: number | null;
   };
   latencyHistogram: number[] | null;
+  kinds: { key: string; value: number }[];
   subcommands: { key: string; value: number }[];
   options: { key: string; value: number }[];
   optionValues: { option: string; value: string; runs: number }[];
@@ -167,11 +185,12 @@ export function CommandPage() {
     filters,
     timezone: tz,
   });
-  const chart = useMemo(
-    () => pivot(series.data?.points ?? [], (k) => (k ? `/${name} ${k}` : `/${name}`)),
-    [series.data, name],
-  );
   const d = detail.data;
+  const title = commandLabel(name, d?.kinds.map((k) => k.key) ?? []);
+  const chart = useMemo(
+    () => pivot(series.data?.points ?? [], (k) => (k ? `${title} ${k}` : title)),
+    [series.data, title],
+  );
   const t = d?.totals;
   const runs = t?.runs ?? 0;
   const latency = (d?.latencyHistogram ?? [])
@@ -181,7 +200,7 @@ export function CommandPage() {
   return (
     <>
       <PageHead
-        title={`/${name}`}
+        title={title}
         description={<Link to="/commands">← All commands</Link>}
         actions={<RangePicker value={r.id} onChange={r.setId} />}
       />

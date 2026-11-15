@@ -4,7 +4,7 @@ import { api, useMeta } from '../api';
 import { NeedsDiscord, useAdminGate } from '../components/AdminGate';
 import { DataTable } from '../components/DataTable';
 import { ErrorNote, Loading, PageHead, Panel, Segmented, UserTag } from '../components/ui';
-import { dateTime, label, ms, num } from '../format';
+import { commandLabel, dateTime, label, ms, num } from '../format';
 
 const WINDOWS = [
   { id: '24h', label: '24 hours' },
@@ -137,7 +137,7 @@ export function ActivityPage() {
                   header: 'Command',
                   render: (r) =>
                     r.command
-                      ? `/${r.command}${r.sub ? ` ${r.sub}` : ''}`
+                      ? `${commandLabel(r.command, [r.kind])}${r.sub ? ` ${r.sub}` : ''}`
                       : `${label('kind', r.kind)} ${r.customId ?? ''}`,
                 },
                 { key: 'server', header: 'Server', render: (r) => r.guildName ?? r.guildId ?? 'DM' },

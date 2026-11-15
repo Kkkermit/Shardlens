@@ -39,7 +39,8 @@ lens.trackMessageCommand(message, { command: command.name, durationMs: performan
 ## What is recorded
 
 A prefix command is stored with your interactions, so the **Commands** page, unique users, servers, funnels, alerts on
-error rate and the Prometheus and OpenTelemetry exporters all count it. Filter or group by kind
+error rate and the Prometheus and OpenTelemetry exporters all count it. On the **Commands** page, a prefix command has a
+"prefix" badge, and its name has a `/` only if it also runs as a slash command. Filter or group by kind
 (`message_command`, shown as "Prefix command") to see the two apart.
 
 From the message, the SDK reads the author's ID (hashed in your bot, as for interactions), the server, the channel

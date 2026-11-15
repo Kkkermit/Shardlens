@@ -9,9 +9,14 @@ WORKDIR /repo
 RUN corepack enable
 # Manifests first, so dependency installs are cached until a lockfile or manifest changes.
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json turbo.json tsconfig.base.json ./
+# Every package copied below, or the build step installs again when the rest arrive.
 COPY packages/schema/package.json packages/schema/
 COPY packages/core/package.json packages/core/
 COPY packages/discordjs/package.json packages/discordjs/
+COPY packages/http/package.json packages/http/
+COPY packages/cli/package.json packages/cli/
+COPY packages/exporter-prometheus/package.json packages/exporter-prometheus/
+COPY packages/exporter-otel/package.json packages/exporter-otel/
 COPY apps/collector/package.json apps/collector/
 COPY apps/dashboard/package.json apps/dashboard/
 RUN pnpm install --frozen-lockfile

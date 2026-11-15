@@ -55,9 +55,10 @@ which the SDK honours.
 | Everything else, including unknown paths    | 1,200 |
 
 <Aside type="caution" title="Behind a reverse proxy">
-  Set `SHARDLENS_TRUST_PROXY=true` when Caddy, a load balancer or a platform router sits in front of the collector (the
-  bundled Docker Compose file does). Otherwise every visitor appears to come from the proxy's address and shares one
-  limit.
+  Set `SHARDLENS_TRUST_PROXY` to the number of proxies in front of the collector (`1` for Caddy, one load balancer or a
+  platform router; the bundled Docker Compose file sets it). Otherwise every visitor appears to come from the proxy's
+  address and shares one limit. Avoid `true` unless your proxy replaces `X-Forwarded-For`: a proxy that adds to it lets
+  a visitor choose the address their limits are counted under.
 </Aside>
 
 ## If you are breached

@@ -101,6 +101,11 @@ function dashboardDir(config: Config): string | undefined {
   return candidates.find((dir) => dir !== undefined && existsSync(`${dir}/index.html`));
 }
 
+/** A hop count trusts that many proxies from the right of `X-Forwarded-For`, the same rule Fastify applies to a number. */
+function proxyTrust(trust: boolean | number): boolean | ((address: string, hop: number) => boolean) {
+  return typeof trust === 'number' ? (_address, hop) => hop < trust : trust;
+}
+
 export async function buildServer(deps: Deps): Promise<FastifyInstance> {
   // Request logs record URLs (the OAuth callback's one-time code, a key pasted into a query string), so they are
   // written only when the collector runs at debug or trace.
@@ -112,7 +117,7 @@ export async function buildServer(deps: Deps): Promise<FastifyInstance> {
       ...(deps.logStream ? { stream: deps.logStream } : {}),
     },
     logController: new LogController({ disableRequestLogging: !verbose }),
-    trustProxy: deps.config.trustProxy,
+    trustProxy: proxyTrust(deps.config.trustProxy),
     bodyLimit: 256 * 1024,
     requestTimeout: REQUEST_TIMEOUT_MS,
   });
@@ -180,17 +185,31 @@ export async function buildServer(deps: Deps): Promise<FastifyInstance> {
 
   const dir = dashboardDir(deps.config);
   if (dir) {
-    await app.register(fastifyStatic, { root: dir, wildcard: false, index: ['index.html'], maxAge: '1h' });
+    await app.register(fastifyStatic, {
+      root: dir,
+      wildcard: false,
+      index: ['index.html'],
+      // The page must be revalidated, or after an upgrade a cached copy asks for scripts that no longer exist. Built
+      // assets have content-hashed names, so they never change.
+      cacheControl: false,
+      setHeaders: (res, file) => {
+        const policy = file.endsWith('index.html')
+          ? 'no-cache'
+          : /[\\/]assets[\\/]/.test(file)
+            ? 'public, max-age=31536000, immutable'
+            : 'public, max-age=3600';
+        res.header('cache-control', policy);
+      },
+    });
   } else {
     app.get('/', async () => ({ name: 'shardlens-collector', dashboard: 'not built' }));
   }
-  // Single-page app: unknown GETs for a page (not the API, not a file) return the dashboard shell, uncached.
+  // Single-page app: unknown GETs for a page (not the API, not a file) return the dashboard shell.
   app.setNotFoundHandler({ preHandler: app.rateLimit() }, (req, reply) => {
     const path = req.url.split('?')[0] ?? '';
     if (!dir || req.method !== 'GET' || API_PATHS.test(path) || FILE_PATH.test(path)) {
       return reply.code(404).send({ error: 'not_found' });
     }
-    reply.header('cache-control', 'no-store');
     return reply.sendFile('index.html');
   });
 

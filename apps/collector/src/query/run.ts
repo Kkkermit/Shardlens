@@ -14,6 +14,7 @@ import {
 import type { ClickHouseStore } from '../storage/clickhouse.js';
 import { periodBounds, periodLabel, type SaltPeriod } from '../storage/periods.js';
 import { eventProps, events, funnel, retention } from './funnels.js';
+import { gaugeSamples } from './gauge-samples.js';
 import { installs, premium, reliability } from './reports.js';
 import { rawFrom, rollupSource } from './rollup-source.js';
 import type { Filter, QuerySpec } from './spec.js';
@@ -240,12 +241,12 @@ async function commands(db: Db, appId: string, spec: Spec<'commands'>, now: Date
   const { table, from } = rollupSource(new Date(spec.range.from), now);
   const to = new Date(spec.range.to);
   const periodStart = await currentPeriodStart(db, appId, now);
-  const res = await db.query(
+  const res = await db.query<{ kinds: number[] }>(
     `WITH cur AS (
        SELECT dims->>'command' AS command, sum(count) AS runs,
               sum(count) FILTER (WHERE dims->>'outcome' <> '0') AS failures,
               shardlens_hist_sum(hist) AS hist,
-              max(bucket) AS last_used
+              max(bucket) AS last_used, array_agg(DISTINCT (dims->>'kind')::int) AS kinds
          FROM ${table} WHERE app_id = $1 AND metric = 'interactions' AND bucket >= $2 AND bucket < $3
         GROUP BY 1
      ), srv AS (
@@ -258,7 +259,8 @@ async function commands(db: Db, appId: string, spec: Spec<'commands'>, now: Date
           AND bucket >= $2::timestamptz - ($3::timestamptz - $2::timestamptz) AND bucket < $2
         GROUP BY 1
      ), reg AS (
-       SELECT DISTINCT name AS command FROM command_registry WHERE app_id = $1
+       -- A registered command's type is its interaction kind (1 slash, 2 user menu, 3 message menu, 4 entry point).
+       SELECT name AS command, array_agg(DISTINCT type::int) AS kinds FROM command_registry WHERE app_id = $1 GROUP BY 1
      ), users AS (
        SELECT scope_key AS command, users FROM unique_counts
         WHERE app_id = $1 AND grain = 'month' AND scope = 'command' AND start_day = $4::date
@@ -274,14 +276,19 @@ async function commands(db: Db, appId: string, spec: Spec<'commands'>, now: Date
             coalesce(srv.servers, 0)::int AS servers,
             cur.last_used AS "lastUsed",
             users.users AS "uniqueUsersThisPeriod",
-            (reg.command IS NOT NULL) AS registered
+            (reg.command IS NOT NULL) AS registered,
+            ARRAY(SELECT DISTINCT k FROM unnest(coalesce(cur.kinds, '{}') || coalesce(reg.kinds, '{}')) AS k ORDER BY k)
+              AS kinds
        FROM cur FULL JOIN reg USING (command) LEFT JOIN prev USING (command) LEFT JOIN users USING (command)
        LEFT JOIN srv USING (command)
       WHERE coalesce(cur.command, reg.command) IS NOT NULL
       ORDER BY 2 DESC, 1 LIMIT 500`,
     [appId, from, to, periodStart],
   );
-  return { periodStart, rows: res.rows };
+  return {
+    periodStart,
+    rows: res.rows.map((row) => ({ ...row, kinds: row.kinds.map((k) => decodeValue('kind', String(k))) })),
+  };
 }
 
 async function command(db: Db, appId: string, spec: Spec<'command'>, now: Date) {
@@ -289,10 +296,23 @@ async function command(db: Db, appId: string, spec: Spec<'command'>, now: Date) 
   const to = new Date(spec.range.to);
   const p = [appId, spec.name, from, to];
   const base = `FROM interactions WHERE app_id = $1 AND command = $2 AND ts >= $3 AND ts < $4 AND kind IN ${COMMAND_KINDS_SQL}`;
-  const [totals, subs, options, values, tiers, installs, contexts, channels, locales, servers, components, modals] =
-    await Promise.all([
-      db.query(
-        `SELECT sum(weight)::float8 AS runs,
+  const [
+    totals,
+    kinds,
+    subs,
+    options,
+    values,
+    tiers,
+    installs,
+    contexts,
+    channels,
+    locales,
+    servers,
+    components,
+    modals,
+  ] = await Promise.all([
+    db.query(
+      `SELECT sum(weight)::float8 AS runs,
                 sum(weight) FILTER (WHERE outcome = 0)::float8 AS ok,
                 sum(weight) FILTER (WHERE outcome = 1)::float8 AS error,
                 sum(weight) FILTER (WHERE outcome = 2)::float8 AS timeout,
@@ -305,49 +325,50 @@ async function command(db: Db, appId: string, spec: Spec<'command'>, now: Date) 
                 shardlens_hist_quantile(shardlens_hist_sum(shardlens_hist_one(handler_ms, weight)), 0.95)::float8 AS "handlerP95Ms",
                 min(ts) AS "firstSeen", max(ts) AS "lastSeen"
          ${base}`,
-        p,
-      ),
-      db.query(
-        `SELECT coalesce(cmd_group || ' ', '') || coalesce(sub, '') AS key, sum(weight)::float8 AS value
+      p,
+    ),
+    db.query(`SELECT kind AS key, sum(weight)::float8 AS value ${base} GROUP BY 1 ORDER BY 2 DESC`, p),
+    db.query(
+      `SELECT coalesce(cmd_group || ' ', '') || coalesce(sub, '') AS key, sum(weight)::float8 AS value
            ${base} AND (sub IS NOT NULL OR cmd_group IS NOT NULL) GROUP BY 1 ORDER BY 2 DESC LIMIT 50`,
-        p,
-      ),
-      db.query(
-        `SELECT o AS key, sum(weight)::float8 AS value FROM (SELECT unnest(options) AS o, weight ${base}) t GROUP BY 1 ORDER BY 2 DESC LIMIT 50`,
-        p,
-      ),
-      db.query(
-        `SELECT kv.key AS option, kv.value, sum(weight)::float8 AS runs
+      p,
+    ),
+    db.query(
+      `SELECT o AS key, sum(weight)::float8 AS value FROM (SELECT unnest(options) AS o, weight ${base}) t GROUP BY 1 ORDER BY 2 DESC LIMIT 50`,
+      p,
+    ),
+    db.query(
+      `SELECT kv.key AS option, kv.value, sum(weight)::float8 AS runs
            FROM (SELECT option_values, weight ${base} AND option_values IS NOT NULL) t, jsonb_each_text(t.option_values) kv
           GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 100`,
-        p,
-      ),
-      db.query(`SELECT member_tier AS key, sum(weight)::float8 AS value ${base} GROUP BY 1 ORDER BY 2 DESC`, p),
-      db.query(
-        `SELECT install AS key, sum(weight)::float8 AS value ${base} AND ${INTERACTIONS_ONLY_SQL} GROUP BY 1 ORDER BY 2 DESC`,
-        p,
-      ),
-      db.query(`SELECT context AS key, sum(weight)::float8 AS value ${base} GROUP BY 1 ORDER BY 2 DESC`, p),
-      db.query(
-        `SELECT channel_type AS key, sum(weight)::float8 AS value ${base} AND channel_type IS NOT NULL GROUP BY 1 ORDER BY 2 DESC`,
-        p,
-      ),
-      db.query(
-        `SELECT locale AS key, sum(weight)::float8 AS value ${base} AND locale <> '' GROUP BY 1 ORDER BY 2 DESC LIMIT 15`,
-        p,
-      ),
-      db.query(
-        `SELECT guild_id::text AS key, sum(weight)::float8 AS value ${base} AND guild_id IS NOT NULL GROUP BY 1 ORDER BY 2 DESC LIMIT 10`,
-        p,
-      ),
-      db.query(
-        `SELECT custom_id AS key, kind, sum(weight)::float8 AS value
+      p,
+    ),
+    db.query(`SELECT member_tier AS key, sum(weight)::float8 AS value ${base} GROUP BY 1 ORDER BY 2 DESC`, p),
+    db.query(
+      `SELECT install AS key, sum(weight)::float8 AS value ${base} AND ${INTERACTIONS_ONLY_SQL} GROUP BY 1 ORDER BY 2 DESC`,
+      p,
+    ),
+    db.query(`SELECT context AS key, sum(weight)::float8 AS value ${base} GROUP BY 1 ORDER BY 2 DESC`, p),
+    db.query(
+      `SELECT channel_type AS key, sum(weight)::float8 AS value ${base} AND channel_type IS NOT NULL GROUP BY 1 ORDER BY 2 DESC`,
+      p,
+    ),
+    db.query(
+      `SELECT locale AS key, sum(weight)::float8 AS value ${base} AND locale <> '' GROUP BY 1 ORDER BY 2 DESC LIMIT 15`,
+      p,
+    ),
+    db.query(
+      `SELECT guild_id::text AS key, sum(weight)::float8 AS value ${base} AND guild_id IS NOT NULL GROUP BY 1 ORDER BY 2 DESC LIMIT 10`,
+      p,
+    ),
+    db.query(
+      `SELECT custom_id AS key, kind, sum(weight)::float8 AS value
            FROM interactions WHERE app_id = $1 AND source_command = $2 AND ts >= $3 AND ts < $4 AND kind IN (5, 6)
           GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 25`,
-        p,
-      ),
-      db.query(
-        `WITH shown AS (
+      p,
+    ),
+    db.query(
+      `WITH shown AS (
            SELECT custom_id, sum(weight) AS n ${base} AND response_type = 9 AND custom_id IS NOT NULL GROUP BY 1
          ), submitted AS (
            SELECT custom_id, sum(weight) AS n FROM interactions
@@ -356,9 +377,9 @@ async function command(db: Db, appId: string, spec: Spec<'command'>, now: Date) 
          )
          SELECT shown.custom_id AS "customId", shown.n::float8 AS shown, coalesce(submitted.n, 0)::float8 AS submitted
            FROM shown LEFT JOIN submitted USING (custom_id) ORDER BY 2 DESC LIMIT 20`,
-        p,
-      ),
-    ]);
+      p,
+    ),
+  ]);
   const t = totals.rows[0] as Record<string, unknown>;
   const decode = (field: string, rows: { key: unknown; value: number }[]) =>
     rows.map((r) => ({
@@ -369,6 +390,7 @@ async function command(db: Db, appId: string, spec: Spec<'command'>, now: Date) 
     from: from.toISOString(),
     totals: { ...t, latency: undefined },
     latencyHistogram: t.latency ?? null,
+    kinds: decode('kind', kinds.rows),
     subcommands: subs.rows,
     options: options.rows,
     optionValues: values.rows,
@@ -728,14 +750,17 @@ async function gauge(db: Db, appId: string, spec: Spec<'gauge'>) {
     throw new QueryError('minute series are limited to 2 days');
   }
   // Every shard and process reports its own samples. They are combined minute by minute (added up, or averaged for
-  // a latency) before the minutes are averaged into the interval, so a restarted process is never counted twice.
+  // a latency) before the minutes are averaged into the interval, keeping one process per slot in each minute.
   const additive = ADDITIVE_GAUGES.has(spec.name);
   const shard = spec.perShard ? 'shard' : 'NULL::int';
   const res = await db.query(
     `WITH per_source AS (
-       SELECT date_trunc('minute', ts) AS minute, shard, instance, avg(value) AS value, max(value) AS max
-         FROM gauges WHERE app_id = $1 AND name = $2 AND ts >= $3 AND ts < $4
-        GROUP BY 1, 2, 3
+       SELECT DISTINCT ON (minute, slot) minute, shard, value, max FROM (
+         SELECT date_trunc('minute', ts) AS minute, slot, shard, instance, avg(value) AS value, max(value) AS max,
+                max(ts) AS last
+           FROM (${gaugeSamples('g.app_id = $1 AND g.name = $2 AND g.ts >= $3 AND g.ts < $4')}) samples
+          GROUP BY 1, 2, 3, 4
+       ) s ORDER BY minute, slot, last DESC
      ), per_minute AS (
        SELECT minute, ${shard} AS shard,
               ${additive ? 'sum(value)' : 'avg(value)'} AS value, ${additive ? 'sum(max)' : 'max(max)'} AS max

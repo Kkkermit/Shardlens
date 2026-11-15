@@ -37,10 +37,10 @@ function profileValues(appId: string, info: GuildInfo, joinedAt: Date): unknown[
   ];
 }
 
-const INSERT_PROFILE = `INSERT INTO guilds (app_id, guild_id, name, icon, member_count, size_at_join, large, preferred_locale,
+const PROFILE_INSERT = `INSERT INTO guilds (app_id, guild_id, name, icon, member_count, size_at_join, large, preferred_locale,
   features, premium_tier, boosts, verification_level, nsfw_level, mfa_level, created_at, joined_at, shard,
-  channel_counts, role_count, emoji_count, sticker_count, bot_permissions)
-  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`;
+  channel_counts, role_count, emoji_count, sticker_count, bot_permissions, baseline)
+  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,`;
 
 /** One entry in a server's history. `false` when it is already there (a retried event). */
 export async function recordGuildEvent(
@@ -64,7 +64,7 @@ export async function recordGuildEvent(
 export async function applyGuildJoin(tx: Tx, appId: string, ts: Date, info: GuildInfo, detected: boolean) {
   if (!(await recordGuildEvent(tx, appId, info.guild, ts, GUILD_EVENT.join, detected))) return false;
   await tx.query(
-    `${INSERT_PROFILE}
+    `${PROFILE_INSERT} false)
      ON CONFLICT (app_id, guild_id) DO UPDATE SET ${PROFILE_COLUMNS},
        joined_at = EXCLUDED.joined_at, left_at = NULL, size_at_join = EXCLUDED.size_at_join,
        detected_at_startup = $23, baseline = false, first_command_at = NULL, last_command_at = NULL`,
@@ -73,10 +73,13 @@ export async function applyGuildJoin(tx: Tx, appId: string, ts: Date, info: Guil
   return true;
 }
 
-/** Profile refresh. Creates the row (as an existing install, not a join) if the server isn't known yet. */
+/**
+ * Profile refresh. Creates the row as an existing install if the server isn't known yet: with several shards, a profile
+ * can arrive before the last shard's first snapshot, and a join always comes as a guild_join.
+ */
 export async function applyGuildUpdate(tx: Tx, appId: string, info: GuildInfo) {
   await tx.query(
-    `${INSERT_PROFILE} ON CONFLICT (app_id, guild_id) DO UPDATE SET ${PROFILE_COLUMNS},
+    `${PROFILE_INSERT} true) ON CONFLICT (app_id, guild_id) DO UPDATE SET ${PROFILE_COLUMNS},
        size_at_join = coalesce(guilds.size_at_join, EXCLUDED.size_at_join),
        -- Servers imported by the first snapshot only know the snapshot time; the profile has Discord's join time.
        joined_at = CASE WHEN guilds.baseline THEN EXCLUDED.joined_at ELSE guilds.joined_at END`,

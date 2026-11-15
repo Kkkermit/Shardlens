@@ -37,6 +37,7 @@ interface CommandRow {
   command: string;
   runs: number;
   previousRuns: number;
+  kinds: string[];
 }
 interface GrowthDay {
   joins: number | null;
@@ -130,7 +131,8 @@ async function buildReport(db: Db, row: ReportRow, now: Date): Promise<{ title: 
     lines.push('', '**Top commands**');
     used.slice(0, 5).forEach((c, i) => {
       // Inside a code span, so a name can't add formatting of its own.
-      lines.push(`${i + 1}. \`/${plain(c.command)}\` · ${count.format(Math.round(c.runs))}`);
+      const slash = c.kinds.includes('chat_input') ? '/' : '';
+      lines.push(`${i + 1}. \`${slash}${plain(c.command)}\` · ${count.format(Math.round(c.runs))}`);
     });
   }
 

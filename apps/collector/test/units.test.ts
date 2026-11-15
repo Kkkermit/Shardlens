@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Db } from '../src/db.js';
 import { ENV_VARIABLES, loadConfig } from '../src/env.js';
@@ -32,6 +32,13 @@ function fakeClient(rows: object[] = []) {
 }
 
 describe('loadConfig', () => {
+  it('reads the trusted proxy setting as a hop count, true or false', () => {
+    expect(loadConfig({ ...base, SHARDLENS_TRUST_PROXY: '1' }).trustProxy).toBe(1);
+    expect(loadConfig({ ...base, SHARDLENS_TRUST_PROXY: 'true' }).trustProxy).toBe(true);
+    expect(loadConfig(base).trustProxy).toBe(false);
+    expect(() => loadConfig({ ...base, SHARDLENS_TRUST_PROXY: 'yes' })).toThrow(/SHARDLENS_TRUST_PROXY/);
+  });
+
   it('loads a minimal valid configuration', () => {
     const config = loadConfig(base);
     expect(config.port).toBe(8080);
@@ -118,6 +125,16 @@ describe('docs stay in step with the code', () => {
         parameters.map((parameter) => parameter.name),
         path,
       ).toEqual(['from', 'to', 'before', 'command', 'guild', 'user', 'limit']);
+    }
+  });
+});
+
+describe('image build', () => {
+  it('copies every package manifest before installing, so the build step does not install a second time', () => {
+    const dockerfile = readFileSync(new URL('../Dockerfile', import.meta.url), 'utf8');
+    const beforeInstall = dockerfile.slice(0, dockerfile.indexOf('RUN pnpm install'));
+    for (const dir of readdirSync(new URL('../../../packages/', import.meta.url))) {
+      expect(beforeInstall).toContain(`COPY packages/${dir}/package.json packages/${dir}/`);
     }
   });
 });

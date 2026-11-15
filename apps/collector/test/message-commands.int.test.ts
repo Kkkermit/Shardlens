@@ -70,10 +70,11 @@ describe('message (prefix) commands', () => {
 
   it('counts both surfaces in the command list, with failures and unique users', async () => {
     const res = await query(h.app, { kind: 'commands', range: range() });
-    const ban = (res.json().rows as { command: string; runs: number; errorRate: number; servers: number }[]).find(
-      (r) => r.command === 'ban',
-    );
-    expect(ban).toMatchObject({ runs: 5, servers: 1 });
+    const ban = (
+      res.json().rows as { command: string; runs: number; errorRate: number; servers: number; kinds: string[] }[]
+    ).find((r) => r.command === 'ban');
+    // The kinds tell the dashboard how to write the name: `/ban` and `ban` are both this command.
+    expect(ban).toMatchObject({ runs: 5, servers: 1, kinds: ['chat_input', 'message_command'] });
     // One prefix error and one missed deadline.
     expect(ban?.errorRate).toBeCloseTo(2 / 5);
 
@@ -99,6 +100,10 @@ describe('message (prefix) commands', () => {
 
     const detail = (await query(h.app, { kind: 'command', name: 'ban', range: range() })).json();
     expect(detail.totals).toMatchObject({ runs: 5, deferRate: 0.5, premiumShare: null });
+    expect(detail.kinds).toEqual([
+      { key: 'message_command', value: 3 },
+      { key: 'chat_input', value: 2 },
+    ]);
     expect(detail.locales).toEqual([{ key: 'en-GB', value: 2 }]);
 
     const audience = (await query(h.app, { kind: 'audience', range: range() })).json();

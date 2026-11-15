@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
@@ -540,6 +540,43 @@ describe('rollups, uniques and queries', () => {
     // A latency is not a total: averaged across shards, with the worst as the maximum.
     expect(await points('shard.ping_ms')).toEqual([expect.objectContaining({ value: 65, max: 90 })]);
   });
+
+  it('counts a restarted process once, not alongside the process it replaced', async () => {
+    await h.db.query('DELETE FROM gauges');
+    await h.db.query('DELETE FROM sdk_health');
+    const minute = Math.floor((Date.now() - 120_000) / 60_000) * 60_000;
+    const report = (instance: string, shard: number, ts: number, rssBytes: number, guilds: number) =>
+      ingest(
+        h.app,
+        envelope(
+          [
+            {
+              id: uuidv7(),
+              ts,
+              type: 'gauge_window',
+              gauges: [
+                { name: 'memory.rss_bytes', value: rssBytes },
+                { name: 'shard.guilds', shard, value: guilds },
+              ],
+            },
+            { id: uuidv7(), ts, type: 'sdk_health', queueDepth: 0, dropped: {}, failedFlushes: 0, internalErrors: {} },
+          ],
+          { source: { shards: [shard], instance } },
+        ),
+      );
+    // The process for shard 0 keeps running; the one for shard 1 is restarted within the minute.
+    await report('host:10', 0, minute + 5_000, 50e6, 30);
+    await report('host:11', 1, minute + 5_000, 100e6, 40);
+    await report('host:12', 1, minute + 40_000, 120e6, 41);
+
+    const window = { from: new Date(minute).toISOString(), to: new Date(minute + 60_000).toISOString() };
+    const points = async (name: string) =>
+      (await query(h.app, { kind: 'gauge', name, range: window, interval: 'minute' })).json().points;
+    expect(await points('memory.rss_bytes')).toEqual([expect.objectContaining({ value: 170e6 })]);
+    expect(await points('shard.guilds')).toEqual([expect.objectContaining({ value: 71 })]);
+    const { process } = (await query(h.app, { kind: 'reliability', range: range() })).json();
+    expect(process).toMatchObject({ 'memory.rss_bytes': 170e6 });
+  });
 });
 
 describe('servers and snapshots', () => {
@@ -577,6 +614,42 @@ describe('servers and snapshots', () => {
     ]);
     const bRow = await h.db.query('SELECT left_at FROM guilds WHERE guild_id = $1', [b]);
     expect(bRow.rows[0].left_at).toBeNull();
+  });
+
+  it('keeps a server whose profile arrives before the last shard reports as an existing install', async () => {
+    await h.db.query('DELETE FROM guilds');
+    await h.db.query('DELETE FROM guild_events');
+    await h.db.query('UPDATE apps SET shard_count = NULL, baseline_done = false');
+    const a = snowflakeOnShard(0, 2, 31);
+    const b = snowflakeOnShard(1, 2, 32);
+    const snapshot = (shard: number, guilds: string[]) => ({
+      id: uuidv7(),
+      ts: Date.now(),
+      type: 'guild_snapshot',
+      shards: [shard],
+      shardCount: 2,
+      guilds,
+    });
+    const update = (guild: string) => ({
+      id: uuidv7(),
+      ts: Date.now(),
+      type: 'guild_update',
+      info: guildInfo(guild, { joinedAt: Date.now() - 3 * 86_400_000 }),
+    });
+
+    // A ShardingManager spawns shards seconds apart: shard 0 is ready and sends its profiles before shard 1 starts.
+    await ingest(h.app, envelope([snapshot(0, [a])], { source: { shards: [0], instance: 'host:1' } }));
+    await ingest(h.app, envelope([update(a)], { source: { shards: [0], instance: 'host:1' } }));
+    await ingest(h.app, envelope([snapshot(1, [b]), update(b)], { source: { shards: [1], instance: 'host:2' } }));
+
+    const rows = await h.db.query('SELECT guild_id::text AS id, baseline FROM guilds ORDER BY guild_id');
+    expect(rows.rows).toEqual([
+      { id: a, baseline: true },
+      { id: b, baseline: true },
+    ]);
+    const week = { from: new Date(Date.now() - 7 * 86_400_000).toISOString(), to: new Date().toISOString() };
+    const growth = (await query(h.app, { kind: 'growth', range: week })).json();
+    expect(growth.sizeAtInstall).toEqual([]);
   });
 
   it('waits for every shard of a new layout before diffing (resharding)', async () => {
@@ -775,6 +848,31 @@ describe('abuse limits', () => {
     expect((await get('/healthz', '203.0.113.8')).statusCode).toBe(200);
   });
 
+  it('counts a visitor behind one proxy by the address the proxy saw, not one the visitor wrote', async () => {
+    const behindProxy = await buildServer({
+      db: h.db,
+      live: h.live,
+      keys: new KeyStore(h.db),
+      config: { ...h.config, trustProxy: 1 },
+    });
+    try {
+      // A proxy that adds to X-Forwarded-For: the left-most entries are whatever the visitor sent.
+      const attempt = (i: number) =>
+        behindProxy.inject({
+          method: 'POST',
+          url: '/auth/read-key',
+          remoteAddress: '10.0.0.2',
+          headers: { 'x-forwarded-for': `198.51.100.${i}, 192.0.2.44`, 'x-shardlens-csrf': '1' },
+          payload: { key: `slk_read_${'Z'.repeat(43)}` },
+        });
+      const statuses: number[] = [];
+      for (let i = 0; i < 25; i++) statuses.push((await attempt(i)).statusCode);
+      expect(statuses).toContain(429);
+    } finally {
+      await behindProxy.close();
+    }
+  });
+
   it('keeps URLs, and so anything pasted into one, out of the logs unless it runs at debug level', async () => {
     const logged = async (logLevel: string) => {
       const lines: string[] = [];
@@ -890,6 +988,9 @@ describe('dashboard files', () => {
   it('serves the dashboard for its pages, and 404 for a file that does not exist', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'shardlens-dashboard-'));
     writeFileSync(join(dir, 'index.html'), '<!doctype html><title>Shardlens</title>');
+    mkdirSync(join(dir, 'assets'));
+    writeFileSync(join(dir, 'assets', 'index-abc123.js'), 'console.log(1)');
+    writeFileSync(join(dir, 'favicon.svg'), '<svg/>');
     const app = await buildServer({
       db: h.db,
       live: h.live,
@@ -900,6 +1001,15 @@ describe('dashboard files', () => {
       const page = await app.inject({ method: 'GET', url: '/commands/ticket' });
       expect(page.statusCode).toBe(200);
       expect(page.headers['content-type']).toContain('text/html');
+      // After an upgrade the page must not come from a cache: it names this build's scripts.
+      for (const url of ['/', '/commands/ticket', '/index.html']) {
+        expect((await app.inject({ method: 'GET', url })).headers['cache-control'], url).toBe('no-cache');
+      }
+      const asset = await app.inject({ method: 'GET', url: '/assets/index-abc123.js' });
+      expect(asset.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+      expect((await app.inject({ method: 'GET', url: '/favicon.svg' })).headers['cache-control']).toBe(
+        'public, max-age=3600',
+      );
       // A script from a previous build must not be answered with HTML.
       for (const url of ['/assets/index-old.js', '/favicon.ico', '/v1/no-such-route']) {
         const res = await app.inject({ method: 'GET', url });

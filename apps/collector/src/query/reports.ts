@@ -1,5 +1,6 @@
 import type { Db } from '../db.js';
 import { INTERACTIONS_ONLY_SQL } from '../ingest/codes.js';
+import { gaugeSamples } from './gauge-samples.js';
 import { rawFrom, rollupSource } from './rollup-source.js';
 
 /**
@@ -71,13 +72,14 @@ export async function reliability(db: Db, appId: string, range: { from: string; 
     // still reporting at the newest sample: added up, except event-loop delay, where the worst process is shown.
     db.query(
       `WITH recent AS (
-         SELECT name, instance, shard, value, ts, max(ts) OVER (PARTITION BY name) AS newest FROM gauges
-          WHERE app_id = $1 AND name IN ('eventloop.p99_ms', 'memory.rss_bytes', 'memory.heap_used_bytes', 'cache.users', 'cache.channels')
-            AND ts > now() - interval '1 day'
+         SELECT name, slot, value, ts, max(ts) OVER (PARTITION BY name) AS newest FROM (${gaugeSamples(
+           `g.app_id = $1 AND g.ts > now() - interval '1 day'
+            AND g.name IN ('eventloop.p99_ms', 'memory.rss_bytes', 'memory.heap_used_bytes', 'cache.users', 'cache.channels')`,
+         )}) samples
        ), latest AS (
-         SELECT DISTINCT ON (name, instance, shard) name, value FROM recent
+         SELECT DISTINCT ON (name, slot) name, value FROM recent
           WHERE ts > newest - interval '2 minutes'
-          ORDER BY name, instance, shard, ts DESC
+          ORDER BY name, slot, ts DESC
        )
        SELECT name, (CASE WHEN name = 'eventloop.p99_ms' THEN max(value) ELSE sum(value) END)::float8 AS value
          FROM latest GROUP BY name`,

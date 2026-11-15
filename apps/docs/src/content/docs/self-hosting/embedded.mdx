@@ -64,7 +64,7 @@ folder inherits the permissions of the folder it is in: put it somewhere other u
 | `discordPublicKey` | none                      | Receive [webhook events](../../guides/webhook-events/); needs a public HTTPS URL. |
 | `auditKey`         | none                      | Allows [audit mode](../../guides/audit-mode/). Keep it outside `dataDir`.        |
 | `extraAdmins`      | none                      | Discord user IDs allowed into the dashboard besides the app owner and team.     |
-| `trustProxy`       | `false`                   | `true` behind a reverse proxy, so rate limits see each visitor's address.       |
+| `trustProxy`       | `false`                   | Behind a reverse proxy, the number of proxies in front (`1` for one), so rate limits see each visitor's address. |
 | `sink`             | none                      | Also copy every event into [your own database](../your-own-database/).          |
 | `logLevel`         | `warn`                    | Collector log level, kept quiet so your bot's logs stay readable.               |
 

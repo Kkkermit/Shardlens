@@ -317,7 +317,7 @@ export function ServerPage() {
           <Panel title="Top commands">
             <BarList
               label="Top commands"
-              rows={(commands.data?.rows ?? []).map((c) => ({ key: c.key, name: `/${c.key}`, value: c.count }))}
+              rows={(commands.data?.rows ?? []).map((c) => ({ key: c.key, name: c.key, value: c.count }))}
             />
           </Panel>
           <Panel title="Outcomes">

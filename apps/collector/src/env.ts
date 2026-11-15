@@ -29,7 +29,10 @@ const EnvSchema = z.object({
     .regex(/^slk_read_[\w-]{43}$/, 'must be an slk_read_ key')
     .optional(),
   SHARDLENS_EXTRA_ADMINS: z.string().optional(),
-  SHARDLENS_TRUST_PROXY: z.enum(['true', 'false']).default('false'),
+  SHARDLENS_TRUST_PROXY: z
+    .string()
+    .regex(/^(true|false|[1-9])$/, 'must be false, a number of proxies in front (1 for one), or true')
+    .default('false'),
   SHARDLENS_DEMO: z.enum(['true', 'false']).default('false'),
   CLICKHOUSE_URL: z.url().optional(),
   SHARDLENS_SINK_URL: z
@@ -66,7 +69,11 @@ export interface Config {
   ingestKey: string | undefined;
   readKey: string | undefined;
   extraAdmins: string[];
-  trustProxy: boolean;
+  /**
+   * Proxies in front whose `X-Forwarded-For` entries are believed: a count trusts that many hops from the right, `true`
+   * trusts the whole header (safe only behind a proxy that replaces it).
+   */
+  trustProxy: boolean | number;
   /** Public demo: anyone may view the dashboard read-only. Never for real data. */
   demo: boolean;
   /** Optional ClickHouse analytics store (preview). Never logged: it may contain credentials. */
@@ -119,7 +126,12 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     ingestKey: e.SHARDLENS_INGEST_KEY,
     readKey: e.SHARDLENS_READ_KEY,
     extraAdmins,
-    trustProxy: e.SHARDLENS_TRUST_PROXY === 'true',
+    trustProxy:
+      e.SHARDLENS_TRUST_PROXY === 'true'
+        ? true
+        : e.SHARDLENS_TRUST_PROXY === 'false'
+          ? false
+          : Number(e.SHARDLENS_TRUST_PROXY),
     demo: e.SHARDLENS_DEMO === 'true',
     clickhouseUrl: e.CLICKHOUSE_URL,
     sink: e.SHARDLENS_SINK_URL

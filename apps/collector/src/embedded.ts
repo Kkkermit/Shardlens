@@ -32,8 +32,11 @@ export interface EmbeddedCollectorOptions {
   extraAdmins?: readonly string[] | undefined;
   /** 32 random bytes, base64, to allow audit mode. Keep it outside `dataDir` (and back it up). */
   auditKey?: string | undefined;
-  /** `true` behind a reverse proxy. Default `false`. */
-  trustProxy?: boolean | undefined;
+  /**
+   * Behind a reverse proxy, the number of proxies in front (`1` for one), so rate limits see each visitor's address.
+   * Default `false`.
+   */
+  trustProxy?: boolean | number | undefined;
   /** Collector log level. Default `warn`, so your bot's logs stay quiet. */
   logLevel?: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent' | undefined;
   /**
