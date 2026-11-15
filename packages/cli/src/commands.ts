@@ -141,6 +141,8 @@ interface PrivacyOptions {
   optionValues?: string[];
   webhookEvents?: boolean;
   retentionDays?: number;
+  /** Audit retention (`auditRetentionDays` in the settings), default 30. */
+  auditRetentionDays?: number;
 }
 
 /** A plain-language paragraph for the bot's privacy policy, matching the configuration. Not legal advice. */
@@ -153,7 +155,7 @@ export function privacyParagraph(o: PrivacyOptions): string {
       ? `For the options ${o.optionValues.map((v) => `"${v}"`).join(', ')} it also records the values you choose; other option values are not recorded.`
       : 'It records which command options you use, but not the values you enter.',
     o.audit
-      ? `For support and abuse prevention it also records your Discord user ID${o.idsOnly ? '' : ', username and avatar'} with each command, encrypted, and keeps this for up to 30 days. Access to this information is restricted to the bot's team and every access is logged.`
+      ? `For support and abuse prevention it also records your Discord user ID${o.idsOnly ? '' : ', username and avatar'} with each command, encrypted, and keeps this for up to ${o.auditRetentionDays ?? 30} days. Access to this information is restricted to the bot's team and every access is logged.`
       : 'Your Discord user ID is replaced inside the bot with a pseudonymous code that changes every month; after the month ends the code can no longer be linked to you.',
     o.webhookEvents
       ? 'When you add or remove the bot, Discord tells us that it happened; your user ID is pseudonymised in the same way.'
@@ -239,6 +241,11 @@ export async function doctor(opts: {
     url = new URL(opts.url);
   } catch {
     checks.push({ name: 'Collector URL', ok: false, detail: 'not a valid URL' });
+    return checks;
+  }
+  if (url.username || url.password) {
+    // The SDK refuses such a URL, and printing it would show the password.
+    checks.push({ name: 'Collector URL', ok: false, detail: 'must not contain a user name or password' });
     return checks;
   }
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);

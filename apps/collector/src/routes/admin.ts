@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { isDiscordWebhookUrl, maskStoredWebhook, postToDiscordWebhook } from '../discord-webhook.js';
 import { UNREADABLE_WEBHOOK } from '../jobs/alerts.js';
-import { TimeZone } from '../query/spec.js';
+import { TimeZoneName } from '../query/spec.js';
 import { auditCipher } from '../security/crypto.js';
 import { newApiKey } from '../security/keys.js';
 import type { Deps } from '../server.js';
@@ -13,15 +13,18 @@ const BADGES = ['servers', 'users-monthly', 'commands-daily'] as const;
 
 export const SettingsPatch = z
   .object({
-    timezone: TimeZone.optional(),
+    // Not `TimeZone.optional()`: its default would reset the zone to UTC on every save that leaves it out.
+    timezone: TimeZoneName.optional(),
     rawRetentionDays: z.number().int().min(7).max(90).optional(),
     /** Hard maximum 90 days: larger values are rejected, not clamped. */
     auditRetentionDays: z.number().int().min(1).max(90).optional(),
     mode: z.enum(['privacy', 'audit']).optional(),
     saltPeriod: z.enum(['day', 'week', 'month']).optional(),
+    // The Servers filter compares it with each server's bits as a PostgreSQL bigint.
     requiredPermissions: z
       .string()
-      .regex(/^\d{1,20}$/)
+      .regex(/^\d{1,19}$/)
+      .refine((bits) => BigInt(bits) < 2n ** 63n, 'over 63 bits')
       .nullable()
       .optional(),
     skuPrices: z
@@ -118,6 +121,15 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
         .code(400)
         .send({ error: 'audit_key_missing', message: 'Set SHARDLENS_AUDIT_KEY on the collector first.' });
     }
+    // Every chart query converts with this zone, so PostgreSQL must know it too, not just this runtime.
+    if (patch.timezone !== undefined) {
+      const known = await deps.db.query('SELECT 1 FROM pg_timezone_names WHERE name = $1', [patch.timezone]);
+      if (!known.rowCount) {
+        return reply
+          .code(400)
+          .send({ error: 'invalid_request', issues: [{ path: ['timezone'], message: 'unknown time zone' }] });
+      }
+    }
     const columns: Record<string, unknown> = {};
     if (patch.timezone !== undefined) columns.timezone = patch.timezone;
     if (patch.rawRetentionDays !== undefined) columns.raw_retention_days = patch.rawRetentionDays;
@@ -188,6 +200,8 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
     );
     deps.keys.clear();
     if (!res.rowCount) return reply.code(404).send({ error: 'not_found' });
+    // "Anything using it stops working immediately": that includes dashboards signed in with it.
+    await deps.db.query('DELETE FROM sessions WHERE key_id = $1', [id]);
     await adminAudit(deps, admin.appId, admin.userId, 'key_revoke', { id });
     return { ok: true };
   });

@@ -32,6 +32,16 @@ export async function migrate(databaseUrl: string): Promise<string[]> {
   }
 }
 
+/**
+ * PostgreSQL refused the data itself: a value out of range or text it can't store (class 22), a CHECK it fails, or one
+ * statement touching a row twice. Retrying the same input can't help.
+ */
+export function isRefusedInput(error: unknown): error is { code: string } {
+  const e = error as { code?: unknown; severity?: unknown } | null;
+  if (typeof e?.code !== 'string' || typeof e.severity !== 'string') return false;
+  return /^22[0-9A-Z]{3}$/.test(e.code) || e.code === '23514' || e.code === '21000';
+}
+
 export async function transaction<T>(db: Db, fn: (tx: Tx) => Promise<T>): Promise<T> {
   const client = await db.connect();
   try {

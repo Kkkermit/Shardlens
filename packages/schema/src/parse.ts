@@ -43,6 +43,28 @@ export function containsNul(value: unknown): boolean {
   return false;
 }
 
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+/**
+ * Replaces lone UTF-16 surrogates (half an emoji, left by a cut that split a pair) with U+FFFD, in place: PostgreSQL's
+ * JSON columns refuse them, and one would fail the batch it came in. Validated events are shallow, so recursion is safe.
+ */
+function repairSurrogates(value: unknown): unknown {
+  if (typeof value === 'string') return value.replace(LONE_SURROGATE, '\uFFFD');
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) value[i] = repairSurrogates(value[i]);
+  } else if (typeof value === 'object' && value !== null) {
+    const record = value as Record<string, unknown>;
+    for (const key of Object.keys(record)) {
+      const repaired = repairSurrogates(key) as string;
+      const inner = repairSurrogates(record[key]);
+      if (repaired !== key) delete record[key];
+      record[repaired] = inner;
+    }
+  }
+  return value;
+}
+
 /**
  * Validates a batch the way the collector's ingest route does: an invalid envelope rejects the whole batch,
  * while an invalid event (or one breaking the privacy rule) drops only that event.
@@ -70,9 +92,9 @@ export function parseBatch(input: unknown): ParseBatchResult {
       errors.push({ index, reason: violation });
       return;
     }
-    events.push(parsed.data);
+    events.push(repairSurrogates(parsed.data) as Event);
   });
-  return { ok: true, envelope: header, events, errors };
+  return { ok: true, envelope: repairSurrogates(header) as typeof header, events, errors };
 }
 
 /** Major wire versions the current collector accepts (current and previous). */

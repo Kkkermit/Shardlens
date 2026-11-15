@@ -307,6 +307,117 @@ describe('ingest', () => {
   });
 });
 
+describe('ingest edge cases', () => {
+  // Two days back, outside the ranges the rollup tests below count.
+  const earlier = () => Date.now() - 2 * 86_400_000;
+  const cleanUp = () => h.db.query("DELETE FROM interactions WHERE command LIKE 'edge_%'");
+
+  it('stores the rest of a batch when the database refuses one of its values', async () => {
+    const { hasher, period } = await sdkHasher(h.app);
+    const user = (await hasher.hash('700000000000000111', period))!;
+    const res = await ingest(
+      h.app,
+      envelope([
+        interaction(user, { command: 'edge_kept', ts: earlier() }),
+        // Wider than its column (smallint).
+        interaction(user, { command: 'edge_refused', ts: earlier(), channelType: 40_000 }),
+      ]),
+    );
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toMatchObject({ accepted: 1, rejected: [{ index: 1, reason: 'refused_by_database' }] });
+    const rows = await h.db.query("SELECT command FROM interactions WHERE command LIKE 'edge_%'");
+    expect(rows.rows).toEqual([{ command: 'edge_kept' }]);
+    await cleanUp();
+  });
+
+  it('keeps an option value cut through an emoji, with the broken half replaced', async () => {
+    const { hasher, period } = await sdkHasher(h.app);
+    const user = (await hasher.hash('700000000000000112', period))!;
+    const res = await ingest(
+      h.app,
+      envelope([
+        interaction(user, { command: 'edge_emoji', ts: earlier(), optionValues: { category: 'pizza \ud83c' } }),
+      ]),
+    );
+    expect(res.json(), res.body).toMatchObject({ accepted: 1, rejected: [] });
+    const row = await h.db.query(
+      "SELECT option_values->>'category' AS v FROM interactions WHERE command = 'edge_emoji'",
+    );
+    expect(row.rows[0].v).toBe('pizza \ufffd');
+    await cleanUp();
+  });
+
+  it('stores a retried batch once when the bot clock is minutes off', async () => {
+    const { hasher, period } = await sdkHasher(h.app);
+    const user = (await hasher.hash('700000000000000113', period))!;
+    const event = interaction(user, { command: 'edge_skewed', ts: earlier() });
+    const sentAt = Date.now() - 10 * 60_000;
+    const send = (jitter: number) =>
+      ingest(
+        h.app,
+        envelope([event], {
+          sentAt: new Date(sentAt + jitter).toISOString(),
+          source: { shards: [0], instance: 'skewed:1' },
+        }),
+      );
+    expect((await send(0)).json()).toMatchObject({ accepted: 1 });
+    // The retry is sent a little later: network delay makes the measured skew differ by milliseconds.
+    expect((await send(7)).json()).toMatchObject({ accepted: 0, duplicates: 1 });
+    const rows = await h.db.query("SELECT count(*)::int AS n FROM interactions WHERE command = 'edge_skewed'");
+    expect(rows.rows[0].n).toBe(1);
+    await cleanUp();
+  });
+
+  it('accepts a command list naming one command twice', async () => {
+    const command = { id: '1300000000000000001', name: 'edge', type: 1, subcommands: [] };
+    const res = await ingest(
+      h.app,
+      envelope([
+        { id: uuidv7(), ts: Date.now(), type: 'command_registry', commands: [command, { ...command, name: 'edge2' }] },
+      ]),
+    );
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toMatchObject({ accepted: 1, rejected: [] });
+    await h.db.query('DELETE FROM command_registry WHERE command_id = $1', [command.id]);
+  });
+
+  it('keeps two entitlements bought in the same millisecond, and counts a retried event as a duplicate', async () => {
+    const { hasher, period } = await sdkHasher(h.app);
+    const ts = earlier();
+    const entitlement = async (userId: string) => ({
+      id: uuidv7(ts),
+      ts,
+      type: 'entitlement',
+      action: 'create',
+      sku: '1300000000000000002',
+      entitlementType: 8,
+      owner: 'user',
+      user: (await hasher.hash(userId, period))!,
+      startsAt: null,
+      endsAt: null,
+    });
+    const batch = envelope([await entitlement('700000000000000114'), await entitlement('700000000000000115')]);
+    expect((await ingest(h.app, batch)).json()).toMatchObject({ accepted: 2, duplicates: 0 });
+    expect((await ingest(h.app, batch)).json()).toMatchObject({ accepted: 0, duplicates: 2 });
+    const rows = await h.db.query('SELECT count(*)::int AS n FROM entitlements WHERE sku_id = 1300000000000000002');
+    expect(rows.rows[0].n).toBe(2);
+  });
+
+  it('marks the minute of a late server outage for the rollups to recount', async () => {
+    const ts = Date.now() - 20 * 60_000;
+    const res = await ingest(
+      h.app,
+      envelope([
+        { id: uuidv7(ts), ts, type: 'guild_availability', guild: '1300000000000000003', available: false, shard: 0 },
+      ]),
+    );
+    expect(res.json()).toMatchObject({ accepted: 1 });
+    const minute = new Date(Math.floor(ts / 60_000) * 60_000);
+    const dirty = await h.db.query('SELECT count(*)::int AS n FROM dirty_buckets WHERE bucket = $1', [minute]);
+    expect(dirty.rows[0].n).toBe(1);
+  });
+});
+
 describe('rollups, uniques and queries', () => {
   beforeAll(async () => {
     const { hasher, period } = await sdkHasher(h.app);
@@ -335,6 +446,43 @@ describe('rollups, uniques and queries', () => {
   const range = () => ({
     from: new Date(Date.now() - 86_400_000).toISOString(),
     to: new Date(Date.now() + 3_600_000).toISOString(),
+  });
+
+  it('shows hourly buckets at their real start in a time zone half an hour off UTC', async () => {
+    const res = await query(h.app, {
+      kind: 'series',
+      metric: 'interactions',
+      range: range(),
+      interval: 'hour',
+      timezone: 'Asia/Kolkata',
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const points = res.json().points as { t: string }[];
+    expect(points.length).toBeGreaterThan(0);
+    // UTC hours start at half past in India (UTC+5:30), so the bucket holding 11:14 is 10:30–11:30, not 10:00.
+    for (const point of points) expect(point.t).toMatch(/:30:00$/);
+  });
+
+  it('labels days older than 13 months with their UTC date, the only days kept that long', async () => {
+    const day = new Date(Date.now() - 400 * 86_400_000).toISOString().slice(0, 10);
+    const dims = { kind: 1, command: 'old_day', sub: null, outcome: 0 };
+    await h.db.query(
+      `INSERT INTO rollup_1d (app_id, bucket, metric, dims_hash, dims, count, sum)
+       VALUES ($1, $2, 'interactions', sha256(convert_to($3::jsonb::text, 'UTF8')), $3::jsonb, 7, 0)`,
+      [APP_ID, `${day}T00:00:00Z`, JSON.stringify(dims)],
+    );
+    const from = new Date(Date.parse(`${day}T00:00:00Z`) - 2 * 86_400_000).toISOString();
+    const to = new Date(Date.parse(`${day}T00:00:00Z`) + 2 * 86_400_000).toISOString();
+    const res = await query(h.app, {
+      kind: 'series',
+      metric: 'interactions',
+      range: { from, to },
+      interval: 'day',
+      timezone: 'America/Los_Angeles',
+      filters: [{ field: 'command', value: 'old_day' }],
+    });
+    expect(res.json().points).toEqual([expect.objectContaining({ t: `${day}T00:00:00`, value: 7 })]);
+    await h.db.query("DELETE FROM rollup_1d WHERE dims->>'command' = 'old_day'");
   });
 
   it('counts every interaction exactly once in rollups', async () => {
@@ -642,11 +790,14 @@ describe('servers and snapshots', () => {
     await ingest(h.app, envelope([update(a)], { source: { shards: [0], instance: 'host:1' } }));
     await ingest(h.app, envelope([snapshot(1, [b]), update(b)], { source: { shards: [1], instance: 'host:2' } }));
 
-    const rows = await h.db.query('SELECT guild_id::text AS id, baseline FROM guilds ORDER BY guild_id');
-    expect(rows.rows).toEqual([
-      { id: a, baseline: true },
-      { id: b, baseline: true },
-    ]);
+    const rows = await h.db.query('SELECT guild_id::text AS id, baseline FROM guilds');
+    expect(rows.rows).toHaveLength(2);
+    expect(rows.rows).toEqual(
+      expect.arrayContaining([
+        { id: a, baseline: true },
+        { id: b, baseline: true },
+      ]),
+    );
     const week = { from: new Date(Date.now() - 7 * 86_400_000).toISOString(), to: new Date().toISOString() };
     const growth = (await query(h.app, { kind: 'growth', range: week })).json();
     expect(growth.sizeAtInstall).toEqual([]);
@@ -663,6 +814,64 @@ describe('servers and snapshots', () => {
     expect(after.rows[0].n).toBe(before.rows[0].n);
     const pending = await h.db.query('SELECT count(*)::int AS n FROM snapshot_pending');
     expect(pending.rows[0].n).toBe(1);
+  });
+
+  it("finishes a new shard layout without undoing the joins and leaves since each shard's snapshot", async () => {
+    await h.db.query('DELETE FROM guilds');
+    await h.db.query('DELETE FROM guild_events');
+    await h.db.query('DELETE FROM snapshot_pending');
+    await h.db.query('UPDATE apps SET shard_count = 2, baseline_done = true');
+    const leaving = snowflakeOnShard(0, 4, 41);
+    const joining = snowflakeOnShard(0, 4, 42);
+    await h.db.query('INSERT INTO guilds (app_id, guild_id, joined_at) VALUES ($1, $2, now())', [APP_ID, leaving]);
+    const at = Date.now() - 60_000;
+    const snapshot = (shard: number, guilds: string[], ts: number) => ({
+      id: uuidv7(ts),
+      ts,
+      type: 'guild_snapshot',
+      shards: [shard],
+      shardCount: 4,
+      guilds,
+    });
+
+    // Shard 0 of the new layout reports first; then a server joins and another leaves before the last shard reports.
+    await ingest(h.app, envelope([snapshot(0, [leaving], at)]));
+    await ingest(
+      h.app,
+      envelope([
+        {
+          id: uuidv7(at + 10_000),
+          ts: at + 10_000,
+          type: 'guild_join',
+          info: guildInfo(joining),
+          detectedAtStartup: false,
+        },
+        { id: uuidv7(at + 20_000), ts: at + 20_000, type: 'guild_leave', guild: leaving, detectedAtStartup: false },
+      ]),
+    );
+    await ingest(h.app, envelope([1, 2, 3].map((shard) => snapshot(shard, [], at + 30_000))));
+
+    const rows = await h.db.query('SELECT guild_id::text AS id, left_at IS NULL AS active FROM guilds');
+    expect(rows.rows).toHaveLength(2);
+    expect(rows.rows).toEqual(
+      expect.arrayContaining([
+        { id: leaving, active: false },
+        { id: joining, active: true },
+      ]),
+    );
+    const detected = await h.db.query('SELECT count(*)::int AS n FROM guild_events WHERE detected_at_startup');
+    expect(detected.rows[0].n).toBe(0);
+  });
+
+  it('ignores a snapshot of a shard outside the layout instead of counting it toward a new one', async () => {
+    await h.db.query('DELETE FROM snapshot_pending');
+    const res = await ingest(
+      h.app,
+      envelope([{ id: uuidv7(), ts: Date.now(), type: 'guild_snapshot', shards: [7], shardCount: 4, guilds: [] }]),
+    );
+    expect(res.json()).toMatchObject({ accepted: 1 });
+    const pending = await h.db.query('SELECT count(*)::int AS n FROM snapshot_pending');
+    expect(pending.rows[0].n).toBe(0);
   });
 
   it('records joins with a full profile and keeps Discord text as data', async () => {
@@ -1001,6 +1210,12 @@ describe('dashboard files', () => {
       const page = await app.inject({ method: 'GET', url: '/commands/ticket' });
       expect(page.statusCode).toBe(200);
       expect(page.headers['content-type']).toContain('text/html');
+      // A command named with a dot is a page, not a file, when the link is opened or the page reloaded.
+      for (const url of ['/commands/say.hello', '/commands/Info%20v2.0', '/commands/stats.json']) {
+        const res = await app.inject({ method: 'GET', url });
+        expect(res.statusCode, url).toBe(200);
+        expect(res.headers['content-type'], url).toContain('text/html');
+      }
       // After an upgrade the page must not come from a cache: it names this build's scripts.
       for (const url of ['/', '/commands/ticket', '/index.html']) {
         expect((await app.inject({ method: 'GET', url })).headers['cache-control'], url).toBe('no-cache');

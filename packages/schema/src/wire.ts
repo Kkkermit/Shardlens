@@ -16,6 +16,12 @@ export const WIRE_VERSION = 1;
  */
 export const Snowflake = z.string().regex(/^(?:\d{17,18}|[1-8]\d{18}|9[01]\d{17})$/);
 
+/** A Discord permission bitfield as a decimal string. Discord's are 64 bits; the collector stores up to 20 digits. */
+const PermissionBits = z
+  .string()
+  .regex(/^\d{1,20}$/)
+  .refine((bits) => BigInt(bits) < 2n ** 64n, 'over 64 bits');
+
 /**
  * Pseudonymised user: `h1:<salt period>:<32 hex>`, where the hex is the first 16 bytes of
  * HMAC-SHA-256(period salt, user ID). Raw snowflakes are rejected here on purpose.
@@ -125,7 +131,7 @@ export const GuildInfo = z.object({
   emojiCount: z.number().int().nonnegative(),
   stickerCount: z.number().int().nonnegative(),
   /** Bot permission bitfield as a decimal string. */
-  botPermissions: z.string().regex(/^\d+$/),
+  botPermissions: PermissionBits,
 });
 
 export const GuildJoin = Base.extend({
@@ -185,7 +191,8 @@ export const ShardState = Base.extend({
 
 /** Number of latency histogram buckets: log scale, 1 ms .. 60 s. Must match `@shardlens/core` and SQL. */
 export const HISTOGRAM_BUCKETS = 40;
-export const Histogram = z.array(z.number().int().nonnegative()).length(HISTOGRAM_BUCKETS);
+// A bucket counts one window's requests: a billion is far beyond any bot, and keeps hourly sums in range.
+export const Histogram = z.array(z.number().int().nonnegative().max(1e9)).length(HISTOGRAM_BUCKETS);
 
 export const RestWindow = Base.extend({
   type: z.literal('rest_window'),
@@ -218,8 +225,9 @@ export const RateLimit = Base.extend({
   route: z.string().max(200),
   method: z.string().max(8),
   limit: z.number().int(),
-  retryAfter: z.number().nonnegative(),
-  sublimitTimeout: z.number().nonnegative(),
+  /** Milliseconds. Capped at 30 days, so rollup sums can't overflow. */
+  retryAfter: z.number().nonnegative().max(2_592_000_000),
+  sublimitTimeout: z.number().nonnegative().max(2_592_000_000),
 });
 
 export const InvalidRequestWarning = Base.extend({

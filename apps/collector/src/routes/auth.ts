@@ -114,7 +114,12 @@ export async function authRoutes(app: FastifyInstance, deps: Deps): Promise<void
     const key = (req.body as { key?: unknown } | undefined)?.key;
     const auth = await deps.keys.verify(typeof key === 'string' ? key.trim() : undefined, 'read');
     if (!auth) return reply.code(401).send({ error: 'invalid_key' });
-    await createSession(deps.db, reply, { appId: auth.appId, userId: null, method: 'read_key' }, secure);
+    await createSession(
+      deps.db,
+      reply,
+      { appId: auth.appId, userId: null, method: 'read_key', keyId: auth.keyId },
+      secure,
+    );
     await deps.db.query("INSERT INTO admin_audit (app_id, action) VALUES ($1, 'login_read_key')", [auth.appId]);
     return { ok: true };
   });

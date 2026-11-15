@@ -46,12 +46,28 @@ const Dimension = z.enum([
 
 const Iso = z.iso.datetime({ offset: true });
 
-const timeZones = new Set<string>(['UTC', ...Intl.supportedValuesOf('timeZone')]);
-export const TimeZone = z
-  .string()
-  .max(64)
-  .refine((tz) => timeZones.has(tz), 'unknown time zone')
-  .default('UTC');
+const knownZones = new Map<string, boolean>();
+/**
+ * Any IANA name the runtime knows, aliases included (`Asia/Kolkata` and `Asia/Calcutta`): browsers list different
+ * spellings of the same zone, and `Intl.supportedValuesOf` gives only one of them.
+ */
+function isTimeZone(tz: string): boolean {
+  let known = knownZones.get(tz);
+  if (known === undefined) {
+    try {
+      new Intl.DateTimeFormat('en', { timeZone: tz });
+      known = /^[A-Za-z][\w+-]*(\/[A-Za-z0-9][\w+-]*)*$/.test(tz);
+    } catch {
+      known = false;
+    }
+    if (knownZones.size < 2_000) knownZones.set(tz, known);
+  }
+  return known;
+}
+
+/** A time zone name with no default, for a settings patch that may leave it out. */
+export const TimeZoneName = z.string().max(64).refine(isTimeZone, 'unknown time zone');
+export const TimeZone = TimeZoneName.default('UTC');
 
 const Range = z
   .object({ from: Iso, to: Iso })

@@ -123,6 +123,16 @@ function resolveMetric(spec: {
   return metric;
 }
 
+/**
+ * How stored buckets become chart points: the unit to truncate to, in which time zone. Hourly buckets start on UTC
+ * hours, which in India or Newfoundland fall at half past, so they keep their real start (10:30) instead of going under
+ * the hour before. Daily buckets, all that is kept after 13 months, are UTC days and keep their UTC date.
+ */
+function bucketing(table: string, interval: string, timezone: string): [string, string] {
+  if (table === 'rollup_1d') return [interval, 'UTC'];
+  return [interval === 'hour' ? 'minute' : interval, timezone];
+}
+
 async function series(db: Db, appId: string, spec: Spec<'series'>, now: Date, analytics?: ClickHouseStore) {
   const asked = new Date(spec.range.from);
   const to = new Date(spec.range.to);
@@ -144,7 +154,8 @@ async function series(db: Db, appId: string, spec: Spec<'series'>, now: Date, an
     };
   }
   const { table, from } = rollupSource(asked, now, spec.interval === 'minute');
-  const params: unknown[] = [appId, metric, from, to, spec.interval, spec.timezone, spec.limit];
+  const [unit, zone] = bucketing(table, spec.interval, spec.timezone);
+  const params: unknown[] = [appId, metric, from, to, unit, zone, spec.limit];
   let keyExpr = "''";
   if (spec.groupBy) {
     params.push(spec.groupBy);
@@ -216,7 +227,8 @@ async function heatmap(db: Db, appId: string, spec: Spec<'heatmap'>, now: Date, 
   const metric = resolveMetric(spec);
   const fromAnalytics = await analytics?.heatmap(appId, { ...spec, metric, from: asked, to }, encodeValue);
   if (fromAnalytics) return { timezone: spec.timezone, source: 'clickhouse', cells: fromAnalytics };
-  const { table, from } = rollupSource(asked, now);
+  // Hours of the day need hourly buckets: they cover 13 months, and daily ones would put everything at midnight.
+  const { table, from } = rollupSource(new Date(Math.max(asked.getTime(), now.getTime() - 395 * DAY)), now);
   const params: unknown[] = [appId, metric, from, to, spec.timezone];
   const where = filterSql(spec.filters, params);
   const res = await db.query<{ weekday: number; hour: number; value: number }>(
@@ -445,7 +457,7 @@ async function servers(db: Db, appId: string, spec: Spec<'servers'>) {
   if (spec.inactive) where.push("(g.last_command_at IS NULL OR g.last_command_at < now() - interval '30 days')");
   if (spec.missingPermissions) {
     where.push(`EXISTS (SELECT 1 FROM settings s WHERE s.app_id = g.app_id AND s.key = 'required_permissions'
-      AND (g.bot_permissions::bigint & 8) = 0
+      AND g.bot_permissions < 9223372036854775808 AND (g.bot_permissions::bigint & 8) = 0
       AND (g.bot_permissions::bigint & (s.value #>> '{}')::bigint) <> (s.value #>> '{}')::bigint)`);
   }
   const order = `${SERVER_SORT[spec.sort]} ${spec.order === 'asc' ? 'ASC' : 'DESC'} NULLS LAST, g.guild_id`;

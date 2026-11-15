@@ -11,6 +11,7 @@ Commands
   keys      Print a new API key            --scope ingest|read (default ingest)
   privacy   Print a privacy-policy paragraph matching your setup
             [--audit] [--ids-only] [--option-values a,b] [--webhook-events] [--retention <days>]
+            [--audit-retention <days>]
   doctor    Check Node, discord.js, the collector and your key
             [--url <collector>] [--key <slk_ingest_…>]  (or SHARDLENS_URL / SHARDLENS_INGEST_KEY, also read
             from ./.env)
@@ -34,6 +35,7 @@ export async function run(argv: string[]): Promise<number> {
       'option-values': { type: 'string' },
       'webhook-events': { type: 'boolean' },
       retention: { type: 'string' },
+      'audit-retention': { type: 'string' },
       url: { type: 'string' },
       key: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
@@ -66,7 +68,7 @@ export async function run(argv: string[]): Promise<number> {
       console.log('Your bot needs the two settings in bot.env: copy them to where the bot runs, then delete the file.');
       console.log('The dashboard read key is SHARDLENS_READ_KEY in .env.');
       console.log(
-        `Next: point DNS for ${values.domain} at this server, then run: cd ${result.dir} && docker compose up -d`,
+        `Next: point DNS for ${values.domain} at this server, then run: cd ${shellQuote(result.dir)} && docker compose up -d`,
       );
       return 0;
     }
@@ -81,9 +83,15 @@ export async function run(argv: string[]): Promise<number> {
       return 0;
     }
     case 'privacy': {
-      const retention = values.retention === undefined ? undefined : Number(values.retention);
-      if (retention !== undefined && !(Number.isInteger(retention) && retention > 0)) {
-        console.error('--retention must be a whole number of days');
+      // The same limits the collector's settings allow, so the paragraph can't promise what it can't keep.
+      const retention = days(values.retention, 7, 90);
+      const auditRetention = days(values['audit-retention'], 1, 90);
+      if (retention === null) {
+        console.error('--retention must be a whole number of days from 7 to 90');
+        return 2;
+      }
+      if (auditRetention === null) {
+        console.error('--audit-retention must be a whole number of days from 1 to 90');
         return 2;
       }
       console.log(
@@ -97,6 +105,7 @@ export async function run(argv: string[]): Promise<number> {
               .filter(Boolean) ?? [],
           webhookEvents: values['webhook-events'] ?? false,
           ...(retention !== undefined ? { retentionDays: retention } : {}),
+          ...(auditRetention !== undefined ? { auditRetentionDays: auditRetention } : {}),
         }),
       );
       console.error('\nThis is a starting point, not legal advice: check it against your own bot and obligations.');
@@ -117,4 +126,16 @@ export async function run(argv: string[]): Promise<number> {
       console.log(HELP);
       return 2;
   }
+}
+
+/** A whole number of days within the range, `undefined` when not given, `null` when invalid. */
+function days(value: string | undefined, min: number, max: number): number | null | undefined {
+  if (value === undefined) return undefined;
+  const n = /^\d+$/.test(value) ? Number(value) : Number.NaN;
+  return n >= min && n <= max ? n : null;
+}
+
+/** A path as one shell word, so a pasted command works for a folder with spaces. */
+function shellQuote(path: string): string {
+  return /^[\w@%+=:,./-]+$/.test(path) ? path : `'${path.replaceAll("'", "'\\''")}'`;
 }

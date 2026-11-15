@@ -75,6 +75,10 @@ There is no `groupBy: 'user'` and no per-user query: that is by design, in every
 | `guild.joins`, `guild.leaves`, `guild.unavailable` | `detected`                                                       |
 | `custom` (with `name`)                      | None: use `eventProps` for an event's properties                        |
 
+Rollups are kept in UTC: minutes for 14 days, hours for 13 months, then days. In a time zone that isn't a whole
+number of hours from UTC (India, Newfoundland, Nepal, parts of Australia), hourly points start at half past (10:30) and
+the heatmap's 10:00 column counts from 10:30 to 11:30. Days older than 13 months are UTC days.
+
 Per-server numbers are kept for fewer dimensions on purpose, so the store doesn't grow with commands × servers ×
 everything else.
 

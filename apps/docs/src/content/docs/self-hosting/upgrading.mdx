@@ -22,7 +22,9 @@ import { Steps } from '@astrojs/starlight/components';
 </Steps>
 
 The collector applies database migrations when it starts, under an advisory lock, so several collectors can be
-upgraded at once. Migrations only move forward. To roll back, restore the backup you took and run the previous image.
+upgraded at once. Migrations only move forward. To roll back, restore the backup you took and run the previous image
+with the settings it understands: a 1.0 collector refuses `SHARDLENS_TRUST_PROXY` set to a number of proxies (`1`,
+which the Compose and Render templates use from 1.1), so set it back to `true` there.
 
 ## Upgrading the SDK
 

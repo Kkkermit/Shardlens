@@ -95,6 +95,31 @@ describe('init', () => {
   });
 });
 
+describe('init output', () => {
+  it('quotes a folder with spaces in the command to paste', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'shardlens-init-'));
+    const dir = join(parent, 'my bot');
+    const out = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const code = await run([
+        'init',
+        '--dir',
+        dir,
+        '--domain',
+        'stats.example.com',
+        '--app-id',
+        '1234567890123456789',
+      ]);
+      expect(code).toBe(0);
+      const next = out.mock.calls.map((c) => String(c[0])).find((line) => line.startsWith('Next:'));
+      expect(next).toContain(`cd '${dir}' && docker compose up -d`);
+    } finally {
+      out.mockRestore();
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('privacy', () => {
   it('describes privacy mode by default and audit mode only when asked', () => {
     const privacy = privacyParagraph({});
@@ -109,13 +134,16 @@ describe('privacy', () => {
   it('refuses a retention that is not a whole number of days rather than printing the default', async () => {
     const out = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    for (const retention of ['abc', '0', '-5', '7.5']) {
+    for (const retention of ['abc', '0', '-5', '7.5', '400', '1e3', '6']) {
       expect(await run(['privacy', `--retention=${retention}`]), retention).toBe(2);
     }
+    expect(await run(['privacy', '--audit', '--audit-retention=91'])).toBe(2);
     expect(out).not.toHaveBeenCalled();
     expect(err.mock.calls[0]?.[0]).toContain('--retention');
     expect(await run(['privacy', '--retention', '60'])).toBe(0);
     expect(out.mock.calls[0]?.[0]).toContain('kept for 60 days');
+    expect(await run(['privacy', '--audit', '--audit-retention', '90'])).toBe(0);
+    expect(out.mock.calls[1]?.[0]).toContain('for up to 90 days');
   });
 });
 
@@ -146,6 +174,18 @@ describe('doctor', () => {
     const checks = await doctor({ url: 'https://stats.example.com', key: `slk_ingest_${'A'.repeat(43)}`, fetchImpl });
     expect(checks.filter((c) => !c.ok && !c.warnOnly)).toEqual([]);
     expect(urls.every((u) => u.startsWith('https://stats.example.com/'))).toBe(true);
+  });
+
+  it('refuses a collector URL with a user name or password, without printing it or calling it', async () => {
+    const urls: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request) => {
+      urls.push(String(input));
+      return Response.json({});
+    }) as typeof fetch;
+    const checks = await doctor({ url: 'https://user:hunter2@stats.example.com', fetchImpl });
+    expect(checks.find((c) => c.name === 'Collector URL')).toMatchObject({ ok: false });
+    expect(JSON.stringify(checks)).not.toContain('hunter2');
+    expect(urls).toEqual([]);
   });
 
   it('says why a request failed, not just "fetch failed"', async () => {

@@ -1,5 +1,5 @@
 import type { Event } from '@shardlens/schema';
-import { insertRows, type Tx } from '../db.js';
+import { insertRows, isRefusedInput, type Tx } from '../db.js';
 import type { auditCipher } from '../security/crypto.js';
 import type { MirroredCustom, MirroredInteraction } from '../storage/clickhouse.js';
 import { ensureUniquesPartition } from '../storage/maintenance.js';
@@ -103,6 +103,37 @@ const AT = Object.fromEntries(INTERACTION_COLUMNS.map((c, i) => [c, i])) as Reco
   (typeof INTERACTION_COLUMNS)[number],
   number
 >;
+
+/**
+ * Writes a batch one event at a time, each under a savepoint, after the batch as a whole failed on a value PostgreSQL
+ * refused (a number wider than its column, say): only the events it refuses are rejected, not the whole batch.
+ */
+export async function writeEachEvent(tx: Tx, ctx: IngestContext, items: readonly Indexed[]): Promise<WriteResult> {
+  const total: WriteResult = { accepted: 0, duplicates: 0, rejected: [], stored: new Set() };
+  for (const item of items) {
+    await tx.query('SAVEPOINT one_event');
+    let one: WriteResult;
+    try {
+      one = await writeEvents(tx, ctx, [item]);
+    } catch (error) {
+      if (!isRefusedInput(error)) throw error;
+      await tx.query('ROLLBACK TO SAVEPOINT one_event');
+      total.rejected.push({ index: item.index, reason: 'refused_by_database' });
+      continue;
+    }
+    await tx.query('RELEASE SAVEPOINT one_event');
+    total.accepted += one.accepted;
+    total.duplicates += one.duplicates;
+    total.rejected.push(...one.rejected);
+    for (const id of one.stored) total.stored.add(id);
+    if (one.mirror) {
+      total.mirror ??= { interactions: [], custom: [] };
+      total.mirror.interactions.push(...one.mirror.interactions);
+      total.mirror.custom.push(...one.mirror.custom);
+    }
+  }
+  return total;
+}
 
 /**
  * Writes one validated batch in the caller's transaction. Every insert is idempotent (`ON CONFLICT DO NOTHING` on the
@@ -361,7 +392,6 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
       }
       case 'shard_state':
         shardRows.push([ctx.appId, ts, e.shard, e.state, e.closeCode ?? null, e.replayed ?? null]);
-        singleRowEvents++;
         break;
       case 'entitlement': {
         const user = userHash(index, e.user);
@@ -379,7 +409,7 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
           e.endsAt === null ? null : new Date(e.endsAt),
           'gateway',
         ]);
-        singleRowEvents++;
+        markLate(e.ts);
         break;
       }
       case 'subscription': {
@@ -396,12 +426,11 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
           new Date(e.periodStart),
           new Date(e.periodEnd),
         ]);
-        singleRowEvents++;
+        markLate(e.ts);
         break;
       }
       case 'command_permissions':
         permissionRows.push([e.id, ts, ctx.appId, e.guild, e.command, e.overwrites]);
-        singleRowEvents++;
         break;
       default:
         ordered.push({ index, event: e });
@@ -504,21 +533,25 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
     };
   }
   await insertRows(tx, 'gauges', GAUGE_COLUMNS, gaugeRows);
-  await insertRows(tx, 'shard_events', ['app_id', 'ts', 'shard', 'state', 'close_code', 'replayed'], shardRows);
-  await insertRows(tx, 'entitlements', ENTITLEMENT_COLUMNS, entitlementRows);
-  await insertRows(
-    tx,
+  result.accepted += singleRowEvents;
+  // One row per event: a row already there is a retried event.
+  const oneRowEach = async (table: string, columns: readonly string[], rows: unknown[][]) => {
+    const inserted = await insertRows(tx, table, columns, rows);
+    result.accepted += inserted;
+    result.duplicates += rows.length - inserted;
+  };
+  await oneRowEach('shard_events', ['app_id', 'ts', 'shard', 'state', 'close_code', 'replayed'], shardRows);
+  await oneRowEach('entitlements', ENTITLEMENT_COLUMNS, entitlementRows);
+  await oneRowEach(
     'subscriptions',
     ['id', 'ts', 'app_id', 'action', 'status', 'sku_ids', 'user_hash', 'period_start', 'period_end'],
     subscriptionRows,
   );
-  await insertRows(
-    tx,
+  await oneRowEach(
     'command_permissions',
     ['id', 'ts', 'app_id', 'guild_id', 'command_id', 'overwrites'],
     permissionRows,
   );
-  result.accepted += singleRowEvents;
 
   for (const { event: e } of ordered) {
     const ts = new Date(e.ts);
@@ -541,6 +574,7 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
         const kind = e.available ? GUILD_EVENT.available : GUILD_EVENT.unavailable;
         if (await recordGuildEvent(tx, ctx.appId, e.guild, ts, kind, false)) result.accepted++;
         else result.duplicates++;
+        markLate(e.ts);
         break;
       }
       case 'guild_snapshot':
@@ -614,8 +648,10 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
 async function applyRegistry(
   tx: Tx,
   appId: string,
-  commands: { id: string; name: string; type: number; guild?: string | undefined; subcommands: string[] }[],
+  listed: { id: string; name: string; type: number; guild?: string | undefined; subcommands: string[] }[],
 ) {
+  // One statement can't update a row twice, so a command listed twice (last one wins) would fail the batch.
+  const commands = [...new Map(listed.map((c) => [c.id, c])).values()];
   await insertRows(
     tx,
     'command_registry',

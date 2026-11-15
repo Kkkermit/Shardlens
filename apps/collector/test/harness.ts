@@ -25,7 +25,13 @@ export interface Harness {
 
 /** Postgres in a container (16 by default: the oldest supported), migrated, with one app and two keys. */
 export async function startHarness(
-  opts: { discordPublicKey?: string; auditKey?: string; demo?: boolean; analytics?: ClickHouseStore } = {},
+  opts: {
+    discordPublicKey?: string;
+    auditKey?: string;
+    demo?: boolean;
+    analytics?: ClickHouseStore;
+    extraAdmins?: string[];
+  } = {},
 ): Promise<Harness> {
   const image = process.env.SHARDLENS_TEST_PG_IMAGE ?? 'postgres:16-alpine';
   const container = await new PostgreSqlContainer(image).start();
@@ -47,7 +53,7 @@ export async function startHarness(
     discordPublicKey: opts.discordPublicKey,
     ingestKey: INGEST_KEY,
     readKey: READ_KEY,
-    extraAdmins: [],
+    extraAdmins: opts.extraAdmins ?? [],
     trustProxy: false,
     demo: opts.demo ?? false,
     dashboardDir: undefined,

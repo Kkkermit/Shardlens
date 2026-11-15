@@ -29,7 +29,7 @@ days. The full policy is in
 | XSS from server names or usernames      | Rendered as text only, and a strict Content Security Policy                                                        |
 | CSV formula injection                   | Exported cells starting with `= + - @`, tab or carriage return are neutralised                                     |
 | Cross-site requests                     | `SameSite=Lax` cookies and a required CSRF header on every change                                                  |
-| Session theft                           | `HttpOnly` and `Secure` cookies, hashed session IDs, 7-day expiry, rotation on sign-in, server-side sign-out      |
+| Session theft                           | `HttpOnly` and `Secure` cookies, hashed session IDs, 7-day expiry, rotation on sign-in, server-side sign-out. Revoking a read key ends the sessions opened with it; an admin taken off the team loses access on their next request |
 | Unauthorised dashboard access           | Full access only for the application owner, team and listed extras; OAuth state and PKCE                         |
 | SSRF through alert and report webhooks  | Only Discord webhook URLs are accepted, redirects are refused, and the URLs are stored encrypted |
 | Re-identification of hashes             | HMAC with secret salts that are destroyed after their period                                                       |

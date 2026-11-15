@@ -8,7 +8,7 @@ import fastifyStatic from '@fastify/static';
 import { containsNul } from '@shardlens/schema';
 import Fastify, { type FastifyInstance, type FastifyRequest, LogController } from 'fastify';
 import { ZodError } from 'zod';
-import type { Db } from './db.js';
+import { type Db, isRefusedInput } from './db.js';
 import type { Config } from './env.js';
 import type { LiveHub } from './live.js';
 import { QueryError } from './query/run.js';
@@ -68,14 +68,11 @@ const DEFAULT_RATE_LIMIT = 1_200;
 /** How long a client may take to send a whole request. Without a limit, a slow trickle holds a connection open forever. */
 const REQUEST_TIMEOUT_MS = 30_000;
 const API_PATHS = /^\/(v1|auth)\/|^\/(healthz|readyz|openapi\.json)$/;
-/** A path that names a file. A missing one is a 404: a script URL answered with the dashboard's HTML fails oddly. */
-const FILE_PATH = /^\/assets\/|\.[a-z0-9]{1,8}$/i;
-
-/** A PostgreSQL "data exception" (SQLSTATE class 22): the statement was fine, a value in it was not. */
-function isDataException(error: unknown): error is { code: string } {
-  const e = error as { code?: unknown; severity?: unknown } | null;
-  return typeof e?.code === 'string' && /^22[0-9A-Z]{3}$/.test(e.code) && typeof e.severity === 'string';
-}
+/**
+ * A path that names a file: a built asset, or one at the top level (`/favicon.svg`). A missing one is a 404, since a
+ * script URL answered with the dashboard's HTML fails oddly. Deeper paths are pages, even with a dot (`/commands/say.hi`).
+ */
+const FILE_PATH = /^\/assets\/|^\/[^/]+\.[a-z0-9]{1,8}$/i;
 
 /** The reply failed only because the client closed the connection (a page navigating away mid-request). */
 function isClientGone(error: unknown, req: FastifyRequest): boolean {
@@ -159,7 +156,7 @@ export async function buildServer(deps: Deps): Promise<FastifyInstance> {
       return reply.code(400).send({ error: 'invalid_request', issues: error.issues.slice(0, 20) });
     }
     if (error instanceof QueryError) return reply.code(400).send({ error: 'invalid_query', message: error.message });
-    if (isDataException(error)) {
+    if (isRefusedInput(error)) {
       // Input the database refused (a number out of range, text it can't store). Not a fault of the collector, and
       // answering 500 would make an SDK retry the same batch forever.
       req.log.warn({ code: error.code, route: req.routeOptions.url }, 'input refused by the database');

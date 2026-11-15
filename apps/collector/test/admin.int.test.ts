@@ -54,7 +54,7 @@ function signed(body: object, ts = Math.floor(Date.now() / 1000)) {
 const settle = () => new Promise((r) => setTimeout(r, 150));
 
 beforeAll(async () => {
-  h = await startHarness({ discordPublicKey: PUBLIC_KEY_HEX, auditKey: AUDIT_KEY });
+  h = await startHarness({ discordPublicKey: PUBLIC_KEY_HEX, auditKey: AUDIT_KEY, extraAdmins: [ADMIN] });
   adminCookie = await testSession(h.db, 'discord', ADMIN);
   readCookie = await testSession(h.db, 'read_key', null);
 });
@@ -208,6 +208,45 @@ describe('admin access', () => {
     expect(audit.rows[0].n).toBeGreaterThan(0);
   });
 
+  it('accepts every spelling of a time zone the database knows, and nothing else', async () => {
+    const save = (timezone: string) =>
+      h.app.inject({ method: 'PUT', url: '/v1/settings', ...asAdmin(), payload: { timezone } });
+    for (const timezone of ['Asia/Kolkata', 'Asia/Calcutta', 'Europe/Kyiv', 'Etc/UTC']) {
+      expect((await save(timezone)).statusCode, timezone).toBe(200);
+    }
+    for (const timezone of ['Mars/Olympus', '../../etc/passwd', 'Asia/Kolkata; DROP TABLE apps']) {
+      expect((await save(timezone)).statusCode, timezone).toBe(400);
+    }
+    expect((await save('Europe/London')).statusCode).toBe(200);
+    // A save that leaves the zone out keeps it.
+    await h.app.inject({ method: 'PUT', url: '/v1/settings', ...asAdmin(), payload: { badges: ['servers'] } });
+    const settings = await h.app.inject({
+      method: 'GET',
+      url: '/v1/settings',
+      cookies: { shardlens_session: adminCookie },
+    });
+    expect(settings.json()).toMatchObject({ timezone: 'Europe/London' });
+  });
+
+  it('refuses required permission bits a bigint cannot hold, and filters servers with any bits', async () => {
+    const save = (requiredPermissions: string) =>
+      h.app.inject({ method: 'PUT', url: '/v1/settings', ...asAdmin(), payload: { requiredPermissions } });
+    expect((await save('9223372036854775808')).statusCode).toBe(400);
+    expect((await save('2048')).statusCode).toBe(200);
+    await h.db.query(
+      `INSERT INTO guilds (app_id, guild_id, joined_at, bot_permissions) VALUES ($1, 400000000000000001, now(), 18446744073709551615)
+       ON CONFLICT DO NOTHING`,
+      [APP_ID],
+    );
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/v1/query',
+      cookies: { shardlens_session: adminCookie },
+      payload: { kind: 'servers', missingPermissions: true },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+  });
+
   it('creates keys shown once, and revoked keys stop working immediately', async () => {
     const created = await h.app.inject({
       method: 'POST',
@@ -224,6 +263,35 @@ describe('admin access', () => {
     expect((await cfg()).statusCode).toBe(200);
     expect((await h.app.inject({ method: 'DELETE', url: `/v1/keys/${id}`, ...asAdmin() })).statusCode).toBe(200);
     expect((await cfg()).statusCode).toBe(401);
+  });
+
+  it('ends the dashboard sessions opened with a read key when that key is revoked', async () => {
+    const created = await h.app.inject({
+      method: 'POST',
+      url: '/v1/keys',
+      ...asAdmin(),
+      payload: { scope: 'read', label: 'shared with a friend' },
+    });
+    const { id, key } = created.json() as { id: string; key: string };
+    const signIn = await h.app.inject({
+      method: 'POST',
+      url: '/auth/read-key',
+      headers: { 'x-shardlens-csrf': '1' },
+      payload: { key },
+    });
+    expect(signIn.statusCode).toBe(200);
+    const session = signIn.cookies.find((c) => c.name === 'shardlens_session')?.value as string;
+    const meta = () => h.app.inject({ method: 'GET', url: '/v1/meta', cookies: { shardlens_session: session } });
+    expect((await meta()).statusCode).toBe(200);
+    expect((await h.app.inject({ method: 'DELETE', url: `/v1/keys/${id}`, ...asAdmin() })).statusCode).toBe(200);
+    expect((await meta()).statusCode).toBe(401);
+  });
+
+  it('takes admin access away from someone no longer on the team, without waiting for the session to end', async () => {
+    const former = await testSession(h.db, 'discord', '876543210987654321');
+    const settings = await h.app.inject({ method: 'GET', url: '/v1/settings', cookies: { shardlens_session: former } });
+    expect(settings.statusCode).toBe(403);
+    expect(settings.json()).toEqual({ error: 'not_a_team_member' });
   });
 });
 
