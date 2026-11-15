@@ -186,7 +186,9 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 }
 ```
 
-`shutdown()` gives up after 2 seconds and never throws.
+`shutdown()` gives up after 2 seconds and never throws. Calling it a second time waits for the same flush.
+
+With `ShardingManager` or discord-hybrid-sharding, this goes in the shard or cluster file. A signal sent to the manager alone (`docker stop`, systemd, a host's restart) never reaches those processes, so in the manager file pass it on and wait for them to exit; otherwise they are killed without flushing when the manager exits. Follow https://kkkermit.github.io/Shardlens/guides/sharding/#stopping-a-sharded-bot. If the manager already handles signals, add this to its handler.
 
 ## 6. Document the two settings
 

@@ -216,6 +216,7 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
   #configTimer: unknown;
   /** `shutdown()` has started: new events are refused. */
   #closed = false;
+  #stopping: Promise<void> | undefined;
   /** `shutdown()` has returned: nothing more is sent, so events still being hashed are dropped. */
   #stopped = false;
   #disabled = false;
@@ -432,10 +433,14 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
 
   /**
    * Stops timers and flushes what is queued, giving up after `timeoutMs`. The SDK never installs signal handlers;
-   * call this from your own shutdown code. Never throws.
+   * call this from your own shutdown code. Every call waits for the same flush. Never throws.
    */
-  async shutdown({ timeoutMs = 2_000 }: FlushOptions = {}): Promise<void> {
-    if (this.#closed) return;
+  shutdown(options: FlushOptions = {}): Promise<void> {
+    this.#stopping ??= this.#stop(options);
+    return this.#stopping;
+  }
+
+  async #stop({ timeoutMs = 2_000 }: FlushOptions): Promise<void> {
     this.#closed = true;
     clearInterval(this.#flushTimer as ReturnType<typeof setInterval>);
     clearTimeout(this.#configTimer as ReturnType<typeof setTimeout>);

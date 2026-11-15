@@ -9,6 +9,7 @@ import { Aside, Code } from '@astrojs/starlight/components';
 import internal from '../../../../snippets/sharding-internal.ts?raw';
 import hybrid from '../../../../snippets/sharding-hybrid.ts?raw';
 import manager from '../../../../snippets/sharding-manager.ts?raw';
+import stopping from '../../../../snippets/sharding-stop.ts?raw';
 
 Shardlens works with every common sharding setup without extra configuration. Create one Shardlens instance per
 discord.js `Client`, in the process where that client runs.
@@ -17,7 +18,7 @@ discord.js `Client`, in the process where that client runs.
 | ----------------------- | ------------------------------------------------ | --------------------------------------------- |
 | Internal sharding       | Your bot file, once                              | Each event carries its guild's shard          |
 | `ShardingManager`       | The shard file (not the manager), once per shard | `client.shard.ids`                            |
-| discord-hybrid-sharding | The cluster file, once per cluster               | Cluster ID and its shard list                 |
+| discord-hybrid-sharding | The cluster file, once per cluster               | The cluster's shard list                      |
 | Several machines        | Each process                                     | `source.instance` tells hosts apart           |
 
 ## Internal sharding
@@ -36,12 +37,27 @@ A complete example is in [`examples/sharded-bot`](https://github.com/Kkkermit/Sh
 ## discord-hybrid-sharding
 
 Each cluster runs a `Client` with several shards. Attach Shardlens in the cluster file, after setting
-`client.cluster`: Shardlens reads the cluster ID and its shard list from it.
+`client.cluster`: Shardlens reads the cluster's shard list from it.
 
 <Code code={hybrid} lang="ts" title="bot.ts" />
 
 The complete example, with the cluster manager, is in
 [`examples/hybrid-sharding`](https://github.com/Kkkermit/Shardlens/tree/main/examples/hybrid-sharding).
+
+## Stopping a sharded bot
+
+Each shard or cluster process flushes its own events, so each needs the
+[shutdown handler](../../getting-started/configuration/#shutting-down) for both `SIGINT` and `SIGTERM`. Ctrl+C in a
+terminal reaches every process, but a signal sent to the manager alone (`docker stop`, systemd, a hosting platform's
+restart) does not: the shards keep running, and are killed without flushing once the manager exits. Pass the signal on
+from the manager, and wait for the processes to finish:
+
+<Code code={stopping} lang="ts" title="manager.ts" />
+
+With discord-hybrid-sharding, do the same for `manager.clusters`: call `cluster.kill()`, then wait for
+`cluster.thread.process` to exit, as in the
+[example's manager](https://github.com/Kkkermit/Shardlens/tree/main/examples/hybrid-sharding/src/manager.ts).
+`lens.shutdown()` can be called twice (once for each signal): every call waits for the same flush.
 
 ## What happens across shards
 

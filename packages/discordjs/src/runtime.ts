@@ -14,7 +14,9 @@ export function detectSource(client: Client, instance: string): SourceInfo {
     const list = Array.isArray(cluster.shardList) ? cluster.shardList.filter((s) => typeof s === 'number') : wsShards;
     return { shards: list, cluster: cluster.id, instance };
   }
-  if (client.shard) return { shards: [...client.shard.ids], instance };
+  // discord.js 14's ShardClientUtil lists the process's shards; 15's has no `ids`, and its gateway manager knows them.
+  const ids: unknown = client.shard?.ids;
+  if (Array.isArray(ids)) return { shards: ids.filter((s) => typeof s === 'number'), instance };
   return { shards: wsShards, instance };
 }
 

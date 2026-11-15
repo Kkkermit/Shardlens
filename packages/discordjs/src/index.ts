@@ -37,6 +37,7 @@ import {
   guildSnapshots,
   guildUpdate,
   ProfilePacer,
+  shardSnapshot,
 } from './guilds.js';
 import { InteractionTracker } from './interactions.js';
 import { describeMessageCommand, type MessageCommandInfo, type MessageCommandRun } from './message-commands.js';
@@ -138,7 +139,10 @@ export interface Shardlens {
   forgetUser(userId: string): Promise<{ erased: number } | undefined>;
   on(event: 'error', listener: (name: string, error: unknown) => void): () => void;
   flush(): Promise<void>;
-  /** Removes all hooks and flushes, giving up after `timeoutMs` (default 2,000). The SDK never handles signals. */
+  /**
+   * Removes all hooks and flushes, giving up after `timeoutMs` (default 2,000). A second call, such as SIGTERM from a
+   * shard manager after SIGINT from the terminal, waits for the same flush. The SDK never handles signals.
+   */
   shutdown(options?: { timeoutMs?: number }): Promise<void>;
   stats(): ShardlensStats;
   readonly client: ShardlensClient;
@@ -281,9 +285,13 @@ export function createShardlens(client: Client, options: ShardlensOptions): Shar
     unlistenShards = listenShardEvents(
       client,
       {
-        ready: (shard, unavailableGuilds) => {
+        ready: (shard, unavailableGuilds, guilds) => {
           shardEvent(shard, 'ready', { unavailableGuilds });
-          if (initialReady) sendSnapshots([shard]); // a fresh session: catch removals that happened while disconnected
+          if (!initialReady || disabled.has('guilds')) return;
+          // A fresh session: Discord's list catches servers added and removed while the shard was away. The cache
+          // still holds the removed ones, and on discord.js 15 doesn't have the added ones yet.
+          if (guilds) enqueue(shardSnapshot(shard, guilds, shardCount()), 3);
+          else sendSnapshots([shard]);
         },
         resumed: (shard, replayed) => shardEvent(shard, 'resumed', { replayed }),
         reconnecting: (shard) => shardEvent(shard, 'reconnecting'),
@@ -355,8 +363,13 @@ export function createShardlens(client: Client, options: ShardlensOptions): Shar
   const onReady = safe('clientReady', async () => {
     if (initialReady) return;
     initialReady = true;
-    sendSnapshots(detectSource(client, instance).shards);
-    if (!disabled.has('guilds')) pacer.reset(client.guilds.cache.keys());
+    // On its own, so a failure here doesn't also skip the app info and command list.
+    try {
+      sendSnapshots(detectSource(client, instance).shards);
+      if (!disabled.has('guilds')) pacer.reset(client.guilds.cache.keys());
+    } catch (error) {
+      count('guildSnapshot', error);
+    }
     await Promise.allSettled([
       sendAppInfo().catch((error: unknown) => count('appInfo', error)),
       sendRegistry().catch((error: unknown) => count('commandRegistry', error)),
@@ -410,7 +423,23 @@ export function createShardlens(client: Client, options: ShardlensOptions): Shar
     }
   };
 
-  let closed = false;
+  let stopping: Promise<void> | undefined;
+  async function stop(opts: { timeoutMs?: number }): Promise<void> {
+    try {
+      for (const t of timers) clearInterval(t);
+      for (const [event, handler] of listeners) client.off(event, handler as (...args: unknown[]) => void);
+      unlistenShards?.();
+      loop?.disable();
+      tracker?.flushPending();
+      const window = restHooks?.drain();
+      if (window && !disabled.has('rest')) enqueue(window, 1);
+      restHooks?.uninstall();
+    } catch (error) {
+      count('shutdown', error);
+    }
+    await transport.shutdown(opts);
+  }
+
   return {
     client: transport as unknown as ShardlensClient<WireEvent>,
 
@@ -552,22 +581,9 @@ export function createShardlens(client: Client, options: ShardlensOptions): Shar
       return transport.flush();
     },
 
-    async shutdown(opts = {}) {
-      if (closed) return;
-      closed = true;
-      try {
-        for (const t of timers) clearInterval(t);
-        for (const [event, handler] of listeners) client.off(event, handler as (...args: unknown[]) => void);
-        unlistenShards?.();
-        loop?.disable();
-        tracker?.flushPending();
-        const window = restHooks?.drain();
-        if (window && !disabled.has('rest')) enqueue(window, 1);
-        restHooks?.uninstall();
-      } catch (error) {
-        count('shutdown', error);
-      }
-      await transport.shutdown(opts);
+    shutdown(opts = {}) {
+      stopping ??= stop(opts);
+      return stopping;
     },
 
     stats() {

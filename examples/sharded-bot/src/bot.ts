@@ -20,11 +20,13 @@ client.on(
   }),
 );
 
-// The manager sends SIGTERM to shard processes when it stops; flush before exiting.
-process.once('SIGTERM', async () => {
-  await lens.shutdown({ timeoutMs: 2_000 });
-  await client.destroy();
-  process.exit(0);
-});
+// Ctrl+C sends SIGINT to every shard; the manager passes on its own SIGTERM (src/manager.ts). Flush before exiting.
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.once(signal, async () => {
+    await lens.shutdown({ timeoutMs: 2_000 });
+    await client.destroy();
+    process.exit(0);
+  });
+}
 
 await client.login(process.env.DISCORD_TOKEN);

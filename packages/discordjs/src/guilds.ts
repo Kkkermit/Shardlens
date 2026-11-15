@@ -72,15 +72,20 @@ export function guildAvailability(g: Guild, available: boolean): EventInput {
 export function guildSnapshots(guilds: Iterable<Guild>, shards: readonly number[], shardCount: number): EventInput[] {
   const byShard = new Map<number, string[]>(shards.map((s) => [s, []]));
   for (const g of guilds) byShard.get(shardOf(g))?.push(g.id);
+  return [...byShard].map(([shard, ids]) => shardSnapshot(shard, ids, shardCount));
+}
+
+/** The servers one shard holds, such as the IDs in its READY payload. */
+export function shardSnapshot(shard: number, guildIds: readonly string[], shardCount: number): EventInput {
   const now = Date.now();
-  return [...byShard].map(([shard, ids]) => ({
+  return {
     id: uuidv7(now),
     ts: now,
     type: 'guild_snapshot',
     shards: [shard],
     shardCount: Math.max(1, shardCount),
-    guilds: ids.slice(0, 2500 * 16),
-  }));
+    guilds: guildIds.slice(0, 2500 * 16),
+  };
 }
 
 /**

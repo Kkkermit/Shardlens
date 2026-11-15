@@ -63,7 +63,11 @@ export function shardPings(client: Client): { shard: number; ping: number }[] {
 }
 
 interface ShardHandlers {
-  ready(shard: number, unavailableGuilds: number): void;
+  /**
+   * `unavailableGuilds`: servers still unavailable when the shard became ready (discord.js 14 only). `guilds`: the
+   * server IDs in the shard's READY payload, every server the shard holds in this session.
+   */
+  ready(shard: number, unavailableGuilds: number | undefined, guilds: string[] | undefined): void;
   resumed(shard: number, replayed: number | undefined): void;
   reconnecting(shard: number): void;
   disconnected(shard: number, closeCode: number | undefined): void;
@@ -92,7 +96,16 @@ export function listenShardEvents(
   if (legacy) {
     // discord.js 14's event names (the values of `Events.Shard*`), so this never depends on the enum.
     const c = client as unknown as ModernWs;
-    add(c, 'shardReady', (shard: number, unavailable?: Set<string>) => handlers.ready(shard, unavailable?.size ?? 0));
+    // `shardReady` doesn't carry the READY payload, and the cache keeps servers removed while the shard was away.
+    const readyGuilds = new Map<number, string[]>();
+    add(c, 'raw', (packet: { t?: unknown; d?: { guilds?: unknown } } | undefined, shard: number) => {
+      if (packet?.t === 'READY') readyGuilds.set(shard, guildIds(packet.d?.guilds));
+    });
+    add(c, 'shardReady', (shard: number, unavailable?: Set<string>) => {
+      const guilds = readyGuilds.get(shard);
+      readyGuilds.delete(shard);
+      handlers.ready(shard, unavailable?.size ?? 0, guilds);
+    });
     add(c, 'shardResume', (shard: number, replayed: number) => handlers.resumed(shard, replayed));
     add(c, 'shardReconnecting', (shard: number) => handlers.reconnecting(shard));
     add(c, 'shardDisconnect', (event: { code?: number } | undefined, shard: number) =>
@@ -101,14 +114,21 @@ export function listenShardEvents(
     add(c, 'shardError', (_error: unknown, shard: number) => handlers.error(shard));
   } else {
     const ws = modern(client);
-    add(ws, 'ready', (data: { guilds?: unknown[] } | undefined, shard: number) =>
-      handlers.ready(shard, Array.isArray(data?.guilds) ? data.guilds.length : 0),
+    // Fired on READY, before discord.js has the servers: every one is still unavailable, so there is no count.
+    add(ws, 'ready', (data: { guilds?: unknown } | undefined, shard: number) =>
+      handlers.ready(shard, undefined, guildIds(data?.guilds)),
     );
     add(ws, 'resumed', (shard: number) => handlers.resumed(shard, undefined));
     add(ws, 'closed', (code: number, shard: number) => handlers.disconnected(shard, code));
-    add(ws, 'error', (_error: unknown, shard: number) => handlers.error(shard));
+    // No `error` listener: `client.ws` is an EventEmitter, and a listener would stop a fatal gateway error (an invalid
+    // token on re-identify, say) from crashing the bot, as it does without Shardlens. Its close code is recorded above.
   }
   return () => {
     for (const [emitter, event, listener] of subscriptions) emitter.off?.call(emitter, event, listener);
   };
+}
+
+function guildIds(guilds: unknown): string[] {
+  if (!Array.isArray(guilds)) return [];
+  return guilds.map((g: { id?: unknown } | null) => g?.id).filter((id): id is string => typeof id === 'string');
 }

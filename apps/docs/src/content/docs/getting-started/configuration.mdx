@@ -87,6 +87,10 @@ The SDK never installs signal handlers. Call `shutdown()` on your own shutdown p
 
 <Code code={shutdown} lang="ts" />
 
+Calling `shutdown()` again, as the second of two signals does, waits for the same flush. With a `ShardingManager` or
+discord-hybrid-sharding, the manager must also pass signals on to its processes: see
+[Stopping a sharded bot](../../guides/sharding/#stopping-a-sharded-bot).
+
 <Aside type="tip">
   Use `dryRun: true` while developing to print events to the console instead of sending them.
 </Aside>

@@ -363,7 +363,7 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
     // Warning: (ae-forgotten-export) The symbol "ErrorListener" needs to be exported by the entry point index.d.ts
     on(event: 'error', listener: ErrorListener): () => void;
     get ready(): boolean;
-    shutdown(input?: FlushOptions): Promise<void>;
+    shutdown(options?: FlushOptions): Promise<void>;
     // (undocumented)
     stats(): ClientStats;
 }

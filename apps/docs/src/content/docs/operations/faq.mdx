@@ -50,7 +50,9 @@ Yes: internal sharding, `ShardingManager`, discord-hybrid-sharding and several m
 ## Does it work with discord.js 15?
 
 Yes. The adapter supports discord.js 14 and 15 through public APIs only, and a nightly CI job runs its tests against
-the latest discord.js release and the v15 development builds. discord.js 15 needs Node 24.17 or later.
+the latest discord.js release and the v15 development builds, which npm installs it alongside. discord.js 15 needs
+Node 24.17 or later. Its gateway reports fewer shard states: ready, resumed and disconnected (with the close code), but
+not reconnecting, invalidated or the servers still unavailable at ready.
 
 ## Why is the server count different from Discord's?
 

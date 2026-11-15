@@ -86,7 +86,7 @@ export const COLLECTED_FIELDS: readonly CollectedField[] = [
   f(
     'envelope',
     'source',
-    'Shard IDs, cluster ID and an instance label (host name and process ID) for the sending process, kept with its SDK health and its gauges.',
+    'Shard IDs and an instance label (host name and process ID) for the sending process, kept with its SDK health and its gauges. The cluster ID (discord-hybrid-sharding) is sent but not stored.',
     { retention: 'gauge' },
   ),
   f('envelope', 'sentAt', 'When the batch was sent; used to correct clock skew.', { retention: 'transient' }),
@@ -237,10 +237,14 @@ export const COLLECTED_FIELDS: readonly CollectedField[] = [
   }),
 
   f('shard_state', 'shard', 'Shard ID.'),
-  f('shard_state', 'state', 'Ready, resumed, reconnecting, disconnected, error or invalidated.'),
+  f(
+    'shard_state',
+    'state',
+    'Ready, resumed, reconnecting, disconnected, error or invalidated. discord.js 15 reports ready, resumed and disconnected.',
+  ),
   f('shard_state', 'closeCode', 'Gateway close code.'),
   f('shard_state', 'replayed', 'Events replayed on resume.'),
-  f('shard_state', 'unavailableGuilds', 'Servers unavailable when the shard became ready.'),
+  f('shard_state', 'unavailableGuilds', 'Servers still unavailable when the shard became ready (discord.js 14).'),
   f('rest_window', 'windowMs', 'Length of the aggregation window.'),
   f('rest_window', 'rows', 'REST call counts, retries and latency histograms by method, bucketed route and status.'),
   f('rest_window', 'invalid', '401, 403 and 429 counts toward the invalid-request ban threshold.'),

@@ -495,6 +495,22 @@ describe('REST', () => {
     expect(client.listenerCount(Events.InteractionCreate)).toBe(0);
     expect(client.rest.listenerCount(RESTEvents.Response)).toBe(0);
   });
+
+  it('makes a second shutdown wait for the first one to finish sending', async () => {
+    const collector = fakeCollector();
+    const slow = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (!String(input).endsWith('/v1/config')) await new Promise((resolve) => setTimeout(resolve, 100));
+      return collector.fetch(input, init);
+    }) as typeof fetch;
+    const { lens } = setup(undefined, { fetch: slow });
+    await settle();
+    lens.track('still_sending');
+    // SIGINT from the terminal, then SIGTERM from the shard manager: the second handler must not exit mid-flush.
+    const first = lens.shutdown({ timeoutMs: 1_000 });
+    await lens.shutdown({ timeoutMs: 1_000 });
+    expect(collector.events('custom')).toHaveLength(1);
+    await first;
+  });
 });
 
 describe('servers', () => {
@@ -519,6 +535,19 @@ describe('servers', () => {
     expect(join?.info).not.toHaveProperty('ownerId');
     expect(collector.events('guild_leave')[0]).toMatchObject({ guild: GUILD_ID, detectedAtStartup: false });
     expect(collector.raw()).not.toContain(USER_ID);
+  });
+
+  it("takes a fresh session's snapshot from Discord's server list, not the cache", async () => {
+    const { collector, client, lens } = setup();
+    await settle();
+    client.emit(Events.ClientReady, client as Client<true>);
+    // Removed while the shard was away: discord.js keeps it in the cache.
+    client.guilds.cache.set(GUILD_ID, Reflect.construct(Guild, [client, rawGuild()]) as Guild);
+    const added = snowflake(Date.now(), 2);
+    client.emit(Events.Raw, { t: 'READY', d: { guilds: [{ id: added, unavailable: true }] } }, 0);
+    client.emit('shardReady', 0, new Set());
+    await lens.flush();
+    expect(collector.events('guild_snapshot').at(-1)).toMatchObject({ shards: [0], guilds: [added] });
   });
 });
 

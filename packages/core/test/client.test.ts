@@ -429,6 +429,21 @@ describe('ShardlensClient', () => {
     expect(Date.now() - started).toBeLessThan(1_000);
   });
 
+  it('makes a second shutdown wait for the first one to finish sending', async () => {
+    const collector = fakeCollector();
+    const slow = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (!String(input).endsWith('/v1/config')) await new Promise((resolve) => setTimeout(resolve, 100));
+      return collector.fetch(input, init);
+    }) as typeof fetch;
+    const { client } = makeClient({ fetch: slow });
+    await settle();
+    client.enqueue(custom(), 2);
+    const first = client.shutdown({ timeoutMs: 1_000 });
+    await client.shutdown({ timeoutMs: 1_000 });
+    expect(collector.sent).toHaveLength(1);
+    await first;
+  });
+
   it('sends events whose user hash is still being computed when shutdown starts', async () => {
     const collector = fakeCollector();
     const { client } = makeClient({ fetch: collector.fetch });
