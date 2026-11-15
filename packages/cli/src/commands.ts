@@ -71,7 +71,7 @@ function templatesDir(): string {
   return fileURLToPath(new URL('../../../deploy/', import.meta.url)); // running from source
 }
 
-export interface InitResult {
+interface InitResult {
   dir: string;
   written: string[];
 }
@@ -120,14 +120,13 @@ export async function init(opts: {
   return { dir, written };
 }
 
-export interface PrivacyOptions {
+interface PrivacyOptions {
   audit?: boolean;
   /** Audit mode with `auditIncludeProfile: false`. */
   idsOnly?: boolean;
   optionValues?: string[];
   webhookEvents?: boolean;
   retentionDays?: number;
-  auditRetentionDays?: number;
 }
 
 /** A plain-language paragraph for the bot's privacy policy, matching the configuration. Not legal advice. */
@@ -140,7 +139,7 @@ export function privacyParagraph(o: PrivacyOptions): string {
       ? `For the options ${o.optionValues.map((v) => `"${v}"`).join(', ')} it also records the values you choose; other option values are not recorded.`
       : 'It records which command options you use, but not the values you enter.',
     o.audit
-      ? `For support and abuse prevention it also records your Discord user ID${o.idsOnly ? '' : ', username and avatar'} with each command, encrypted, and keeps this for up to ${o.auditRetentionDays ?? 30} days. Access to this information is restricted to the bot's team and every access is logged.`
+      ? `For support and abuse prevention it also records your Discord user ID${o.idsOnly ? '' : ', username and avatar'} with each command, encrypted, and keeps this for up to 30 days. Access to this information is restricted to the bot's team and every access is logged.`
       : 'Your Discord user ID is replaced inside the bot with a pseudonymous code that changes every month; after the month ends the code can no longer be linked to you.',
     o.webhookEvents
       ? 'When you add or remove the bot, Discord tells us that it happened; your user ID is pseudonymised in the same way.'
@@ -266,14 +265,11 @@ export async function doctor(opts: {
     if (!res.ok) {
       checks.push({ name: 'Ingest key', ok: false, detail: `rejected (${res.status})` });
     } else {
-      const cfg = (await res.json()) as { appId: string; mode: string; saltPeriod: string; salts: unknown[] };
+      const cfg = (await res.json()) as { appId?: string; mode?: string; saltPeriod?: string; salts?: unknown };
+      const salt = Array.isArray(cfg.salts) && cfg.salts.length > 0;
       checks.push({ name: 'Ingest key', ok: true, detail: `accepted for application ${cfg.appId}` });
       checks.push({ name: 'Data mode', ok: true, detail: `${cfg.mode}, salts rotate per ${cfg.saltPeriod}` });
-      checks.push({
-        name: 'Salt available',
-        ok: cfg.salts.length > 0,
-        detail: cfg.salts.length > 0 ? 'yes' : 'no salt served',
-      });
+      checks.push({ name: 'Salt available', ok: salt, detail: salt ? 'yes' : 'no salt served' });
     }
   } catch (error) {
     checks.push({ name: 'Ingest key', ok: false, detail: error instanceof Error ? error.message : 'request failed' });

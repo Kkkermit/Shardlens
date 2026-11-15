@@ -15,12 +15,15 @@ export class FileSpool implements EventSpool {
   #ready: Promise<void> | undefined;
   /** Bytes on disk, computed on first use and kept up to date. */
   #bytes: number | undefined;
-  #seq = 0;
-  evicted = 0;
+  /**
+   * Starts at random: processes sharing a folder (sharded bots) often spill in the same millisecond on shutdown, and a
+   * repeated name would replace another process's segment.
+   */
+  #seq = Math.floor(Math.random() * 1_000_000);
 
   constructor(dir: string, maxBytes = DEFAULT_MAX_BYTES) {
     this.#dir = dir;
-    this.#maxBytes = Math.max(1024, maxBytes);
+    this.#maxBytes = Number.isFinite(maxBytes) ? Math.max(1024, maxBytes) : DEFAULT_MAX_BYTES;
   }
 
   async write(events: readonly WireEvent[]): Promise<boolean> {
@@ -35,13 +38,8 @@ export class FileSpool implements EventSpool {
       if (bytes + size <= this.#maxBytes) break;
       const path = join(this.#dir, name);
       const old = await stat(path).catch(() => undefined);
-      const lines = await readFile(path, 'utf8').then(
-        (text) => text.split('\n').filter(Boolean).length,
-        () => 0,
-      );
       await unlink(path).catch(() => undefined);
       bytes -= old?.size ?? 0;
-      this.evicted += lines;
     }
     const name = `seg-${String(Date.now()).padStart(13, '0')}-${String(this.#seq++ % 1_000_000).padStart(6, '0')}.ndjson`;
     const temp = join(this.#dir, `${name}.tmp`);

@@ -142,7 +142,16 @@ export function createShardlensHttp(options: ShardlensHttpOptions): ShardlensHtt
       ...(options.logger !== undefined ? { logger: options.logger } : {}),
       ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
     });
-    for (const listener of listeners) client.on('error', listener);
+    // One forwarder for every listener, so one added before the client existed can still be removed later.
+    client.on('error', (name, error) => {
+      for (const listener of listeners) {
+        try {
+          listener(name, error);
+        } catch {
+          // a broken listener must not break the SDK
+        }
+      }
+    });
     return client;
   };
 
@@ -271,10 +280,8 @@ export function createShardlensHttp(options: ShardlensHttpOptions): ShardlensHtt
     on(event, listener) {
       if (event !== 'error') return () => undefined;
       listeners.add(listener);
-      const off = client?.on('error', listener);
       return () => {
         listeners.delete(listener);
-        off?.();
       };
     },
   };

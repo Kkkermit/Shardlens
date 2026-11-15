@@ -1,4 +1,12 @@
-import { ButtonInteraction, ChatInputCommandInteraction, type Client, Events, Guild } from 'discord.js';
+import {
+  ButtonInteraction,
+  ChatInputCommandInteraction,
+  type Client,
+  Entitlement,
+  Events,
+  Guild,
+  Subscription,
+} from 'discord.js';
 import fc from 'fast-check';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createPrivacyCommand, createShardlens, type Shardlens, type ShardlensOptions } from '../src/index.js';
@@ -70,6 +78,67 @@ describe('forgetUser and opt-outs', () => {
       [USER_ID, false],
       [USER_ID, true],
     ]);
+  });
+});
+
+describe('opt-outs and premium events', () => {
+  it('drops an opted-out user’s entitlements and subscriptions, and keeps everyone else’s', async () => {
+    const { collector, client, lens } = setup({ optedOut: [USER_ID] });
+    await settle();
+    const other = '445566778899001100';
+    const entitlement = (userId: string, id: string) =>
+      Reflect.construct(Entitlement, [
+        client,
+        {
+          id,
+          sku_id: '556677889900112233',
+          application_id: '1234567890123456789',
+          user_id: userId,
+          type: 8,
+          deleted: false,
+          starts_at: null,
+          ends_at: null,
+          consumed: false,
+        },
+      ]) as Entitlement;
+    const subscription = (userId: string, id: string) =>
+      Reflect.construct(Subscription, [
+        client,
+        {
+          id,
+          user_id: userId,
+          sku_ids: ['556677889900112233'],
+          entitlement_ids: [],
+          current_period_start: new Date().toISOString(),
+          current_period_end: new Date(Date.now() + 86_400_000).toISOString(),
+          status: 0,
+          canceled_at: null,
+        },
+      ]) as Subscription;
+    client.emit(Events.EntitlementCreate, entitlement(USER_ID, '667788990011223344'));
+    client.emit(Events.EntitlementCreate, entitlement(other, '667788990011223345'));
+    client.emit(Events.SubscriptionCreate, subscription(USER_ID, '778899001122334455'));
+    client.emit(Events.SubscriptionCreate, subscription(other, '778899001122334456'));
+    await settle();
+    await lens.flush();
+    expect(collector.events('entitlement')).toHaveLength(1);
+    expect(collector.events('subscription')).toHaveLength(1);
+    expect(lens.stats().internalErrors).toEqual({});
+  });
+});
+
+describe('opt-outs with interactions turned off', () => {
+  it('still drops opted-out users’ custom events', async () => {
+    const { collector, lens } = setup({ disable: ['interactions'], optedOut: [USER_ID] });
+    await settle();
+    expect(lens.isOptedOut(USER_ID)).toBe(true);
+    lens.track('ticket_opened', {}, { userId: USER_ID });
+    lens.track('ticket_opened', {}, { userId: '445566778899001100' });
+    lens.optIn(USER_ID);
+    expect(lens.isOptedOut(USER_ID)).toBe(false);
+    await settle();
+    await lens.flush();
+    expect(collector.events('custom')).toHaveLength(1);
   });
 });
 

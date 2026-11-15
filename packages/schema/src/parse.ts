@@ -12,6 +12,8 @@ export type ParseBatchResult =
   | { ok: true; envelope: Omit<BatchEnvelope, 'events'>; events: Event[]; errors: EventError[] }
   | { ok: false; issues: { path: (string | number)[]; message: string }[] };
 
+const nulIssues = () => [{ path: [], message: 'NUL characters are not allowed' }];
+
 function flattenIssues(error: z.ZodError): { path: (string | number)[]; message: string }[] {
   return error.issues.map((issue) => ({
     path: issue.path.map((p) => (typeof p === 'symbol' ? String(p) : p)),
@@ -48,34 +50,29 @@ export function containsNul(value: unknown): boolean {
 export function parseBatch(input: unknown): ParseBatchResult {
   const envelope = BatchEnvelope.safeParse(input);
   if (!envelope.success) return { ok: false, issues: flattenIssues(envelope.error) };
-  const { events: _, ...header } = envelope.data;
-  if (containsNul(header)) return { ok: false, issues: [{ path: [], message: 'NUL characters are not allowed' }] };
+  const { events: raw, ...header } = envelope.data;
+  if (containsNul(header)) return { ok: false, issues: nulIssues() };
 
-  const { events: raw, ...rest } = envelope.data;
   const events: Event[] = [];
   const errors: EventError[] = [];
   raw.forEach((candidate, index) => {
     const parsed = Event.safeParse(candidate);
-    if (parsed.success && containsNul(parsed.data)) {
-      errors.push({
-        index,
-        reason: 'invalid_event',
-        issues: [{ path: [], message: 'NUL characters are not allowed' }],
-      });
-      return;
-    }
     if (!parsed.success) {
       errors.push({ index, reason: 'invalid_event', issues: flattenIssues(parsed.error) });
       return;
     }
-    const violation = privacyViolation(parsed.data, rest.mode);
+    if (containsNul(parsed.data)) {
+      errors.push({ index, reason: 'invalid_event', issues: nulIssues() });
+      return;
+    }
+    const violation = privacyViolation(parsed.data, header.mode);
     if (violation) {
       errors.push({ index, reason: violation });
       return;
     }
     events.push(parsed.data);
   });
-  return { ok: true, envelope: rest, events, errors };
+  return { ok: true, envelope: header, events, errors };
 }
 
 /** Major wire versions the current collector accepts (current and previous). */

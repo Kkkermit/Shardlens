@@ -1,7 +1,7 @@
 // Copies the deployment files into dist/templates for `shardlens init`. Three things differ from the files in deploy/:
 // the build-from-source block is dropped (it only makes sense inside this repository), the collector image is pinned
-// to the release line this CLI ships with (a `:1` tag doesn't exist while versions are 0.x), and the header no longer
-// points at a `.env.example`, because `init` writes the `.env` itself.
+// to the release line this CLI ships with (a `:1` tag doesn't exist while versions are 0.x), and the header drops the
+// `.env.example` step, because `init` writes the `.env` itself.
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 
 const deploy = new URL('../../../deploy/', import.meta.url);

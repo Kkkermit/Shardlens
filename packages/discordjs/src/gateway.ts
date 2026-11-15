@@ -16,7 +16,7 @@ interface ModernWs {
   off?: (event: string, listener: (...args: never[]) => void) => unknown;
 }
 
-const legacy = (client: Client) => (client.ws as unknown as LegacyWs).shards;
+const legacyShards = (client: Client) => (client.ws as unknown as LegacyWs).shards;
 const modern = (client: Client) => client.ws as unknown as ModernWs;
 
 /** True on discord.js 14, where shard events are client events. */
@@ -24,7 +24,7 @@ const legacyShardEvents = (Events as Record<string, unknown>).ShardReady !== und
 
 /** Shard IDs this client runs. Empty before login (v15 has no shards until it connects). */
 export function shardIds(client: Client): number[] {
-  const shards = legacy(client);
+  const shards = legacyShards(client);
   if (shards && typeof shards.keys === 'function') return [...shards.keys()];
   try {
     const ids = modern(client).getShardIds?.();
@@ -35,14 +35,14 @@ export function shardIds(client: Client): number[] {
 }
 
 export function localShardCount(client: Client): number {
-  const shards = legacy(client);
+  const shards = legacyShards(client);
   if (shards && typeof shards.size === 'number') return shards.size;
   return shardIds(client).length;
 }
 
 /** Total shard count the gateway manager knows (all processes), when it knows it. */
 export function managerShardCount(client: Client): number | undefined {
-  if (legacy(client)) return undefined;
+  if (legacyShards(client)) return undefined;
   try {
     const count = modern(client).getShardCount?.();
     return typeof count === 'number' && count > 0 ? count : undefined;
@@ -53,7 +53,7 @@ export function managerShardCount(client: Client): number | undefined {
 
 /** Latest heartbeat latency per shard, in milliseconds (shards without one yet are left out). */
 export function shardPings(client: Client): { shard: number; ping: number }[] {
-  const shards = legacy(client);
+  const shards = legacyShards(client);
   if (shards && typeof shards.values === 'function') {
     return [...shards.values()].filter((s) => s.ping >= 0).map((s) => ({ shard: s.id, ping: s.ping }));
   }
@@ -62,7 +62,7 @@ export function shardPings(client: Client): { shard: number; ping: number }[] {
   return [...pings.entries()].filter(([, ping]) => ping >= 0).map(([shard, ping]) => ({ shard, ping }));
 }
 
-export interface ShardHandlers {
+interface ShardHandlers {
   ready(shard: number, unavailableGuilds: number): void;
   resumed(shard: number, replayed: number | undefined): void;
   reconnecting(shard: number): void;

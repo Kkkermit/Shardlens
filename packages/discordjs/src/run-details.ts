@@ -11,14 +11,14 @@ import type { ShardlensOptions } from './options.js';
 type Tier = 'admin' | 'manager' | 'member' | 'dm';
 type Value = string | number | boolean;
 
-/** Admin, manager or member from the runner's permissions in the server, `dm` outside one, `unknown` when unreadable. */
+/** Admin, manager or member from the runner's permissions in the server, `dm` outside one, `fallback` when unreadable. */
 export function memberTier(
   inGuild: boolean,
   permissions: Readonly<PermissionsBitField> | null | undefined,
-  unknown: Tier | undefined,
+  fallback: Tier | undefined,
 ): Tier | undefined {
   if (!inGuild) return 'dm';
-  if (!permissions) return unknown;
+  if (!permissions) return fallback;
   if (permissions.has(PermissionFlagsBits.Administrator)) return 'admin';
   return permissions.has(PermissionFlagsBits.ManageGuild) ? 'manager' : 'member';
 }

@@ -1,4 +1,11 @@
-import { compact, normaliseCustomId, redactSecrets, type ShardlensClient, uuidv7 } from '@shardlens/core';
+import {
+  compact,
+  MAX_CUSTOM_ID_LENGTH,
+  normaliseCustomId,
+  redactSecrets,
+  type ShardlensClient,
+  uuidv7,
+} from '@shardlens/core';
 import type { EventInput } from '@shardlens/schema';
 import { ApplicationIntegrationType, type Interaction } from 'discord.js';
 import type { ShardlensOptions } from './options.js';
@@ -42,17 +49,24 @@ interface Pending {
 interface Emitted {
   eventId: string;
   command?: string;
-  handlerRunning: boolean;
 }
 
-export interface TrackerContext {
+interface TrackerContext {
   client: ShardlensClient<EventInput>;
   options: ShardlensOptions;
   count: (name: string, error?: unknown) => void;
   shardCount: () => number;
+  /** Users whose interactions are never recorded. Owned by the caller, which also applies it to other events. */
+  optedOut: ReadonlySet<string>;
 }
 
 type FlatOption = { name: string; value?: unknown };
+
+/** A custom ID as it is recorded: secrets redacted, then the bot's normaliser (or the default one), then capped. */
+function recordedCustomId(customId: string, options: ShardlensOptions): string {
+  const normalise = options.normaliseCustomId ?? normaliseCustomId;
+  return normalise(redactSecrets(customId)).slice(0, MAX_CUSTOM_ID_LENGTH);
+}
 
 function flattenOptions(
   data: readonly { name: string; value?: unknown; options?: readonly unknown[] }[],
@@ -73,7 +87,6 @@ function describeInteraction(
   const owners = (i.authorizingIntegrationOwners ?? {}) as unknown as Record<string, unknown>;
   const guildInstalled = owners[String(ApplicationIntegrationType.GuildInstall)] !== undefined;
   const userInstalled = owners[String(ApplicationIntegrationType.UserInstall)] !== undefined;
-  const normalise = options.normaliseCustomId ?? normaliseCustomId;
   const context = i.context;
   const common = compact({
     id: uuidv7(i.createdTimestamp),
@@ -141,7 +154,7 @@ function describeInteraction(
     return compact({
       ...common,
       kind: i.isButton() ? ('button' as const) : ('select' as const),
-      customId: normalise(redactSecrets(i.customId)).slice(0, 100),
+      customId: recordedCustomId(i.customId, options),
       componentType: i.componentType,
     });
   }
@@ -149,7 +162,7 @@ function describeInteraction(
     return compact({
       ...common,
       kind: 'modal_submit' as const,
-      customId: normalise(redactSecrets(i.customId)).slice(0, 100),
+      customId: recordedCustomId(i.customId, options),
     });
   }
   return undefined;
@@ -166,7 +179,6 @@ export class InteractionTracker {
   readonly #sourceCommand = new LruMap<string, string>(20_000);
   /** interaction ID → emitted event, for handler errors that arrive after the row was sent. */
   readonly #emitted = new LruMap<string, Emitted>(5_000);
-  readonly #optedOut = new Set<string>();
 
   constructor(ctx: TrackerContext) {
     this.#ctx = ctx;
@@ -176,9 +188,8 @@ export class InteractionTracker {
     return this.#pending.size;
   }
 
-  /** Stops recording a user, including the interaction they opted out with, if it has not been sent yet. */
-  optOut(userId: string): void {
-    this.#optedOut.add(userId);
+  /** Drops a user's interactions that have not been sent yet, such as the one they opted out with. */
+  dropPending(userId: string): void {
     for (const [id, p] of this.#pending) {
       if (p.userId !== userId) continue;
       clearTimeout(p.timer);
@@ -186,22 +197,9 @@ export class InteractionTracker {
     }
   }
 
-  #normaliseCustomId(customId: string): string {
-    const normalise = this.#ctx.options.normaliseCustomId ?? normaliseCustomId;
-    return normalise(redactSecrets(customId)).slice(0, 100);
-  }
-
-  optIn(userId: string): void {
-    this.#optedOut.delete(userId);
-  }
-
-  isOptedOut(userId: string): boolean {
-    return this.#optedOut.has(userId);
-  }
-
   /** Starts tracking an interaction. Safe to call more than once (the listener and `wrap()` both call it). */
   observe(i: Interaction): void {
-    if (this.#pending.has(i.id) || this.#emitted.has(i.id) || this.#optedOut.has(i.user.id)) return;
+    if (this.#pending.has(i.id) || this.#emitted.has(i.id) || this.#ctx.optedOut.has(i.user.id)) return;
     const base = describeInteraction(i, this.#ctx.options, this.#ctx.shardCount());
     if (!base) return;
     if (base.command && base.kind !== 'autocomplete') this.#sourceCommand.set(i.id, base.command);
@@ -288,7 +286,7 @@ export class InteractionTracker {
     const event = compact({
       ...p.base,
       // A command answered with a modal carries the modal's ID, which links it to the later submission.
-      customId: p.base.customId ?? (modal === undefined ? undefined : this.#normaliseCustomId(modal)),
+      customId: p.base.customId ?? (modal === undefined ? undefined : recordedCustomId(modal, this.#ctx.options)),
       outcome,
       ackMs: p.response?.ackMs,
       responseType: p.response?.responseType,
@@ -301,7 +299,6 @@ export class InteractionTracker {
     this.#emitted.set(interactionId, {
       eventId: p.base.id,
       ...(p.base.command ? { command: p.base.command } : {}),
-      handlerRunning: p.handler?.state === 'running',
     });
     this.#ctx.client.enqueueWithUser(p.userId, p.base.ts, 3, (user) => ({ ...event, user }) as InteractionInput);
   }

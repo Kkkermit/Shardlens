@@ -187,9 +187,10 @@ export function createShardlens(client: Client, options: ShardlensOptions): Shar
   const enqueue = (event: EventInput, priority: 0 | 1 | 2 | 3) => transport.enqueue(event, priority);
   const shardCount = () => totalShards(client);
 
+  const optedOut = new Set<string>(options.optedOut ?? []);
   const tracker = disabled.has('interactions')
     ? undefined
-    : new InteractionTracker({ client: transport, options: { ...options, mode }, count, shardCount });
+    : new InteractionTracker({ client: transport, options: { ...options, mode }, count, shardCount, optedOut });
 
   const listeners: [string, (...args: never[]) => void][] = [];
   const listen = <A extends unknown[]>(event: string, name: string, fn: (...args: A) => void | Promise<void>) => {
@@ -205,7 +206,6 @@ export function createShardlens(client: Client, options: ShardlensOptions): Shar
     timers.push(t);
   };
 
-  for (const userId of options.optedOut ?? []) tracker?.optOut(userId);
   const notifyOptOut = (userId: string, optedOut: boolean) => {
     try {
       options.onOptOutChange?.(userId, optedOut);
@@ -313,8 +313,9 @@ export function createShardlens(client: Client, options: ShardlensOptions): Shar
           startsAt: e.startsTimestamp ?? null,
           endsAt: e.endsTimestamp ?? null,
         });
-      if (e.userId) transport.enqueueWithUser(e.userId, Date.now(), 2, (user) => build(user));
-      else enqueue(build(), 2);
+      if (e.userId) {
+        if (!optedOut.has(e.userId)) transport.enqueueWithUser(e.userId, Date.now(), 2, (user) => build(user));
+      } else enqueue(build(), 2);
     };
     listen(Events.EntitlementCreate, 'entitlementCreate', (e: Entitlement) => entitlement('create', e));
     listen(Events.EntitlementUpdate, 'entitlementUpdate', (_old: Entitlement | null, e: Entitlement) =>
@@ -323,6 +324,7 @@ export function createShardlens(client: Client, options: ShardlensOptions): Shar
     listen(Events.EntitlementDelete, 'entitlementDelete', (e: Entitlement) => entitlement('delete', e));
 
     const subscription = (action: 'create' | 'update' | 'delete', s: Subscription) => {
+      if (optedOut.has(s.userId)) return;
       transport.enqueueWithUser(s.userId, Date.now(), 2, (user) => ({
         id: uuidv7(),
         ts: Date.now(),
@@ -366,11 +368,13 @@ export function createShardlens(client: Client, options: ShardlensOptions): Shar
     listeners.push([Events.ClientReady, onReady as (...args: never[]) => void]);
   }
 
-  const flushInterval = Math.max(250, options.flushIntervalMs ?? 5_000);
-  every(flushInterval, 'restWindow', () => {
+  // The core client's flush interval and queue size, with the same fallbacks for values that aren't numbers.
+  const flushIntervalMs = Number.isFinite(options.flushIntervalMs) ? (options.flushIntervalMs as number) : 5_000;
+  const maxQueueSize = Number.isFinite(options.maxQueueSize) ? (options.maxQueueSize as number) : 10_000;
+  every(Math.min(2 ** 31 - 1, Math.max(250, flushIntervalMs)), 'restWindow', () => {
     const window = restHooks?.drain();
     if (window && !disabled.has('rest')) enqueue(window, 1);
-    const room = (options.maxQueueSize ?? 10_000) / 2 - transport.stats().queueDepth;
+    const room = maxQueueSize / 2 - transport.stats().queueDepth;
     pacer.tick(Math.min(PROFILES_PER_TICK, room), (id) => {
       const guild = client.guilds.cache.get(id);
       if (guild) enqueue(guildUpdate(guild), 1);
@@ -394,7 +398,7 @@ export function createShardlens(client: Client, options: ShardlensOptions): Shar
   const trackMessageCommand = (message: Message, run: MessageCommandRun): void => {
     try {
       const userId = message.author.id;
-      if (!tracker || tracker.isOptedOut(userId)) return;
+      if (!tracker || optedOut.has(userId)) return;
       const event = describeMessageCommand(message, run, { ...options, mode }, shardCount());
       if (!event) {
         count('message_command_invalid');
@@ -417,7 +421,7 @@ export function createShardlens(client: Client, options: ShardlensOptions): Shar
           count('track_invalid');
           return;
         }
-        if (context?.userId && tracker?.isOptedOut(context.userId)) return;
+        if (context?.userId && optedOut.has(context.userId)) return;
         // Stamped now, not when the user hash is ready: that can be much later if the collector is unreachable.
         const ts = Date.now();
         const id = uuidv7(ts);
@@ -520,19 +524,18 @@ export function createShardlens(client: Client, options: ShardlensOptions): Shar
     },
 
     optOut(userId) {
-      if (tracker?.isOptedOut(userId)) return;
-      tracker?.optOut(userId);
+      if (optedOut.has(userId)) return;
+      optedOut.add(userId);
+      tracker?.dropPending(userId);
       notifyOptOut(userId, true);
     },
 
     optIn(userId) {
-      if (!tracker?.isOptedOut(userId)) return;
-      tracker?.optIn(userId);
-      notifyOptOut(userId, false);
+      if (optedOut.delete(userId)) notifyOptOut(userId, false);
     },
 
     isOptedOut(userId) {
-      return tracker?.isOptedOut(userId) ?? false;
+      return optedOut.has(userId);
     },
 
     forgetUser(userId) {
@@ -561,7 +564,6 @@ export function createShardlens(client: Client, options: ShardlensOptions): Shar
         const window = restHooks?.drain();
         if (window && !disabled.has('rest')) enqueue(window, 1);
         restHooks?.uninstall();
-        await new Promise((resolve) => setTimeout(resolve, 0)); // let pending hashes land in the queue
       } catch (error) {
         count('shutdown', error);
       }

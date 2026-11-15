@@ -1,6 +1,16 @@
 /** Class name of a thrown value, for the `errorClass` field. Never the message, which can hold user input. */
 export function errorClass(error: unknown): string {
-  if (error instanceof Error) return (error.constructor?.name || error.name || 'Error').slice(0, 64);
+  if (error instanceof Error) {
+    // Both can be overwritten with anything, including a getter that throws.
+    try {
+      for (const name of [error.constructor?.name, error.name]) {
+        if (typeof name === 'string' && name.length > 0) return name.slice(0, 64);
+      }
+    } catch {
+      // fall through to the generic name
+    }
+    return 'Error';
+  }
   return typeof error === 'object' && error !== null ? 'Object' : typeof error;
 }
 

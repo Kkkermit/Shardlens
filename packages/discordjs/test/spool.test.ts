@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { uuidv7, type WireEvent } from '@shardlens/core';
 import { Guild } from 'discord.js';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CountRefresher } from '../src/guilds.js';
 import { createShardlens } from '../src/index.js';
 import { FileSpool } from '../src/spool.js';
@@ -57,10 +57,28 @@ describe('FileSpool', () => {
     for (let i = 0; i < 20; i++) await spool.write([ev(`batch_${i}`)]);
     const total = readdirSync(dir).reduce((n, f) => n + statSync(join(dir, f)).size, 0);
     expect(total).toBeLessThanOrEqual(2048);
-    expect(spool.evicted).toBeGreaterThan(0);
     const oldest = await spool.next();
     expect(oldest).toBeDefined();
     expect((oldest?.events[0] as (WireEvent & { name: string }) | undefined)?.name).not.toBe('batch_0');
+  });
+
+  it('never lets two processes sharing a folder replace each other’s batches', async () => {
+    const dir = join(tempDir(), 'spool');
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_763_052_121_000);
+    try {
+      await Promise.all([new FileSpool(dir).write([ev('a')]), new FileSpool(dir).write([ev('b')])]);
+    } finally {
+      now.mockRestore();
+    }
+    expect(readdirSync(dir)).toHaveLength(2);
+  });
+
+  it('keeps the default size cap when maxBytes is not a number', async () => {
+    const dir = join(tempDir(), 'spool');
+    const spool = new FileSpool(dir, Number.NaN);
+    await spool.write([ev('first')]);
+    await spool.write([ev('second')]);
+    expect(readdirSync(dir)).toHaveLength(2);
   });
 
   it('only ever deletes its own segment files', async () => {

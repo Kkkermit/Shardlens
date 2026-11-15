@@ -29,7 +29,7 @@ export interface PrivacyCommand {
  */
 export function createPrivacyCommand(lens: Shardlens, options: PrivacyCommandOptions = {}): PrivacyCommand {
   const name = options.name ?? 'privacy';
-  // Plain command JSON rather than a builder: discord.js 15 no longer re-exports the builders.
+  // Plain command JSON rather than a builder: discord.js 15 doesn't re-export the builders.
   const sub = (subName: string, description: string) => ({
     type: ApplicationCommandOptionType.Subcommand as const,
     name: subName,
@@ -59,15 +59,15 @@ export function createPrivacyCommand(lens: Shardlens, options: PrivacyCommandOpt
     async handle(i) {
       if (i.commandName !== name) return false;
       try {
-        const sub = i.options.getSubcommand(false);
+        const subcommand = i.options.getSubcommand(false);
         const userId = i.user.id;
-        if (sub === 'optout') {
+        if (subcommand === 'optout') {
           lens.optOut(userId);
           await reply(i, `Done. Your use of this bot is no longer recorded. Use \`/${name} optin\` to change this.`);
-        } else if (sub === 'optin') {
+        } else if (subcommand === 'optin') {
           lens.optIn(userId);
           await reply(i, 'Thanks. Usage recording is back on for you.');
-        } else if (sub === 'erase') {
+        } else if (subcommand === 'erase') {
           // Opt out first, so this command itself is not recorded after the erasure it asks for.
           lens.optOut(userId);
           await i.deferReply({ flags: MessageFlags.Ephemeral });

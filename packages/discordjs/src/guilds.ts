@@ -117,10 +117,6 @@ export class ProfilePacer {
     this.#pending = [...guildIds];
   }
 
-  get remaining(): number {
-    return this.#pending.length;
-  }
-
   tick(budget: number, emit: (guildId: string) => void): void {
     const n = Math.max(0, Math.min(budget, this.#pending.length));
     for (const id of this.#pending.splice(0, n)) emit(id);

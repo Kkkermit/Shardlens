@@ -288,6 +288,17 @@ describe('createShardlensHttp', () => {
     expect(collector.events('interaction')).toEqual([]);
   });
 
+  it('stops calling an error listener once it is removed, even one added before the first event', () => {
+    const { lens } = setup();
+    const errors: string[] = [];
+    const off = lens.on('error', (name) => errors.push(name));
+    lens.track('Bad Name', {});
+    expect(errors).toEqual(['track_invalid']);
+    off();
+    lens.track('Bad Name', {});
+    expect(errors).toEqual(['track_invalid']);
+  });
+
   it('records custom events and hashes their user', async () => {
     const { collector, lens } = setup();
     const ctx = new Ctx();

@@ -429,6 +429,63 @@ describe('ShardlensClient', () => {
     expect(Date.now() - started).toBeLessThan(1_000);
   });
 
+  it('sends events whose user hash is still being computed when shutdown starts', async () => {
+    const collector = fakeCollector();
+    const { client } = makeClient({ fetch: collector.fetch });
+    await settle();
+    client.enqueueWithUser('112233445566778899', Date.now(), 3, (user) => ({ ...custom(), user }) as WireEvent);
+    await client.shutdown({ timeoutMs: 1_000 });
+    expect(collector.sent.flatMap((s) => s.body.events).filter((e) => e.type === 'custom')).toHaveLength(1);
+    expect(client.stats().dropped.closed).toBe(0);
+  });
+
+  it('runs on with defaults when numeric options are not numbers, as unset environment variables give', async () => {
+    const collector = fakeCollector();
+    const { client } = makeClient({
+      fetch: collector.fetch,
+      maxQueueSize: Number.NaN,
+      maxBatchSize: Number.NaN,
+      flushIntervalMs: Number.NaN,
+    });
+    const { client: fractional } = makeClient({ fetch: collector.fetch, maxQueueSize: 2.5 });
+    await settle();
+    client.enqueue(custom(), 2);
+    await client.flush();
+    expect(collector.sent).toHaveLength(1);
+    expect(fractional.stats().queueDepth).toBe(0);
+  });
+
+  it('warns about a rejected key even when the reply body cannot be released', async () => {
+    const fetchImpl = (async () =>
+      new Response(
+        new ReadableStream({
+          cancel() {
+            throw new Error('cancel failed');
+          },
+        }),
+        { status: 401 },
+      )) as typeof fetch;
+    const { client, warnings } = makeClient({ fetch: fetchImpl });
+    await settle();
+    expect(warnings.filter((w) => w.includes('rejected the API key'))).toHaveLength(1);
+    expect(warnings.some((w) => w.includes("can't reach"))).toBe(false);
+    expect(client.stats().internalErrors).toEqual({});
+  });
+
+  it('waits for the dry-run salt in idle(), so a short-lived runtime still prints its events', async () => {
+    const lines: string[] = [];
+    const client = new ShardlensClient({
+      dryRun: true,
+      sdk: { name: '@shardlens/test', version: '0.0.0' },
+      logger: { warn: () => undefined, info: (m) => lines.push(m) },
+    });
+    clients.push(client);
+    client.enqueueWithUser('112233445566778899', Date.now(), 3, (user) => ({ ...custom(), user }) as WireEvent);
+    await client.idle();
+    await client.flush();
+    expect(lines.some((l) => l.includes('"type":"custom"'))).toBe(true);
+  });
+
   it('prints events in dry-run mode without contacting a collector', async () => {
     const lines: string[] = [];
     const fetchSpy = vi.fn();
@@ -518,6 +575,27 @@ describe('spool', () => {
     ]);
     expect(spool.size()).toBe(0);
     expect(client.stats().replayed).toBe(3);
+  });
+
+  it('says the collector is back when a spool replay is the first request to get through', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const spool = memorySpool();
+    await spool.write([custom()]);
+    const collector = fakeCollector({ ingest: [new Error('collector down')] });
+    const lines: string[] = [];
+    const { client } = makeClient({
+      fetch: collector.fetch,
+      spool,
+      random: () => 0,
+      logger: { warn: (m) => lines.push(`warn ${m}`), info: (m) => lines.push(`info ${m}`) },
+    });
+    await settle();
+    await client.flush();
+    expect(lines.at(-1)).toContain("warn Shardlens: can't reach the collector");
+    vi.setSystemTime(Date.now() + 1_000);
+    await client.flush();
+    expect(spool.size()).toBe(0);
+    expect(lines.at(-1)).toBe('info Shardlens: connected to the collector at https://collector.test.');
   });
 
   it('keeps spooled batches while the collector is still down', async () => {

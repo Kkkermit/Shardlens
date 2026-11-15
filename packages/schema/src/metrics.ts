@@ -19,7 +19,6 @@ export interface MetricDefinition {
 }
 
 export const METRICS = [
-  // Counters (rollup_1m / _1h / _1d)
   {
     name: 'interactions',
     kind: 'counter',
@@ -156,7 +155,6 @@ export const METRICS = [
     description: 'Discord webhook events received by the collector, one metric per event type.',
   },
 
-  // Gauges
   {
     name: 'shard.ping_ms',
     kind: 'gauge',

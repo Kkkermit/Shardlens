@@ -1,7 +1,6 @@
 import { hostname } from 'node:os';
 import type { monitorEventLoopDelay } from 'node:perf_hooks';
-import type { SourceInfo } from '@shardlens/core';
-import { uuidv7 } from '@shardlens/core';
+import { type SourceInfo, uuidv7 } from '@shardlens/core';
 import type { EventInput } from '@shardlens/schema';
 import { type Client, version as djsVersion, Routes } from 'discord.js';
 import { localShardCount, managerShardCount, shardIds, shardPings } from './gateway.js';

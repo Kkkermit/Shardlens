@@ -115,9 +115,39 @@ const CONFIG_REFRESH_MS = 60 * 60_000;
 const MAX_BATCHES_PER_FLUSH = 20;
 const SALT_RE = /^[A-Za-z0-9_-]{43}$/;
 const SNOWFLAKE_RE = /^\d{17,20}$/;
+/** Longer timer delays overflow, and Node then fires them after 1 ms. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
 
 function unref(timer: unknown): void {
   (timer as { unref?: () => void } | undefined)?.unref?.();
+}
+
+/**
+ * A numeric option as an integer within `[min, max]`, or `fallback` when it isn't a finite number. Options are often
+ * read from environment variables, where a missing one becomes `NaN`.
+ */
+function intOption(value: number | undefined, min: number, max: number, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(value)));
+}
+
+/** Waits for `work`, or for `ms` at most. */
+async function settleWithin(work: Promise<unknown>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, ms);
+    unref(timer);
+  });
+  try {
+    await Promise.race([work, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Releases a response body that won't be read. */
+async function discard(res: Response): Promise<void> {
+  await res.body?.cancel().catch(() => undefined);
 }
 
 function base64UrlDecode(s: string): Uint8Array {
@@ -184,7 +214,10 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
   #flushScheduled = false;
   #flushTimer: unknown;
   #configTimer: unknown;
+  /** `shutdown()` has started: new events are refused. */
   #closed = false;
+  /** `shutdown()` has returned: nothing more is sent, so events still being hashed are dropped. */
+  #stopped = false;
   #disabled = false;
   /** No collector configured: events only go to exporters. */
   readonly #localOnly: boolean;
@@ -200,12 +233,12 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
   constructor(options: ClientOptions) {
     this.#opts = {
       ...options,
-      flushIntervalMs: Math.max(250, options.flushIntervalMs ?? 5_000),
-      maxBatchSize: Math.min(MAX_BATCH_EVENTS - 1, Math.max(1, options.maxBatchSize ?? MAX_BATCH_EVENTS - 1)),
+      flushIntervalMs: intOption(options.flushIntervalMs, 250, MAX_TIMER_MS, 5_000),
+      maxBatchSize: intOption(options.maxBatchSize, 1, MAX_BATCH_EVENTS - 1, MAX_BATCH_EVENTS - 1),
       environment: (options.environment ?? 'production').slice(0, 32),
     };
     this.#batchCap = this.#opts.maxBatchSize;
-    this.#maxQueue = Math.max(1, options.maxQueueSize ?? 10_000);
+    this.#maxQueue = intOption(options.maxQueueSize, 1, Number.MAX_SAFE_INTEGER, 10_000);
     this.#queue = new BoundedQueue<E>(this.#maxQueue);
     this.#fetch = options.fetch ?? ((input, init) => fetch(input, init));
     this.#random = options.random ?? Math.random;
@@ -228,7 +261,7 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
 
     this.#flushTimer = setInterval(() => void this.flush(), this.#opts.flushIntervalMs);
     unref(this.#flushTimer);
-    if (options.dryRun) void this.#initDryRun();
+    if (options.dryRun) this.#configLoading = this.#initDryRun();
     else if (!this.#disabled) this.#configLoading = this.#loadConfig();
   }
 
@@ -332,7 +365,7 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       if (!res.ok) {
-        await res.body?.cancel().catch(() => undefined);
+        await discard(res);
         this.count(`erase_${res.status}`);
         return undefined;
       }
@@ -378,17 +411,11 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
    * request are hashed and sent before the runtime stops. Never throws.
    */
   async idle(timeoutMs = 2_000): Promise<void> {
-    let timer: unknown;
-    const timeout = new Promise<void>((resolve) => {
-      timer = setTimeout(resolve, timeoutMs);
-      unref(timer);
-    });
     const work = (async () => {
       await this.#configLoading;
-      while (this.#inflight > 0) await new Promise<void>((resolve) => this.#idleWaiters.push(resolve));
+      await this.#hashed();
     })().catch((error: unknown) => this.count('idle', error));
-    await Promise.race([work, timeout]);
-    clearTimeout(timer as ReturnType<typeof setTimeout>);
+    await settleWithin(work, timeoutMs);
   }
 
   /** Sends queued events now. Concurrent calls share one flush. Never throws. */
@@ -413,12 +440,9 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
     clearInterval(this.#flushTimer as ReturnType<typeof setInterval>);
     clearTimeout(this.#configTimer as ReturnType<typeof setTimeout>);
     const deadline = Date.now() + timeoutMs;
-    let timer: unknown;
-    const timeout = new Promise<void>((resolve) => {
-      timer = setTimeout(resolve, timeoutMs);
-      unref(timer);
-    });
     const drain = (async () => {
+      // Events recorded just before shutdown may still be waiting for their user hash.
+      await this.#hashed();
       while (this.#queue.size > 0 && Date.now() < deadline && !this.#disabled) {
         if (this.#retryAt > Date.now()) break;
         const before = this.#queue.size;
@@ -437,30 +461,35 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
         }
       }),
     );
-    await Promise.race([Promise.all([drain, exporters]), timeout]);
-    clearTimeout(timer as ReturnType<typeof setTimeout>);
+    await settleWithin(Promise.all([drain, exporters]), timeoutMs);
     // A send can hang past the deadline; the events still in memory go to the spool (local, quick) regardless.
     if (this.#opts.spool && this.#queue.size > 0) {
-      let spillTimer: unknown;
-      await Promise.race([
+      await settleWithin(
         this.#spill(true).catch((error: unknown) => this.count('shutdown', error)),
-        new Promise<void>((resolve) => {
-          spillTimer = setTimeout(resolve, 1_000);
-          unref(spillTimer);
-        }),
-      ]);
-      clearTimeout(spillTimer as ReturnType<typeof setTimeout>);
+        1_000,
+      );
+    }
+    this.#stopped = true;
+  }
+
+  /** Resolves once no user hashing is in progress. */
+  async #hashed(): Promise<void> {
+    while (this.#inflight > 0) await new Promise<void>((resolve) => this.#idleWaiters.push(resolve));
+  }
+
+  #log(level: 'warn' | 'info', message: string): void {
+    try {
+      if (level === 'warn') this.#logger.warn(redactSecrets(message));
+      else this.#logger.info?.(redactSecrets(message));
+    } catch {
+      // a broken logger must not break the SDK
     }
   }
 
   #warn(key: string, message: string): void {
     if (this.#warned.has(key)) return;
     this.#warned.add(key);
-    try {
-      this.#logger.warn(redactSecrets(message));
-    } catch {
-      // ignore logger failures
-    }
+    this.#log('warn', message);
   }
 
   /**
@@ -492,11 +521,7 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
 
   #collectorUp(): void {
     if (!this.#warned.delete('unreachable')) return;
-    try {
-      this.#logger.info?.(`Shardlens: connected to the collector at ${this.#collector}.`);
-    } catch {
-      // ignore logger failures
-    }
+    this.#log('info', `Shardlens: connected to the collector at ${this.#collector}.`);
   }
 
   get #collector(): string {
@@ -546,7 +571,7 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
   }
 
   #queueHashed(event: E, priority: Priority): void {
-    if (this.#closed) {
+    if (this.#stopped) {
       this.#extraDropped.closed++;
       return;
     }
@@ -611,7 +636,7 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       if (res.status === 401 || res.status === 403) {
-        await res.body?.cancel();
+        await discard(res);
         this.#warn(
           'auth',
           `Shardlens: the collector rejected the API key (${res.status}). Check SHARDLENS_INGEST_KEY.`,
@@ -619,7 +644,10 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
         this.#scheduleConfig(AUTH_RETRY_MS);
         return;
       }
-      if (!res.ok) throw new Error(`config request failed with ${res.status}`);
+      if (!res.ok) {
+        await discard(res);
+        throw new Error(`config request failed with ${res.status}`);
+      }
       const config = await this.#applyConfig(await res.json());
       this.#configAttempt = 0;
       this.#collectorUp();
@@ -775,9 +803,10 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
       // A batch the collector will never accept: drop it rather than block the spool.
       return 'drop';
     }
-    await res.body?.cancel().catch(() => undefined);
+    await discard(res);
     if (status >= 200 && status < 300) {
       this.#attempt = 0;
+      this.#collectorUp();
       return 'ok';
     }
     if (status === 413) return 'drop';
@@ -856,7 +885,7 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
     }
 
     if (this.#opts.dryRun) {
-      for (const event of events) this.#logger.info?.(`[shardlens dry-run] ${redactSecrets(JSON.stringify(event))}`);
+      for (const event of events) this.#log('info', `[shardlens dry-run] ${JSON.stringify(event)}`);
       return true;
     }
 
@@ -900,7 +929,7 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
       return true;
     }
 
-    await res.body?.cancel().catch(() => undefined);
+    await discard(res);
     if (status === 401 || status === 403) {
       this.#warn('auth', `Shardlens: the collector rejected the API key (${status}). Sending is paused.`);
       this.#failedFlushes++;

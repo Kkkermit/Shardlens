@@ -77,7 +77,6 @@ function f(object: CollectedObject, field: string, description: string, opts: Op
 }
 
 export const COLLECTED_FIELDS: readonly CollectedField[] = [
-  // Batch envelope
   f('envelope', 'v', 'Wire-format major version.', { retention: 'transient' }),
   f('envelope', 'mode', 'Data mode the SDK runs in (privacy or audit).', { retention: 'transient' }),
   f('envelope', 'sdk', 'SDK package name and version, kept with the SDK health of the sending process.', {
@@ -93,13 +92,11 @@ export const COLLECTED_FIELDS: readonly CollectedField[] = [
   f('envelope', 'sentAt', 'When the batch was sent; used to correct clock skew.', { retention: 'transient' }),
   f('envelope', 'events', 'The events in the batch.', { retention: 'transient' }),
 
-  // Every event
   f('event', 'id', 'UUIDv7 event ID; makes retries idempotent.'),
   f('event', 'ts', 'When the event happened (epoch milliseconds).'),
   f('event', 'weight', 'Inverse sample rate, so sampled counts stay accurate.'),
   f('event', 'type', 'Event type.'),
 
-  // Interaction
   f('interaction', 'kind', 'Slash command, context menu, entry point, button, select, modal submit or autocomplete.'),
   f('interaction', 'command', 'Command name.'),
   f('interaction', 'group', 'Subcommand group name.'),
@@ -138,7 +135,6 @@ export const COLLECTED_FIELDS: readonly CollectedField[] = [
   f('interaction', 'handlerMs', 'Handler duration, when the handler is wrapped with `lens.wrap()`.'),
   f('interaction', 'shard', 'Shard that received the interaction.'),
 
-  // Message (prefix) command, reported by the bot with `trackMessageCommand()`. Message content is never read.
   f('message_command', 'command', 'Command name as the bot defines it, after aliases. Never the text the user typed.'),
   f('message_command', 'group', 'Subcommand group name, if the bot reports one.'),
   f('message_command', 'sub', 'Subcommand name, if the bot reports one.'),
@@ -167,14 +163,12 @@ export const COLLECTED_FIELDS: readonly CollectedField[] = [
   f('message_command', 'handlerMs', 'Handler duration, when the bot reports it.'),
   f('message_command', 'shard', 'Shard that received the message.'),
 
-  // Interaction_error
   f('interaction_error', 'interaction', 'ID of the interaction event the error belongs to.'),
   f('interaction_error', 'command', 'Command name.'),
   f('interaction_error', 'errorClass', 'Error class name from a wrapped handler. Never messages or stack traces.'),
   f('interaction_error', 'errorCode', 'Discord API error code, if the error came from Discord.'),
   f('interaction_error', 'handlerMs', 'Handler duration until it failed.'),
 
-  // Command_permissions
   f('command_permissions', 'guild', 'Server that changed command permissions.'),
   f('command_permissions', 'command', 'Command ID, or the application ID for app-wide changes.'),
   f(
@@ -183,7 +177,6 @@ export const COLLECTED_FIELDS: readonly CollectedField[] = [
     'Number of permission overwrites now set. Role and user IDs are not collected.',
   ),
 
-  // Actor (audit mode)
   f('actor', 'userId', 'Discord user ID of the person who ran the interaction.', {
     mode: 'audit',
     personal: 'yes',
@@ -200,7 +193,6 @@ export const COLLECTED_FIELDS: readonly CollectedField[] = [
     retention: 'audit',
   }),
 
-  // Guild profile
   f('guild_info', 'guild', 'Server ID.', { retention: 'guild' }),
   f('guild_info', 'name', 'Server name (rendered as plain text).', { retention: 'guild' }),
   f('guild_info', 'icon', 'Server icon hash.', { retention: 'guild' }),
@@ -222,7 +214,6 @@ export const COLLECTED_FIELDS: readonly CollectedField[] = [
   f('guild_info', 'stickerCount', 'Number of stickers.', { retention: 'guild' }),
   f('guild_info', 'botPermissions', "The bot's permission bitfield in the server.", { retention: 'guild' }),
 
-  // Server lifecycle
   f('guild_join', 'info', 'Server profile at install.', { retention: 'guild' }),
   f('guild_join', 'detectedAtStartup', 'True when the join happened while the bot was offline.', {
     retention: 'guild',
@@ -241,12 +232,10 @@ export const COLLECTED_FIELDS: readonly CollectedField[] = [
     retention: 'transient',
   }),
 
-  // Commands
   f('command_registry', 'commands', 'Registered commands (ID, name, type, scope, subcommands) to find unused ones.', {
     retention: 'registry',
   }),
 
-  // Gateway and REST health
   f('shard_state', 'shard', 'Shard ID.'),
   f('shard_state', 'state', 'Ready, resumed, reconnecting, disconnected, error or invalidated.'),
   f('shard_state', 'closeCode', 'Gateway close code.'),
@@ -268,7 +257,6 @@ export const COLLECTED_FIELDS: readonly CollectedField[] = [
     retention: 'gauge',
   }),
 
-  // Premium
   f('entitlement', 'action', 'Created, updated or deleted.'),
   f('entitlement', 'sku', 'SKU ID.'),
   f('entitlement', 'entitlementType', 'Entitlement type (purchase, test, subscription and so on).'),
@@ -284,7 +272,6 @@ export const COLLECTED_FIELDS: readonly CollectedField[] = [
   f('subscription', 'periodStart', 'Current period start.'),
   f('subscription', 'periodEnd', 'Current period end.'),
 
-  // Custom events
   f('custom', 'name', 'Custom event name passed to `track()`.'),
   f('custom', 'props', 'Properties passed to `track()` (bot owner chooses; 2 KB maximum).'),
   f('custom', 'user', 'Keyed hash of the user, if the bot passes one.', {
@@ -293,7 +280,6 @@ export const COLLECTED_FIELDS: readonly CollectedField[] = [
   }),
   f('custom', 'guild', 'Server ID, if the bot passes one.'),
 
-  // Application
   f('app_info', 'name', 'Application name.', { retention: 'latest' }),
   f('app_info', 'approximateGuildCount', "Discord's approximate server count.", { retention: 'gauge' }),
   f('app_info', 'approximateUserInstallCount', "Discord's approximate user-install count.", { retention: 'gauge' }),
@@ -311,7 +297,6 @@ export const COLLECTED_FIELDS: readonly CollectedField[] = [
   f('app_info', 'nodeVersion', 'Node.js version of the bot process.', { retention: 'latest' }),
   f('app_info', 'libVersion', 'discord.js version of the bot process.', { retention: 'latest' }),
 
-  // SDK health
   f('sdk_health', 'queueDepth', 'Events waiting to be sent.', { retention: 'latest' }),
   f('sdk_health', 'dropped', 'Events dropped, by priority lane.', { retention: 'latest' }),
   f('sdk_health', 'failedFlushes', 'Batches that failed to send.', { retention: 'latest' }),

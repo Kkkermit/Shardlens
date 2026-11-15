@@ -91,7 +91,36 @@ describe('exporters', () => {
   });
 });
 
+describe('options', () => {
+  it('never runs a timer faster than 250 ms when numeric options are not numbers', async () => {
+    const intervals = vi.spyOn(globalThis, 'setInterval');
+    const { collector, lens } = setup(undefined, {
+      flushIntervalMs: Number.NaN,
+      maxQueueSize: Number.NaN,
+      maxBatchSize: Number.NaN,
+    });
+    const delays = intervals.mock.calls.map(([, ms]) => ms);
+    intervals.mockRestore();
+    expect(delays.length).toBeGreaterThan(0);
+    for (const ms of delays) expect(ms).toBeGreaterThanOrEqual(250);
+    await settle();
+    lens.track('still_works');
+    await lens.flush();
+    expect(collector.events('custom')).toHaveLength(1);
+  });
+});
+
 describe('interactions', () => {
+  it('sends an interaction answered just before shutdown', async () => {
+    const { collector, client, lens } = setup();
+    await settle();
+    const interaction = slash(client);
+    client.emit(Events.InteractionCreate, interaction);
+    await interaction.reply({ content: 'bye' });
+    await lens.shutdown({ timeoutMs: 1_000 });
+    expect(collector.events('interaction')).toHaveLength(1);
+  });
+
   it('records a slash command with its first-response latency on one row, hashing the user', async () => {
     const { collector, client, lens } = setup(undefined, { captureOptionValues: ['category'] });
     await settle();
@@ -433,6 +462,27 @@ describe('REST', () => {
       retryAfter: 1200,
     });
     expect(collector.raw()).not.toContain(CHANNEL_ID);
+  });
+
+  it('keeps a window within the wire limit of 2,000 rows when routes overflow', async () => {
+    const { collector, client, lens } = setup();
+    await settle();
+    const respond = (method: string, route: string, status: number) =>
+      client.rest.emit(
+        RESTEvents.Response,
+        { method, route, path: route, options: { headers: {} }, data: {}, retries: 0 } as never,
+        { status, headers: new Headers() } as never,
+      );
+    for (let i = 0; i < 2_100; i++) respond('GET', `/route/${i}`, 200);
+    for (const method of ['POST', 'PATCH', 'DELETE']) respond(method, '/another', 404);
+    await lens.flush();
+    const [window] = collector.events('rest_window') as unknown as {
+      rows: { method: string; route: string; count: number }[];
+    }[];
+    expect(window?.rows.length).toBeLessThanOrEqual(2_000);
+    const overflow = window?.rows.filter((row) => row.route === '(other)').map((row) => row.method);
+    expect(overflow?.sort()).toEqual(['DELETE', 'GET', 'PATCH', 'POST']);
+    expect(window?.rows.reduce((n, row) => n + row.count, 0)).toBe(2_103);
   });
 
   it('restores makeRequest and removes every listener on shutdown', async () => {

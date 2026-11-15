@@ -11,7 +11,10 @@ type RestRow = RestWindowInput['rows'][number];
 const CALLBACK_ROUTE = '/interactions/:id/:token/callback';
 /** Interaction callback type for "open a modal". */
 const MODAL = 9;
+/** The wire format's limit per `rest_window`: one row more and the collector rejects the whole window. */
 const MAX_ROWS = 2_000;
+/** Rows held back for `(other)`, so calls on routes past the limit still count under their method and status. */
+const OVERFLOW_ROWS = 100;
 const OVERFLOW_ROUTE = '(other)';
 
 type Rest = Client['rest'];
@@ -53,19 +56,19 @@ export function installRestHooks(
   let windowStart = Date.now();
 
   const record = (method: string, route: string, status: number, retries: number, ms: number | undefined) => {
-    let key = `${method} ${route} ${status}`;
-    if (!rows.has(key) && rows.size >= MAX_ROWS) key = `${method} ${OVERFLOW_ROUTE} ${status}`;
-    let row = rows.get(key);
+    let row = rows.get(`${method} ${route} ${status}`);
     if (!row) {
-      row = {
-        method,
-        route: rows.size >= MAX_ROWS ? OVERFLOW_ROUTE : route,
-        status,
-        count: 0,
-        retries: 0,
-        latency: newHistogram(),
-      };
-      rows.set(key, row);
+      const kept = rows.size < MAX_ROWS - OVERFLOW_ROWS ? route : OVERFLOW_ROUTE;
+      const key = `${method} ${kept} ${status}`;
+      row = rows.get(key);
+      if (!row) {
+        if (rows.size >= MAX_ROWS) {
+          opts.count('rest_rows_full');
+          return;
+        }
+        row = { method, route: kept, status, count: 0, retries: 0, latency: newHistogram() };
+        rows.set(key, row);
+      }
     }
     row.count++;
     row.retries += retries;

@@ -1,4 +1,4 @@
-import { avatarHash, compact, redactSecrets, uuidv7 } from '@shardlens/core';
+import { avatarHash, compact, MAX_CUSTOM_ID_LENGTH, redactSecrets, uuidv7 } from '@shardlens/core';
 
 /**
  * The parts of a raw Discord interaction payload Shardlens reads. `APIInteraction` from `discord-api-types` (and the
@@ -44,7 +44,7 @@ export interface RawUser {
   avatar?: string | null | undefined;
 }
 
-export interface DescribeOptions {
+interface DescribeOptions {
   mode: 'privacy' | 'audit';
   auditIncludeProfile: boolean;
   captureOptionValues: ReadonlySet<string>;
@@ -52,13 +52,17 @@ export interface DescribeOptions {
 }
 
 /** Interaction fields Shardlens keeps, before the outcome and the hashed user are added. */
-export type InteractionFields = Record<string, unknown> & { id: string; ts: number; kind: string; command?: string };
+type InteractionFields = Record<string, unknown> & { id: string; ts: number; kind: string; command?: string };
 
 const DISCORD_EPOCH = 1_420_070_400_000n;
 const ADMINISTRATOR = 1n << 3n;
 const MANAGE_GUILD = 1n << 5n;
 const SUB_COMMAND = 1;
 const SUB_COMMAND_GROUP = 2;
+const APPLICATION_COMMAND = 2;
+const MESSAGE_COMPONENT = 3;
+const APPLICATION_COMMAND_AUTOCOMPLETE = 4;
+const MODAL_SUBMIT = 5;
 
 function snowflakeTime(id: string): number {
   try {
@@ -97,6 +101,8 @@ function leaves(options: readonly RawOption[] | undefined, path: { group?: strin
 
 const snowflake = (v: unknown) => (typeof v === 'string' && /^\d{17,20}$/.test(v) ? v : undefined);
 const short = (v: unknown, n: number) => (typeof v === 'string' && v.length > 0 ? v.slice(0, n) : undefined);
+const customId = (v: unknown, options: DescribeOptions) =>
+  options.normaliseCustomId(redactSecrets(String(v ?? ''))).slice(0, MAX_CUSTOM_ID_LENGTH);
 
 /**
  * Turns a raw interaction into the wire fields Shardlens keeps, exactly as the discord.js adapter does. Returns
@@ -138,8 +144,7 @@ export function describeRawInteraction(
   const commandScope = data.guild_id ? 'guild' : 'global';
 
   let fields: Record<string, unknown> | undefined;
-  if (i.type === 2) {
-    // APPLICATION_COMMAND
+  if (i.type === APPLICATION_COMMAND) {
     if (data.type === 1 || data.type === undefined) {
       const path: { group?: string; sub?: string } = {};
       const all = leaves(data.options, path);
@@ -169,8 +174,7 @@ export function describeRawInteraction(
     } else if (data.type === 4) {
       fields = { kind: 'primary_entry_point', command: short(data.name, 32), commandId: snowflake(data.id) };
     }
-  } else if (i.type === 4) {
-    // APPLICATION_COMMAND_AUTOCOMPLETE
+  } else if (i.type === APPLICATION_COMMAND_AUTOCOMPLETE) {
     const focused = leaves(data.options).find((o) => o.focused)?.name;
     fields = {
       kind: 'autocomplete',
@@ -178,21 +182,16 @@ export function describeRawInteraction(
       commandId: snowflake(data.id),
       options: focused ? [focused.slice(0, 32)] : [],
     };
-  } else if (i.type === 3) {
-    // MESSAGE_COMPONENT
+  } else if (i.type === MESSAGE_COMPONENT) {
     const source = i.message?.interaction?.name?.split(' ')[0];
     fields = {
       kind: data.component_type === 2 ? 'button' : 'select',
-      customId: options.normaliseCustomId(redactSecrets(String(data.custom_id ?? ''))).slice(0, 100),
+      customId: customId(data.custom_id, options),
       componentType: data.component_type,
       sourceCommand: short(source, 32),
     };
-  } else if (i.type === 5) {
-    // MODAL_SUBMIT
-    fields = {
-      kind: 'modal_submit',
-      customId: options.normaliseCustomId(redactSecrets(String(data.custom_id ?? ''))).slice(0, 100),
-    };
+  } else if (i.type === MODAL_SUBMIT) {
+    fields = { kind: 'modal_submit', customId: customId(data.custom_id, options) };
   }
   if (!fields) return undefined;
   return { fields: compact({ ...common, ...fields }) as unknown as InteractionFields, userId: user?.id };

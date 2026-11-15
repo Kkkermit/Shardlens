@@ -93,6 +93,18 @@ describe('privacy', () => {
     expect(privacyParagraph({ audit: true, idsOnly: true })).not.toContain('username');
     expect(audit).toContain('"category"');
   });
+
+  it('refuses a retention that is not a whole number of days rather than printing the default', async () => {
+    const out = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    for (const retention of ['abc', '0', '-5', '7.5']) {
+      expect(await run(['privacy', `--retention=${retention}`]), retention).toBe(2);
+    }
+    expect(out).not.toHaveBeenCalled();
+    expect(err.mock.calls[0]?.[0]).toContain('--retention');
+    expect(await run(['privacy', '--retention', '60'])).toBe(0);
+    expect(out.mock.calls[0]?.[0]).toContain('kept for 60 days');
+  });
 });
 
 describe('readBotEnv', () => {
@@ -122,6 +134,16 @@ describe('doctor', () => {
     const checks = await doctor({ url: 'https://stats.example.com', key: `slk_ingest_${'A'.repeat(43)}`, fetchImpl });
     expect(checks.filter((c) => !c.ok && !c.warnOnly)).toEqual([]);
     expect(urls.every((u) => u.startsWith('https://stats.example.com/'))).toBe(true);
+  });
+
+  it('reports a missing salt once, without contradicting the key check', async () => {
+    const fetchImpl = (async (input: string | URL | Request) =>
+      String(input).endsWith('/healthz')
+        ? Response.json({ ok: true })
+        : Response.json({ appId: '1234567890123456789', mode: 'privacy', saltPeriod: 'month' })) as typeof fetch;
+    const checks = await doctor({ url: 'https://stats.example.com', key: `slk_ingest_${'A'.repeat(43)}`, fetchImpl });
+    expect(checks.filter((c) => c.name === 'Ingest key')).toEqual([expect.objectContaining({ ok: true })]);
+    expect(checks.find((c) => c.name === 'Salt available')).toMatchObject({ ok: false, detail: 'no salt served' });
   });
 
   it('flags plain HTTP to a remote collector', async () => {

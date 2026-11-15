@@ -81,7 +81,11 @@ export async function run(argv: string[]): Promise<number> {
       return 0;
     }
     case 'privacy': {
-      const retention = values.retention ? Number(values.retention) : undefined;
+      const retention = values.retention === undefined ? undefined : Number(values.retention);
+      if (retention !== undefined && !(Number.isInteger(retention) && retention > 0)) {
+        console.error('--retention must be a whole number of days');
+        return 2;
+      }
       console.log(
         privacyParagraph({
           audit: values.audit ?? false,
@@ -92,7 +96,7 @@ export async function run(argv: string[]): Promise<number> {
               .map((s) => s.trim())
               .filter(Boolean) ?? [],
           webhookEvents: values['webhook-events'] ?? false,
-          ...(retention ? { retentionDays: retention } : {}),
+          ...(retention !== undefined ? { retentionDays: retention } : {}),
         }),
       );
       console.error('\nThis is a starting point, not legal advice: check it against your own bot and obligations.');
