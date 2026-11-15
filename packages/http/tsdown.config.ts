@@ -10,7 +10,7 @@ export default defineConfig({
   target: 'es2023',
   // Runs on Cloudflare Workers, Deno, Bun and Node: Web-standard APIs only, no Node built-ins.
   platform: 'neutral',
-  sourcemap: true,
+  sourcemap: false,
   clean: true,
   define: { __SDK_VERSION__: JSON.stringify(version) },
 });

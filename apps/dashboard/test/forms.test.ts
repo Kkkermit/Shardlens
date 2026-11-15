@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, api, errorText, onUnauthorized } from '../src/api';
+import { ApiError, api, errorText, onUnauthorized, request } from '../src/api';
 import { decimal, firstCharacters, initials, ms, num, pct } from '../src/format';
-import { changedFields, isSnowflake } from '../src/forms';
+import { activityFilterError, changedFields, isSnowflake, permissionBitsError } from '../src/forms';
 import { loginError } from '../src/routes/shell';
-import { parseServerListSearch } from '../src/server-list';
+import { pageCount, parseServerListSearch, searchText } from '../src/server-list';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -27,7 +27,8 @@ describe('failed requests', () => {
   it('keeps the request ID and names the fields that were refused', async () => {
     vi.stubGlobal('fetch', answer(500, { error: 'internal', requestId: 'req-7' }));
     const failed = await api('/v1/query', { body: {} }).catch((e: unknown) => e);
-    expect(failed).toMatchObject({ status: 500, message: 'internal', requestId: 'req-7' });
+    expect(failed).toMatchObject({ status: 500, code: 'internal', requestId: 'req-7' });
+    expect(errorText(failed)).toBe('The collector ran into an error.');
 
     vi.stubGlobal('fetch', answer(400, { error: 'invalid_request', issues: [{ path: ['webhookUrl'] }] }));
     const invalid = await api('/v1/alerts', { body: {} }).catch((e: unknown) => e);
@@ -36,6 +37,54 @@ describe('failed requests', () => {
     expect(errorText(new ApiError(429, 'rate_limited'))).toBe('Too many attempts. Wait a minute and try again.');
     expect(errorText(new ApiError(400, 'invalid_request', { fields: ['constructor'] }))).toBe(
       'Please check constructor and try again.',
+    );
+  });
+
+  it('says what went wrong in words, never as a bare code', async () => {
+    // The collector's own explanation wins (a webhook Discord refused).
+    vi.stubGlobal('fetch', answer(502, { error: 'webhook_failed', message: 'Discord answered 404 (Unknown Webhook)' }));
+    expect(errorText(await api('/v1/alerts/1/test', { body: {} }).catch((e: unknown) => e))).toBe(
+      'Discord answered 404 (Unknown Webhook)',
+    );
+    // A proxy's error page has no code.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('<html>Bad gateway</html>', { status: 502 })),
+    );
+    const proxied = await api('/v1/query', { body: {} }).catch((e: unknown) => e);
+    expect(proxied).toMatchObject({ status: 502, code: 'http_502' });
+    expect(errorText(proxied)).toBe('The collector ran into an error.');
+    // No answer at all: fetch rejects with a TypeError.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Promise.reject(new TypeError('Failed to fetch'))),
+    );
+    expect(errorText(await api('/v1/query', { body: {} }).catch((e: unknown) => e))).toBe(
+      "Couldn't reach the collector. Check your connection and try again.",
+    );
+    expect(errorText(new ApiError(404, 'not_found'))).toBe(
+      'It no longer exists. Reload the page to see what is there now.',
+    );
+    expect(errorText(new ApiError(403, 'not_a_team_member'))).toBe(
+      'Only the app owner and its team members can do this.',
+    );
+    expect(errorText(new ApiError(400, 'nothing_to_erase'))).toBe('The request failed (nothing_to_erase).');
+    expect(errorText(new ApiError(400, 'invalid_request', { fields: ['guild'] }))).toBe(
+      'Please check the server ID and try again.',
+    );
+  });
+
+  it('sends the confirmation headers an export needs and hands back the file', async () => {
+    const fetch = vi.fn(async () => new Response('time,user_id\n', { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+    const res = await request('/v1/audit/export.csv', { headers: { 'x-shardlens-confirm': 'export-audit-log' } });
+    expect(await res.text()).toBe('time,user_id\n');
+    expect(fetch).toHaveBeenCalledWith(
+      '/v1/audit/export.csv',
+      expect.objectContaining({
+        method: 'GET',
+        headers: expect.objectContaining({ 'x-shardlens-confirm': 'export-audit-log' }),
+      }),
     );
   });
 });
@@ -57,6 +106,19 @@ describe('form input', () => {
     expect(isSnowflake('18446744073709551615')).toBe(false);
     expect(isSnowflake(' 80351110224678912')).toBe(false);
     expect(isSnowflake('1234')).toBe(false);
+  });
+
+  it('checks activity filters and permission bits before the collector would refuse them', () => {
+    expect(activityFilterError({ command: 'ticket', guild: '', user: ' 80351110224678912 ' })).toBe('');
+    expect(activityFilterError({ command: '', guild: 'abc', user: '' })).toBe('A server ID is 17 to 19 digits.');
+    expect(activityFilterError({ command: '', guild: '', user: '12' })).toBe('A user ID is 17 to 19 digits.');
+    expect(activityFilterError({ command: 'x'.repeat(33), guild: '', user: '' })).toMatch(/32 characters/);
+    expect(permissionBitsError('')).toBe('');
+    expect(permissionBitsError('277025770560')).toBe('');
+    expect(permissionBitsError('9223372036854775807')).toBe('');
+    expect(permissionBitsError('9223372036854775808')).not.toBe('');
+    expect(permissionBitsError('99999999999999999999')).not.toBe('');
+    expect(permissionBitsError('12a')).not.toBe('');
   });
 
   it('sends only the settings that changed', () => {
@@ -86,6 +148,17 @@ describe('initials', () => {
     expect(initials('  ', 3)).toBe('');
     expect(firstCharacters('🇬🇧abc', 2)).toBe('🇬🇧a');
     expect(initials('ünïcode server', 3)).toBe('ÜS');
+  });
+});
+
+describe('server list search box', () => {
+  it('keeps what was typed and puts only a real search in the address', () => {
+    expect(searchText(' ')).toBeUndefined();
+    expect(searchText(' pix')).toBe(' pix');
+    expect(searchText('a'.repeat(120))).toHaveLength(100);
+    expect(pageCount(0, 50)).toBe(1);
+    expect(pageCount(50, 50)).toBe(1);
+    expect(pageCount(53, 50)).toBe(2);
   });
 });
 

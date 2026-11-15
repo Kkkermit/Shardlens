@@ -3,7 +3,7 @@ import type { EventInput } from '@shardlens/schema';
 import type { Message } from 'discord.js';
 import type { ShardlensOptions } from './options.js';
 import { auditActor, capturedValues, memberTier } from './run-details.js';
-import { shardForGuild } from './util.js';
+import { clampedInt, shardForGuild } from './util.js';
 
 type MessageCommandInput = Extract<EventInput, { type: 'message_command' }>;
 
@@ -57,7 +57,6 @@ export function describeMessageCommand(
 
   const failed = run.error !== undefined || run.failed === true;
   const code = run.error === undefined ? undefined : errorCode(run.error);
-  const ms = typeof run.durationMs === 'number' && Number.isFinite(run.durationMs) ? run.durationMs : undefined;
 
   return compact({
     id: uuidv7(message.createdTimestamp),
@@ -79,7 +78,7 @@ export function describeMessageCommand(
     outcome: failed ? ('error' as const) : ('ok' as const),
     errorClass: run.error === undefined ? undefined : errorClass(run.error),
     errorCode: code,
-    handlerMs: ms === undefined ? undefined : Math.max(0, Math.round(ms)),
+    handlerMs: clampedInt(run.durationMs),
     shard: message.guild?.shardId ?? (message.guildId ? shardForGuild(message.guildId, shardCount) : 0),
     actor: auditActor(message.author, options),
   });

@@ -7,7 +7,8 @@ export default defineConfig({
   dts: { entry: ['src/embedded.ts'] },
   target: 'node24',
   platform: 'node',
-  sourcemap: true,
+  // The package and the image ship without source maps, so the code carries no comment pointing at one.
+  sourcemap: false,
   clean: true,
   fixedExtension: false,
 });

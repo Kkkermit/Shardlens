@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { readdirSync, readFileSync } from 'node:fs';
+import { batchJsonSchema } from '@shardlens/schema';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Db } from '../src/db.js';
 import { ENV_VARIABLES, loadConfig } from '../src/env.js';
@@ -133,6 +134,12 @@ describe('docs stay in step with the code', () => {
     const json = JSON.stringify(doc);
     expect(json).toContain('interaction_error');
     expect(json).not.toMatch(/"groupBy"[^}]*"user"/);
+    // The ingest body is the published batch schema, privacy-mode rule included.
+    const ingestBody = (doc.paths['/v1/ingest'] as unknown as {
+      post: { requestBody: { content: { 'application/json': { schema: Record<string, unknown> } } } };
+    }).post.requestBody.content['application/json'].schema;
+    expect(ingestBody).toEqual(batchJsonSchema());
+    expect(JSON.stringify(ingestBody.then)).toContain('actor');
   });
 
   it('lists the filters of the activity log and of its export', () => {

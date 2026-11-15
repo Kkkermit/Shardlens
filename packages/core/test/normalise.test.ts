@@ -99,8 +99,12 @@ describe('cutText', () => {
     expect(cutText('a\udc00', 10)).toBe('a\ufffd');
   });
 
-  it('always gives well-formed text no longer than asked (property)', () => {
-    // Any UTF-16 code units, so lone and split surrogates come up.
+  it('replaces NUL, which the collector refuses', () => {
+    expect(cutText('a\0b\0', 10)).toBe('a\ufffdb\ufffd');
+  });
+
+  it('always gives well-formed text without NUL, no longer than asked (property)', () => {
+    // Any UTF-16 code units, so NUL and lone and split surrogates come up.
     const units = fc.array(fc.integer({ min: 0, max: 0xffff }), { maxLength: 300 });
     const loneSurrogate = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
     fc.assert(
@@ -108,6 +112,7 @@ describe('cutText', () => {
         const out = cutText(String.fromCharCode(...codes), max);
         expect(out.length).toBeLessThanOrEqual(max);
         expect(out).not.toMatch(loneSurrogate);
+        expect(out.includes('\0')).toBe(false);
       }),
     );
   });

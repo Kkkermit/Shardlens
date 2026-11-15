@@ -1061,7 +1061,8 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
     let source: SourceInfo = { shards: [], instance: 'unknown' };
     try {
       const s = this.#opts.source?.();
-      if (typeof s === 'object' && s !== null) source = { ...s, instance: String(s.instance).slice(0, 128) };
+      // A NUL in the envelope would make the collector refuse the whole batch.
+      if (typeof s === 'object' && s !== null) source = { ...s, instance: cutText(String(s.instance), 128) };
     } catch (error) {
       this.count('source', error);
     }

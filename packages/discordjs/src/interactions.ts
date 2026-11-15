@@ -302,10 +302,9 @@ export class InteractionTracker {
       errorClass: error?.errorClass,
       handlerMs: handler?.ms === undefined ? undefined : Math.round(handler.ms),
     });
-    this.#emitted.set(interactionId, {
-      eventId: p.base.id,
-      ...(p.base.command ? { command: p.base.command } : {}),
-    });
+    // A component's late failure belongs to the command that created its message.
+    const command = p.base.command || p.base.sourceCommand;
+    this.#emitted.set(interactionId, { eventId: p.base.id, ...(command ? { command } : {}) });
     this.#ctx.client.enqueueWithUser(p.userId, p.base.ts, 3, (user) => ({ ...event, user }) as InteractionInput);
   }
 }

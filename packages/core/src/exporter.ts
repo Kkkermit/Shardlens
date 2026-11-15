@@ -130,6 +130,9 @@ export interface MetricSink {
 
 const str = (v: unknown, fallback = ''): string => (typeof v === 'string' ? v : fallback);
 const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+/** The objects in `v`, if it is an array: a malformed row or gauge is skipped, not thrown on. */
+const objects = (v: unknown): Record<string, unknown>[] =>
+  Array.isArray(v) ? v.filter((x): x is Record<string, unknown> => typeof x === 'object' && x !== null) : [];
 
 const GAUGES: Record<string, [ExporterMetricName, (shardOrNothing: string) => MetricLabels, number]> = {
   'shard.ping_ms': ['shard_ping', (shard) => ({ shard }), 1 / 1000],
@@ -175,7 +178,7 @@ export function translateEvent(event: WireEvent, sink: MetricSink): void {
       sink.add('interaction_errors', { command: str(e.command), error_class: str(e.errorClass, 'Error') }, weight);
       return;
     case 'rest_window': {
-      for (const row of Array.isArray(e.rows) ? (e.rows as Record<string, unknown>[]) : []) {
+      for (const row of objects(e.rows)) {
         const labels = { method: str(row.method), route: str(row.route), status: String(num(row.status) ?? 0) };
         sink.add('rest_requests', labels, num(row.count) ?? 0);
       }
@@ -212,7 +215,7 @@ export function translateEvent(event: WireEvent, sink: MetricSink): void {
       sink.add('entitlements', { action: str(e.action, 'unknown') }, 1);
       return;
     case 'gauge_window':
-      for (const g of Array.isArray(e.gauges) ? (e.gauges as Record<string, unknown>[]) : []) {
+      for (const g of objects(e.gauges)) {
         const spec = GAUGES[str(g.name)];
         const value = num(g.value);
         if (!spec || value === undefined) continue;

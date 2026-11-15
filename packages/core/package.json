@@ -43,8 +43,7 @@
   "module": "./dist/index.js",
   "types": "./dist/index.d.cts",
   "files": [
-    "dist",
-    "!dist/**/*.map"
+    "dist"
   ],
   "publishConfig": {
     "access": "public",

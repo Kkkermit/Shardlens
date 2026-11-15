@@ -2,7 +2,7 @@ import { newHistogram, observe, uuidv7 } from '@shardlens/core';
 import type { EventInput } from '@shardlens/schema';
 import { type Client, RESTEvents } from 'discord.js';
 import type { InteractionTracker } from './interactions.js';
-import { normaliseRoute } from './util.js';
+import { clamped, clampedInt, normaliseRoute } from './util.js';
 
 type RestWindowInput = Extract<EventInput, { type: 'rest_window' }>;
 type RestRow = RestWindowInput['rows'][number];
@@ -16,6 +16,8 @@ const MAX_ROWS = 2_000;
 /** Rows held back for `(other)`, so calls on routes past the limit still count under their method and status. */
 const OVERFLOW_ROWS = 100;
 const OVERFLOW_ROUTE = '(other)';
+/** The wire format's cap on a rate limit's waits: 30 days, in milliseconds. */
+const MAX_WAIT_MS = 2_592_000_000;
 
 type Rest = Client['rest'];
 type MakeRequest = Rest['options']['makeRequest'];
@@ -137,7 +139,7 @@ export function installRestHooks(
               }
             }
             const err = (await source?.json().catch(() => undefined)) as { code?: unknown } | undefined;
-            code = typeof err?.code === 'number' ? err.code : undefined;
+            code = Number.isSafeInteger(err?.code) ? (err?.code as number) : undefined;
           }
           const timedOut = code === 10062 || (code === undefined && status === 404);
           opts.tracker.responded(id, {
@@ -165,7 +167,9 @@ export function installRestHooks(
       retryAfter: number;
       sublimitTimeout?: number;
     }) => {
-      const scope = info.scope === 'global' || info.scope === 'shared' ? info.scope : 'user';
+      // @discordjs/rest emits this only when it holds a request back, and always with `scope: 'user'`: a global wait
+      // shows only in `global`. 429 responses are counted in the REST window instead.
+      const scope = info.global ? 'global' : info.scope === 'shared' ? 'shared' : 'user';
       opts.enqueue(
         {
           id: uuidv7(),
@@ -175,9 +179,9 @@ export function installRestHooks(
           global: Boolean(info.global),
           route: normaliseRoute(info.route),
           method: String(info.method).toUpperCase().slice(0, 8),
-          limit: Number.isFinite(info.limit) ? Math.trunc(info.limit) : 0,
-          retryAfter: Math.max(0, info.retryAfter ?? 0),
-          sublimitTimeout: Math.max(0, info.sublimitTimeout ?? 0),
+          limit: clampedInt(info.limit, Number.MAX_SAFE_INTEGER) ?? 0,
+          retryAfter: clamped(info.retryAfter, MAX_WAIT_MS) ?? 0,
+          sublimitTimeout: clamped(info.sublimitTimeout, MAX_WAIT_MS) ?? 0,
         },
         2,
       );
@@ -190,8 +194,8 @@ export function installRestHooks(
         id: uuidv7(),
         ts: Date.now(),
         type: 'invalid_request_warning',
-        count: Math.trunc(info.count),
-        remainingTime: info.remainingTime,
+        count: clampedInt(info.count, Number.MAX_SAFE_INTEGER) ?? 0,
+        remainingTime: clamped(info.remainingTime, MAX_WAIT_MS) ?? 0,
       },
       2,
     );

@@ -27,11 +27,16 @@ reference, a bot running 100 commands a second sends far less than 1,000 events 
 Ingest is stateless, so you can run several collectors behind a load balancer against the same PostgreSQL database:
 
 - **Migrations** run under an advisory lock, so collectors can start at the same time.
-- **Background jobs** (rollups, uniques, salts, retention, alerts) run on one collector at a time. They take a
-  PostgreSQL advisory lock (`pg_try_advisory_lock`) and another collector takes over if the leader stops.
+- **Background jobs** (rollups, unique users, salts, partitions and retention, alerts and reports) run on one
+  collector at a time. They take a PostgreSQL advisory lock (`pg_try_advisory_lock`), and another collector takes over
+  within 30 seconds if the leader stops.
 - **Live tiles** are shared through `LISTEN/NOTIFY`, so every collector's dashboard sees every event.
 - **Back-pressure**: when a collector is busy it answers `503` with `Retry-After`, and the SDK keeps the batch and
   retries with jitter.
+- **Keys** are checked against the database and remembered for a minute, so a key revoked on one collector stops
+  working on the others within a minute. Sessions and settings are read from the database on every request.
+- **Upgrades** can be rolling, except from 1.0 on a PostgreSQL that isn't set to UTC (see
+  [Upgrading](../upgrading/#from-10-to-11)).
 
 Set `SHARDLENS_TRUST_PROXY` to the number of proxies in front (`1` for one load balancer), so rate limits see client
 addresses.
@@ -43,7 +48,10 @@ minute, hour and day rollups, never from raw rows, so dashboards stay fast as da
 
 - Give PostgreSQL fast storage and enough memory for the current day's partitions.
 - Use a managed database with TLS for larger installs (`DATABASE_URL=postgres://…?sslmode=require`).
-- Lower raw retention (Settings → General, 7 to 90 days) if disk is the constraint. Aggregates are kept regardless.
+- Lower raw retention (Settings → General, 7 to 90 days) if disk is the constraint. Aggregates are kept regardless:
+  minute rollups for 14 days, hourly ones for 13 months and daily ones for good.
+- Server history (joins, leaves and outages), shard state changes, entitlements, subscriptions and command permission
+  changes are small and kept with no automatic expiry.
 
 ## ClickHouse (preview)
 
@@ -62,8 +70,11 @@ How it works:
   write, from a bounded buffer, so a slow or unavailable ClickHouse never slows down or fails ingest.
 - **Charts** (series, top values and heatmaps of interactions and custom events) are answered from ClickHouse's minute
   rollups for any range that starts after ClickHouse was enabled. Older ranges, and every other page, use PostgreSQL.
-- **Storage**: raw rows are `MergeTree` tables kept for 35 days; minute rollups are `AggregatingMergeTree` tables
-  (`sumState`, `quantilesTDigest` and `uniqState` of the salted user hash) kept for 400 days.
+- **Storage**: raw rows are `MergeTree` tables kept for 35 days, whatever the raw retention in Settings; minute
+  rollups are `AggregatingMergeTree` tables (`sumState`, `quantilesTDigest` and `uniqState` of the salted user hash)
+  kept for 400 days. With a raw retention shorter than 35 days, ClickHouse keeps hashed rows longer than PostgreSQL
+  does: say so in your privacy policy, or shorten the table TTL yourself
+  (`ALTER TABLE interactions MODIFY TTL toDateTime(ts) + INTERVAL 7 DAY`, and the same for `custom_events`).
 - **Privacy**: ClickHouse only ever sees salted hashes, never user IDs, and an erasure request deletes the person's
   rows there too.
 

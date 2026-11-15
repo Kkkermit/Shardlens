@@ -31,6 +31,10 @@ The collector creates a salt for each period and serves it to the SDK. **Seven d
 destroyed**: the secret is deleted and that period's unique-user table is dropped. From then on, nobody (including you)
 can link those hashes back to a user, or link two periods together.
 
+Your bot holds only the salts the collector currently serves: this period's, the previous period's until it is
+destroyed, and the next period's in the last few minutes before it starts, so events at the boundary never wait. When
+the collector stops serving a salt, the bot forgets it at its next settings refresh, within the hour.
+
 | Salt period | Unique users you can count             | Strictness |
 | ----------- | -------------------------------------- | ---------- |
 | Month       | Daily, weekly and monthly               | Default    |
@@ -58,7 +62,11 @@ logged.
 ## Opt-out and erasure
 
 Users can opt out or ask for erasure with the [`/privacy` command](../../guides/privacy-command/). Opted-out users'
-events are dropped inside your bot. Erasure deletes their raw rows by hash across every live salt period.
+events are dropped inside your bot. Erasure drops the user's events that are still waiting to be sent, then deletes
+their stored rows by hash for every period whose salt the bot holds. With a monthly or weekly salt that is every period
+that can still be linked to them. With a daily salt, the days before yesterday keep their rows until their salt is
+destroyed, a week after each day ends; from then on nobody can link those rows to the user. In audit mode the bot also
+sends the raw ID, and the collector erases every period whose salt still exists.
 
 ## Discord Developer Policy
 

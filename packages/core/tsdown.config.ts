@@ -7,6 +7,7 @@ export default defineConfig({
   target: 'node22',
   // Runs on Node, Bun, Deno and Workers: no Node built-ins.
   platform: 'neutral',
-  sourcemap: true,
+  // Off: a published file pointing at a map the tarball doesn't hold makes consumers' bundlers warn.
+  sourcemap: false,
   clean: true,
 });

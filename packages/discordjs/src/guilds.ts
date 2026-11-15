@@ -2,7 +2,7 @@ import { cutText, redactSecrets, uuidv7 } from '@shardlens/core';
 import type { EventInput, GuildInfo } from '@shardlens/schema';
 import type { Client, Guild } from 'discord.js';
 import { totalShards } from './gateway.js';
-import { shardForGuild } from './util.js';
+import { clampedInt, shardForGuild } from './util.js';
 
 /** The guild's shard; falls back to `(id >> 22) % shardCount` when discord.js has none. */
 export function shardOf(g: Guild): number {
@@ -31,12 +31,13 @@ function guildInfo(g: Guild): GuildInfo {
     guild: g.id,
     name: cutText(redactSecrets(String(g.name ?? '')), 100),
     icon: g.icon ? g.icon.slice(0, 64) : null,
-    memberCount: Math.max(0, g.memberCount ?? 0),
+    memberCount: clampedInt(g.memberCount) ?? 0,
     large: Boolean(g.large),
     preferredLocale: String(g.preferredLocale ?? 'en-US').slice(0, 10),
     features: [...(g.features ?? [])].map((f) => String(f).slice(0, 64)).slice(0, 64),
     premiumTier,
-    boosts: g.premiumSubscriptionCount ?? null,
+    // discord.js can report -1 boosts from `premium_subscription_count`.
+    boosts: clampedInt(g.premiumSubscriptionCount) ?? null,
     verificationLevel: Number(g.verificationLevel) || 0,
     nsfwLevel: Number(g.nsfwLevel) || 0,
     mfaLevel: Number(g.mfaLevel) || 0,
@@ -102,8 +103,8 @@ export class CountRefresher {
       if (!guild?.available) continue;
       const fresh = await guild.fetch();
       const event = guildUpdate(fresh);
-      const approx = fresh.approximateMemberCount;
-      if (event.type === 'guild_update' && typeof approx === 'number') event.info.memberCount = Math.max(0, approx);
+      const approx = clampedInt(fresh.approximateMemberCount);
+      if (event.type === 'guild_update' && approx !== undefined) event.info.memberCount = approx;
       return event;
     }
     return undefined;

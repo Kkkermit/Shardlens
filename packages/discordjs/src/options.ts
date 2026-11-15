@@ -49,7 +49,10 @@ export interface ShardlensOptions {
   captureOptionValues?: readonly string[] | undefined;
   /** Replaces the default custom-ID normaliser (numbers and IDs become `*`). */
   normaliseCustomId?: ((customId: string) => string) | undefined;
-  /** Sample rate per event type in (0, 1], for very large bots. Counts are re-weighted. */
+  /**
+   * Sample rate per event type in (0, 1], for very large bots, such as `{ gauge_window: 0.5 }`. Counts are re-weighted.
+   * Rates below 1/10,000 are raised to 1/10,000, the most one kept event can stand for.
+   */
   sampleRate?: Readonly<Record<string, number>> | undefined;
   /** Separates staging from production. Default `'production'`. */
   environment?: string | undefined;

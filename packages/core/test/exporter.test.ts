@@ -109,6 +109,19 @@ describe('translateEvent', () => {
     ]);
   });
 
+  it('skips rows and gauges that are not objects instead of throwing', () => {
+    const { sink, calls } = capture();
+    const rows = [null, 5, 'x', { method: 'GET', route: '/gateway', status: 200, count: 1 }];
+    expect(() => translateEvent(ev('rest_window', { rows, invalid: null }), sink)).not.toThrow();
+    expect(() =>
+      translateEvent(ev('gauge_window', { gauges: [null, { name: 'shard.guilds', value: 9 }] }), sink),
+    ).not.toThrow();
+    expect(calls).toEqual([
+      ['add', 'rest_requests', { method: 'GET', route: '/gateway', status: '200' }, 1],
+      ['set', 'guilds', { shard: '0' }, 9],
+    ]);
+  });
+
   it('never produces a user or server label', () => {
     for (const metric of Object.values(EXPORTER_METRICS)) {
       for (const label of metric.labels) expect(['user', 'guild', 'server', 'actor']).not.toContain(label);

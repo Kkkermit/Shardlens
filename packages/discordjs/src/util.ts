@@ -15,9 +15,29 @@ export class LruMap<K, V> extends Map<K, V> {
   }
 }
 
+/**
+ * The wire format's `Snowflake` (`@shardlens/schema` is a dev dependency, for types only): an ID that fits a signed
+ * 64-bit integer. An event with any other value in an ID field is rejected whole.
+ */
+export const SNOWFLAKE = /^(?:\d{17,18}|[1-8]\d{18}|9[01]\d{17})$/;
+
+/** The collector stores durations and counts as 32-bit integers. */
+const MAX_INT32 = 2 ** 31 - 1;
+
+/** A finite number clamped to `[0, max]`, or `undefined` for anything else (NaN, Infinity, not a number). */
+export function clamped(value: unknown, max: number): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.min(max, Math.max(0, value)) : undefined;
+}
+
+/** {@link clamped}, rounded: for durations and counts, which the wire format takes as non-negative integers. */
+export function clampedInt(value: unknown, max = MAX_INT32): number | undefined {
+  const n = clamped(value, max);
+  return n === undefined ? undefined : Math.round(n);
+}
+
 /** Shard a guild lives on: `(guild_id >> 22) % shard_count`. */
 export function shardForGuild(guildId: string, shardCount: number): number | undefined {
-  if (!/^\d{17,20}$/.test(guildId) || !(shardCount >= 1)) return undefined;
+  if (!SNOWFLAKE.test(guildId) || !(shardCount >= 1)) return undefined;
   return Number((BigInt(guildId) >> 22n) % BigInt(shardCount));
 }
 

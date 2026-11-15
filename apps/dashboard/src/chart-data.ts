@@ -40,7 +40,7 @@ export function timeAxisLabels(splits: readonly number[], step: number, locale?:
   const day = dates({ month: 'short', day: 'numeric' }, locale);
   const year = dates({ year: 'numeric' }, locale);
   const month = dates({ month: 'short' }, locale);
-  const time = dates({ hour: 'numeric', minute: '2-digit' }, locale);
+  const time = dates({ timeStyle: 'short' }, locale);
   const dayOf = (sec: number) => Math.floor(sec / DAY_S);
   const yearOf = (sec: number) => at(sec).getUTCFullYear();
   return splits.map((sec, i) => {

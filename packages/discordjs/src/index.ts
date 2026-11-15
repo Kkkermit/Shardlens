@@ -45,7 +45,7 @@ import type { MetricGroup, ShardlensOptions } from './options.js';
 import { installRestHooks, type RestHooks } from './rest.js';
 import { appInfo, commandRegistry, defaultInstance, detectSource, gaugeWindow, ownsShardZero } from './runtime.js';
 import { FileSpool } from './spool.js';
-import { LruMap, SDK_NAME, SDK_VERSION } from './util.js';
+import { clampedInt, LruMap, SDK_NAME, SDK_VERSION, SNOWFLAKE } from './util.js';
 
 export type { ShardlensExporter } from '@shardlens/core';
 export type { MessageCommandInfo, MessageCommandRun } from './message-commands.js';
@@ -488,7 +488,7 @@ function attach(client: Client, options: ShardlensOptions): Shardlens {
       const code = thrown && errorCode(thrown.error);
       tracker?.handlerFinished(
         interaction,
-        typeof ms === 'number' && Number.isFinite(ms) ? Math.max(0, ms) : undefined,
+        clampedInt(ms),
         thrown && { errorClass: errorClass(thrown.error), ...(code !== undefined ? { errorCode: code } : {}) },
       );
     } catch (error) {
@@ -534,7 +534,8 @@ function attach(client: Client, options: ShardlensOptions): Shardlens {
             name,
             props: clean,
             user,
-            guild: context?.guildId && /^\d{17,20}$/.test(context.guildId) ? context.guildId : undefined,
+            guild:
+              typeof context?.guildId === 'string' && SNOWFLAKE.test(context.guildId) ? context.guildId : undefined,
           });
         if (context?.userId) transport.enqueueWithUser(context.userId, ts, 2, (user) => build(user));
         else enqueue(build(), 2);

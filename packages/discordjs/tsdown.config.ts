@@ -9,7 +9,8 @@ export default defineConfig({
   dts: true,
   target: 'node22',
   platform: 'node',
-  sourcemap: true,
+  // The published files leave maps out, and a comment pointing at a missing map only produces warnings.
+  sourcemap: false,
   clean: true,
   fixedExtension: false,
   define: { __SDK_VERSION__: JSON.stringify(version) },

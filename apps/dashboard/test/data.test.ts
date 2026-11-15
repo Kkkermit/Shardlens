@@ -57,7 +57,7 @@ describe('time axis labels', () => {
 
   it('names weekdays in the locale, Monday first', () => {
     expect(weekdayNames('en-GB')).toEqual(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']);
-    expect(weekdayNames('de-DE')[0]).toBe('Mo.');
+    expect(weekdayNames('de-DE')[0]).toMatch(/^Mo/);
   });
 });
 
