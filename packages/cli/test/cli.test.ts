@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -64,6 +64,18 @@ describe('init', () => {
     await expect(init({ dir, domain: 'stats.example.com', appId: '1234567890123456789' })).rejects.toThrow(
       /already exists/,
     );
+  });
+
+  it('makes replaced secret files private again with --force', async () => {
+    if (process.platform === 'win32') return;
+    const dir = await mkdtemp(join(tmpdir(), 'shardlens-init-'));
+    dirs.push(dir);
+    const options = { dir, domain: 'stats.example.com', appId: '1234567890123456789' };
+    await init(options);
+    await chmod(join(dir, '.env'), 0o644);
+    await chmod(join(dir, 'bot.env'), 0o644);
+    await init({ ...options, force: true });
+    for (const file of ['.env', 'bot.env']) expect((await stat(join(dir, file))).mode & 0o777, file).toBe(0o600);
   });
 
   it('leaves the audit key commented out unless identified users were asked for', async () => {
@@ -134,6 +146,19 @@ describe('doctor', () => {
     const checks = await doctor({ url: 'https://stats.example.com', key: `slk_ingest_${'A'.repeat(43)}`, fetchImpl });
     expect(checks.filter((c) => !c.ok && !c.warnOnly)).toEqual([]);
     expect(urls.every((u) => u.startsWith('https://stats.example.com/'))).toBe(true);
+  });
+
+  it('says why a request failed, not just "fetch failed"', async () => {
+    const fetchImpl = (async () => {
+      throw new TypeError('fetch failed', {
+        cause: Object.assign(new Error('x'), { code: 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY' }),
+      });
+    }) as typeof fetch;
+    const checks = await doctor({ url: 'https://stats.example.com', fetchImpl });
+    expect(checks.find((c) => c.name === 'Collector reachable')).toMatchObject({
+      ok: false,
+      detail: 'fetch failed (UNABLE_TO_GET_ISSUER_CERT_LOCALLY)',
+    });
   });
 
   it('reports a missing salt once, without contradicting the key check', async () => {

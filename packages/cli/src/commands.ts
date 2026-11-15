@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseEnv } from 'node:util';
@@ -113,11 +113,25 @@ export async function init(opts: {
     written.push(name);
   }
   const ingestKey = newKey('ingest');
-  await writeFile(env, envFile({ ...opts, ingestKey }), { mode: 0o600 });
+  await writeSecret(env, envFile({ ...opts, ingestKey }));
   written.push('.env');
-  await writeFile(join(dir, 'bot.env'), botEnvFile({ domain: opts.domain, ingestKey }), { mode: 0o600 });
+  await writeSecret(join(dir, 'bot.env'), botEnvFile({ domain: opts.domain, ingestKey }));
   written.push('bot.env');
   return { dir, written };
+}
+
+/** Writes a file only its owner can read. `mode` applies only to new files, so a replaced one is tightened too. */
+async function writeSecret(path: string, content: string): Promise<void> {
+  await writeFile(path, content, { mode: 0o600 });
+  await chmod(path, 0o600);
+}
+
+/** A fetch failure's reason: Node reports "fetch failed" and keeps the useful part (a TLS or DNS code) in `cause`. */
+function failure(error: unknown): string {
+  if (!(error instanceof Error)) return 'request failed';
+  const cause = (error.cause as { code?: unknown; message?: unknown } | undefined) ?? {};
+  const detail = typeof cause.code === 'string' ? cause.code : typeof cause.message === 'string' ? cause.message : '';
+  return detail ? `${error.message} (${detail})` : error.message;
 }
 
 interface PrivacyOptions {
@@ -240,7 +254,7 @@ export async function doctor(opts: {
     checks.push({
       name: 'Collector reachable',
       ok: false,
-      detail: error instanceof Error ? error.message : 'request failed',
+      detail: failure(error),
     });
     return checks;
   }
@@ -272,7 +286,7 @@ export async function doctor(opts: {
       checks.push({ name: 'Salt available', ok: salt, detail: salt ? 'yes' : 'no salt served' });
     }
   } catch (error) {
-    checks.push({ name: 'Ingest key', ok: false, detail: error instanceof Error ? error.message : 'request failed' });
+    checks.push({ name: 'Ingest key', ok: false, detail: failure(error) });
   }
   return checks;
 }
