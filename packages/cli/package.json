@@ -9,15 +9,18 @@
     "url": "git+https://github.com/Kkkermit/Shardlens.git",
     "directory": "packages/cli"
   },
-  "homepage": "https://github.com/Kkkermit/Shardlens#readme",
+  "homepage": "https://kkkermit.github.io/Shardlens/reference/cli/",
   "bugs": "https://github.com/Kkkermit/Shardlens/issues",
   "keywords": [
     "shardlens",
     "discord",
     "discord.js",
+    "discord-bot",
     "analytics",
-    "cli",
-    "self-hosted"
+    "privacy",
+    "self-hosted",
+    "docker-compose",
+    "cli"
   ],
   "engines": {
     "node": ">=22.12"

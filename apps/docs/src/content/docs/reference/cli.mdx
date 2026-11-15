@@ -3,35 +3,90 @@ title: CLI
 description: The shardlens command-line tool — init, keys, privacy and doctor.
 ---
 
-The `shardlens` package is a small CLI for setting up and checking an install. Run it with `npx`, no installation
-needed:
+The `shardlens` package is a small CLI for setting up and checking an install. It needs Node.js 22.12 or newer and has
+no dependencies. Run it with `npx`, no installation needed:
 
 ```sh
 npx shardlens <command> [options]
 ```
 
+Or install it with `npm install --global shardlens` and run `shardlens <command>`. `shardlens --help` lists the
+commands and their options, and `shardlens --version` prints the version.
+
+Each command accepts only its own options: a misspelt option, or one that belongs to another command, is refused
+rather than ignored. The CLI never asks questions, so it works the same in scripts and CI.
+
+| Exit code | Meaning                                                                                       |
+| --------- | --------------------------------------------------------------------------------------------- |
+| `0`       | Done. For `doctor`: no check failed (checks it couldn't run are warnings).                     |
+| `1`       | It failed: `init` found its files already there or couldn't write them, or a `doctor` check failed. |
+| `2`       | Wrong usage: an unknown command or option, a missing or invalid value. Nothing was changed.    |
+
 ## `init`
 
-Writes `docker-compose.yml`, a `Caddyfile`, a `.env` with generated secrets and keys, and `bot.env` with the two
-settings your bot needs (`SHARDLENS_URL` and `SHARDLENS_INGEST_KEY`). Copy those to the bot, then delete `bot.env`.
+Writes the [Docker Compose deployment](../../self-hosting/docker-compose/) into a folder:
+
+| File                 | What it is                                                                                         |
+| -------------------- | -------------------------------------------------------------------------------------------------- |
+| `docker-compose.yml` | Caddy, the collector and PostgreSQL. The collector image is `ghcr.io/kkkermit/shardlens-collector:1`, the current major version; set `SHARDLENS_IMAGE` in `.env` to run another. |
+| `Caddyfile`          | HTTPS for your domain, with a certificate Caddy gets on its own.                                   |
+| `.env`               | The collector's settings, with a generated database password, session secret, settings key, ingest key and read key. Only you can read it (mode `600`). |
+| `bot.env`            | The two settings your bot needs: `SHARDLENS_URL` and `SHARDLENS_INGEST_KEY` (the same key as in `.env`). Mode `600`. |
 
 ```sh
 npx shardlens init --domain stats.example.com --app-id 123456789012345678
 ```
 
-| Option            | Meaning                                                      |
-| ----------------- | ------------------------------------------------------------ |
-| `--domain <host>` | The domain Caddy gets a certificate for. Required.            |
-| `--app-id <id>`   | Your Discord application ID. Required.                        |
-| `--dir <path>`    | Where to write the files. Default `./shardlens`.               |
-| `--force`         | Overwrite an existing `.env`. Without it, `init` refuses.     |
+| Option             | Meaning                                                                                       |
+| ------------------ | --------------------------------------------------------------------------------------------- |
+| `--domain <host>`  | The collector's hostname, such as `stats.example.com`, without `https://`. Caddy gets a certificate for it. Required. |
+| `--app-id <id>`    | Your Discord application ID (17 to 20 digits, under General Information in the Developer Portal). Required. |
+| `--dir <path>`     | Where to write the files. Default `./shardlens`; created if needed.                            |
 | `--identify-users` | Also create `SHARDLENS_AUDIT_KEY`, so you can switch from hashed to [identified users](../../guides/audit-mode/) in Settings. Without it the key is written commented out. |
+| `--force`          | Replace the files that are already there. An existing `.env` keeps its secrets (see below).    |
 
-The ingest and read keys are written to `.env` as `SHARDLENS_INGEST_KEY` and `SHARDLENS_READ_KEY`.
+`init` prints where it wrote the files and what to do next, never a secret:
+
+```text
+Wrote docker-compose.yml, Caddyfile, .env and bot.env to /home/me/shardlens
+
+Next:
+  1. Point DNS for stats.example.com at this server, open ports 80 and 443, then start the collector:
+       cd /home/me/shardlens && docker compose up -d
+  2. Copy the two lines in bot.env to where your bot runs, then delete bot.env.
+  3. Run "npx shardlens doctor" in your bot's folder to check the connection.
+  4. Open https://stats.example.com and sign in with SHARDLENS_READ_KEY from .env.
+Keep a copy of .env somewhere safe: without its keys, the collector's encrypted data can't be read.
+```
+
+`.env` also lists the optional settings, empty: `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET` for
+[Discord sign-in](../../self-hosting/docker-compose/#discord-sign-in), `DISCORD_PUBLIC_KEY` for
+[webhook events](../../guides/webhook-events/) and `SHARDLENS_SINK_URL` for
+[your own database](../../self-hosting/your-own-database/). Every variable is in the
+[environment reference](../environment/).
+
+### Running `init` again
+
+`init` refuses when any of the four files is already in the folder, so it never overwrites a project's own
+`docker-compose.yml` or a running collector's `.env` by accident. With `--force` it replaces `docker-compose.yml`,
+`Caddyfile` and `bot.env`, and updates an existing `.env` in place instead of replacing it:
+
+- it sets `SHARDLENS_DOMAIN`, `SHARDLENS_PUBLIC_URL` and `SHARDLENS_APP_ID` from the options;
+- it generates any of the database password, session secret, settings key, ingest key and read key that is missing or
+  empty, and new ingest and read keys when the application ID changes (keys belong to one application);
+- with `--identify-users`, it adds `SHARDLENS_AUDIT_KEY` if there is none;
+- it keeps every other line as it was: the existing secrets, your own settings and the comments.
+
+So `init --force` is safe on a collector that is already running, for example to change its domain or to get the
+compose file of a newer CLI. It prints which variables it set (`Set SHARDLENS_DOMAIN and SHARDLENS_PUBLIC_URL in the
+existing .env and kept everything else in it.`). A new database password would lock the collector out of its database,
+and a new settings or audit key would make its encrypted data unreadable, so to start from scratch delete the folder
+and the Docker volumes (`docker compose down -v`) instead.
 
 ## `keys`
 
-Prints a new API key.
+Prints a new API key on standard output, and nothing else there, so you can capture it in a script. A hint goes to
+standard error.
 
 ```sh
 npx shardlens keys --scope read
@@ -39,43 +94,90 @@ npx shardlens keys --scope read
 
 | Option                   | Meaning                      |
 | ------------------------ | ---------------------------- |
-| `--scope ingest \| read` | Key type. Default `ingest`.  |
+| `--scope ingest \| read` | The kind of key. Default `ingest`. |
 
-Put it in the collector's `.env` (the collector stores only a hash), or create keys in the dashboard under
-**Settings → API keys** instead.
+Put it in the collector's `.env` as `SHARDLENS_INGEST_KEY` or `SHARDLENS_READ_KEY` and restart the collector, which
+stores only a hash of it. The key it replaces keeps working until you revoke it in the dashboard under
+**Settings → API keys**, where you can also create keys instead.
 
 ## `privacy`
 
-Prints a privacy-policy paragraph that matches your configuration.
+Prints a privacy-policy paragraph that matches your configuration, to start your bot's privacy policy from. It is not
+legal advice (a reminder of that goes to standard error).
 
 ```sh
 npx shardlens privacy --option-values language --webhook-events
 ```
 
-| Option                   | Meaning                                                   |
-| ------------------------ | --------------------------------------------------------- |
-| `--audit`                | You use audit mode.                                       |
-| `--ids-only`             | Audit mode without usernames and avatars (`auditIncludeProfile: false`). |
-| `--option-values <a,b>`  | Option names in `captureOptionValues`.                    |
-| `--webhook-events`       | You receive Discord webhook events (user installs).       |
-| `--retention <days>`     | Your raw-data retention (7 to 90), if not the default 35 days. |
-| `--audit-retention <days>` | Your audit retention (1 to 90), if not the default 30 days. |
+| Option                     | Meaning                                                                    |
+| -------------------------- | -------------------------------------------------------------------------- |
+| `--audit`                  | You use [audit mode](../../guides/audit-mode/) (identified users).         |
+| `--ids-only`               | Audit mode without usernames and avatars (`auditIncludeProfile: false`). Implies `--audit`. |
+| `--option-values <a,b>`    | The option names in `captureOptionValues`, comma-separated.                |
+| `--webhook-events`         | You receive Discord [webhook events](../../guides/webhook-events/) (installs and removals). |
+| `--retention <days>`       | Your raw-data retention in Settings, 7 to 90. Default 35.                  |
+| `--audit-retention <days>` | Your audit retention in Settings, 1 to 90. Default 30. Implies `--audit`.  |
+
+The paragraph says what is recorded about a person (which command, button or menu, when, in which server, their Discord
+app language, whether they are an admin, a manager or a member there, server or user install, premium, whether it
+worked and how quickly), that option values are not recorded except the ones you list, how user IDs are pseudonymised
+or, in audit mode, encrypted and for how long, how long detailed records are kept, and how to opt out or ask for
+erasure. [What is collected](../../concepts/data-collected/) has every field.
 
 ## `doctor`
 
-Checks your Node and discord.js versions, that the collector is reachable over HTTPS and that it accepts your ingest
-key. A project that uses `@shardlens/http` instead of discord.js passes the discord.js check.
+Checks your setup and prints one line per check: `✓` passed, `✗` failed, `!` couldn't be checked.
 
 ```sh
 npx shardlens doctor --url https://stats.example.com --key slk_ingest_…
 ```
 
-| Option          | Meaning                                                |
-| --------------- | ------------------------------------------------------ |
-| `--url <url>`   | The collector. Or set `SHARDLENS_URL`.                  |
-| `--key <key>`   | An ingest key. Or set `SHARDLENS_INGEST_KEY`.           |
+| Option        | Meaning                                                      |
+| ------------- | ------------------------------------------------------------ |
+| `--url <url>` | The collector. Default `SHARDLENS_URL`.                      |
+| `--key <key>` | An ingest key (`slk_ingest_…`). Default `SHARDLENS_INGEST_KEY`. |
 
-Run from your bot's folder, `doctor` also reads `SHARDLENS_URL` and `SHARDLENS_INGEST_KEY` from a `.env` there, unless
-they are already set. It never changes your environment.
+Without the options and variables, `doctor` reads `SHARDLENS_URL` and `SHARDLENS_INGEST_KEY` from a `.env` in the
+current folder, so in your bot's folder it needs no options. In the folder `init` wrote, it uses the collector's own
+`.env`: `SHARDLENS_PUBLIC_URL` and the same ingest key. It says which settings it took from the file, and never
+changes your environment or prints the key.
 
-It exits with a non-zero code when a check fails, so you can use it in a deploy script.
+```text
+Using SHARDLENS_URL and SHARDLENS_INGEST_KEY from /home/me/my-bot/.env
+✓ Node.js version: v24.11.1 (the SDK needs 22.12 or newer)
+✓ discord.js: 14.22.1
+✓ Collector URL: https://stats.example.com
+✓ Collector reachable: healthy
+✓ Ingest key: accepted for application 123456789012345678
+✓ Data mode: privacy mode, salts rotate every month
+✓ Salt available: yes
+```
+
+| Check               | What it checks                                                                                  |
+| ------------------- | ----------------------------------------------------------------------------------------------- |
+| Node.js version     | The Node.js running `doctor` is 22.12 or newer.                                                  |
+| discord.js          | The discord.js installed in the current folder (or a folder above it) is 14.x or 15.x. A project that uses `@shardlens/http` instead passes. A warning when neither is found. |
+| Collector URL       | The URL is HTTPS, or plain HTTP to `localhost`, `127.0.0.1` or `[::1]` for development, as the SDK requires. It must not contain a user name or password. |
+| Collector reachable | `/healthz` answers like a Shardlens collector within 5 seconds. A redirect fails this check: use the address it redirects to. |
+| Ingest key          | `/v1/config` accepts the key, and for which application. It tells a read key or a mistyped key from one the collector doesn't know. |
+| Data mode           | Privacy or audit mode, and how often salts rotate.                                               |
+| Salt available      | The collector served a salt, which the SDK needs to hash user IDs.                               |
+
+`doctor` stops at the first collector check that fails, so a stopped collector isn't reported as a rejected key. It
+connects only to the collector URL, sends nothing to a plain-HTTP address that isn't on this machine (that would send
+the key unencrypted), and doesn't follow redirects. When a request fails, it says why in words, followed by Node's
+error code, such as `no DNS record for stats.example.com (ENOTFOUND)`.
+
+It exits with code 1 when a check fails, so you can use it in a deploy script.
+
+### A certificate from a private CA
+
+For names that end in `.localhost`, `.local`, `.internal` or `.home.arpa`, Caddy signs the certificate with its own
+certificate authority instead of getting one from a public one, and `doctor` reports that the certificate isn't
+trusted. Copy Caddy's root certificate out of the container and point `NODE_EXTRA_CA_CERTS` at it, for `doctor` and for
+the bot:
+
+```sh
+docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt caddy-root.crt
+NODE_EXTRA_CA_CERTS=./caddy-root.crt npx shardlens doctor
+```
