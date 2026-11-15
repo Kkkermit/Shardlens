@@ -19,10 +19,31 @@ import { Steps } from '@astrojs/starlight/components';
    docker compose pull && docker compose up -d
    ```
 
+   Building from a checkout of the repository instead: `git pull && docker compose up -d --build`.
+
+4. Watch it start: `docker compose logs -f collector` lists the migrations it applied (`migrationsApplied`) in the
+   `Shardlens collector started` line.
+
 </Steps>
 
 The collector applies database migrations when it starts, under an advisory lock, so several collectors can be
-upgraded at once. Migrations only move forward. To roll back, restore the backup you took and run the previous image.
+upgraded at once. Migrations only move forward, and a collector refuses to start against a database migrated by a
+newer one. To roll back, restore the backup you took and run the previous image with the settings it understands: a
+1.0 collector refuses `SHARDLENS_TRUST_PROXY` set to a number of proxies (`1`, which the Compose and Render templates
+use from 1.1), so set it back to `true` there.
+
+## From 1.0 to 1.1
+
+- **Dashboard sessions opened with a read key end**, because a session now remembers its key (revoking the key ends
+  them). Sign in with the read key again. Discord sign-ins are kept.
+- **Rollups move to UTC on a PostgreSQL that isn't set to UTC.** 1.0 cut hourly and daily rollups in the database
+  server's time zone (`SHOW timezone;` in `psql`); 1.1 always cuts them in UTC. The upgrade converts what is there:
+  hours and days from the last 13 days are rebuilt exactly from minute rollups, older hours and days move to the UTC
+  hour or day that holds most of them. On a UTC server, which is what the Compose file runs, there is nothing to do.
+  With several collectors, stop every 1.0 collector before the first 1.1 one starts: a 1.0 job leader still running
+  afterwards writes buckets in the server's time zone again.
+- **`SHARDLENS_TRUST_PROXY`** takes the number of proxies in front (`1` for Caddy). The Compose file now reads it from
+  `.env`, defaulting to `1`.
 
 ## Upgrading the SDK
 

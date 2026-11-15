@@ -1,0 +1,155 @@
+---
+title: Command handlers and frameworks
+description: Where Shardlens goes in bots built from the discord.js guide, in JavaScript or TypeScript, and with Sapphire or other frameworks.
+sidebar:
+  order: 2.4
+---
+
+import { Aside, Code, TabItem, Tabs } from '@astrojs/starlight/components';
+import guideHandler from '../../../../snippets/guide-handler.ts?raw';
+import sapphire from '../../../../snippets/sapphire.ts?raw';
+
+Every bot is laid out differently, but Shardlens only ever needs four things, wherever they live in yours:
+
+1. **One `createShardlens(client, …)`** per process, after the client is created and before `client.login()`. That
+   alone records every slash command, context menu, button, select menu, modal and autocomplete.
+2. **Handler time and failures** (optional): run your command code through [`lens.wrap()`](../wrapping-handlers/),
+   or tell Shardlens when your framework starts and finishes a handler.
+3. **Prefix commands**, if you have them: one [`trackMessageCommand`](../prefix-commands/) call where a message is
+   matched to a command.
+4. **`await lens.shutdown()`** on your existing shutdown path.
+
+The rest of this page shows where those go in common layouts.
+
+## Reaching `lens` from other files
+
+Handlers usually live in their own files. The simplest way to reach `lens` from all of them is to keep it on the client,
+which every interaction and message already carries:
+
+<Tabs>
+  <TabItem label="TypeScript">
+
+```ts
+import { createShardlens, type Shardlens } from '@shardlens/discordjs';
+
+declare module 'discord.js' {
+  interface Client {
+    lens: Shardlens;
+  }
+}
+
+client.lens = createShardlens(client, { endpoint: process.env.SHARDLENS_URL, apiKey: process.env.SHARDLENS_INGEST_KEY });
+// anywhere else: interaction.client.lens, message.client.lens
+```
+
+  </TabItem>
+  <TabItem label="JavaScript (CommonJS)">
+
+```js
+const { createShardlens } = require('@shardlens/discordjs');
+
+client.lens = createShardlens(client, {
+  endpoint: process.env.SHARDLENS_URL,
+  apiKey: process.env.SHARDLENS_INGEST_KEY,
+});
+// anywhere else: interaction.client.lens, message.client.lens
+```
+
+  </TabItem>
+  <TabItem label="JavaScript (ESM)">
+
+```js
+import { createShardlens } from '@shardlens/discordjs';
+
+client.lens = createShardlens(client, {
+  endpoint: process.env.SHARDLENS_URL,
+  apiKey: process.env.SHARDLENS_INGEST_KEY,
+});
+```
+
+  </TabItem>
+</Tabs>
+
+If your project already shares things another way (an exported module, a container, a `bot` object), keep `lens` with
+them instead. `createShardlens` must still run once per process.
+
+## The discord.js guide layout
+
+A `commands/` folder with an `execute` function per command, an `events/` folder, and a loader in `index.js`. Wrap the
+`execute` call inside the existing `try`, so failures reach Shardlens and your error reply still runs:
+
+<Code code={guideHandler} lang="ts" title="index.ts and events/interactionCreate.ts" />
+
+Buttons, select menus and modals handled in the same file need nothing more: they are recorded on their own. Wrap
+their handlers the same way if you want their handler time.
+
+## Sapphire
+
+Sapphire runs commands itself and emits an event at each step, so there is nothing to wrap. Listen to those events:
+
+<Code code={sapphire} lang="ts" title="index.ts" />
+
+`handlerStarted(interaction)` and `handlerFinished(interaction, { durationMs, error })` record exactly what `wrap()`
+would. Use them with any framework that tells you when a handler starts and ends.
+
+## discordx
+
+discordx runs every slash command, context menu, component and simple (prefix) command through its guards, and a
+command's error comes back out of `next()`. One global guard, in front of any you have, covers both kinds of command:
+
+```ts
+import { createShardlens } from '@shardlens/discordjs';
+import { BaseInteraction } from 'discord.js';
+import { type GuardFunction, SimpleCommandMessage } from 'discordx';
+
+const lens = createShardlens(bot, { endpoint: process.env.SHARDLENS_URL, apiKey: process.env.SHARDLENS_INGEST_KEY });
+
+const shardlensGuard: GuardFunction = async (arg, _client, next) => {
+  if (arg instanceof SimpleCommandMessage) {
+    // The command's own name: aliases and the per-server prefix are already resolved.
+    await lens.wrapMessageCommand(arg.info.name, () => next())(arg.message);
+  } else if (arg instanceof BaseInteraction) {
+    await lens.wrap((_interaction: BaseInteraction) => next())(arg);
+  } else {
+    await next(); // events
+  }
+};
+bot.guards = [shardlensGuard, ...bot.guards];
+```
+
+Leave `bot.executeInteraction()` and `bot.executeCommand()` as they are.
+
+## Other frameworks and hand-made handlers
+
+The same rule works for any layout (CommandKit, Necord, a loader you wrote):
+
+- Find the one place a matched command's code is called. Wrap that call with `lens.wrap()` (interactions) or
+  `lens.wrapMessageCommand()` (prefix commands), and call the wrapped function exactly as the original was called:
+  inside the same `try`, awaited only if it was awaited. If the framework has middleware that runs around every
+  command (CommandKit middleware, Necord interceptors), wrap its `next()` there, as for discordx above. If the
+  framework catches errors itself, report the result instead: `handlerFinished()` for interactions,
+  `trackMessageCommand(message, { command, durationMs, failed })` for messages.
+- If slash and prefix commands share one function, `lens.wrap()` records only the interactions it is given and runs
+  everything else untouched. Record the prefix side with `trackMessageCommand` where you still have the `Message`.
+- Prefix that comes from your database (a per-server prefix), aliases, mentions as a prefix: none of it matters to
+  Shardlens. Pass the command's own name after your parser has matched it.
+
+## Start-up shapes
+
+- **Top-level `await`, or a `main()` function:** either works. Call `createShardlens` before `client.login()`.
+- **A `Client` subclass:** call it in the constructor, or right after `new MyClient()`.
+- **[Embedded mode](../../self-hosting/embedded/) with no top-level `await`** (CommonJS, or a `main()` function):
+  start the collector and create `lens` in that function, before `client.login()`. Listeners registered earlier
+  can't see a local `lens`: keep it on the client and use `client.lens` inside them.
+- **TypeScript compiled to CommonJS** (tsc, tsup, esbuild): `require('@shardlens/discordjs')` works, and so does
+  `require('@shardlens/collector/embedded')` on Node 24.
+- **`ShardingManager`, internal sharding, discord-hybrid-sharding:** see [Sharding](../sharding/). The rule is the same:
+  once in the process that owns the `Client`.
+- **Settings:** read `SHARDLENS_URL` and `SHARDLENS_INGEST_KEY` however the project reads settings. If either is
+  missing, the SDK logs one warning and records nothing. Keep them optional in your own validation: Shardlens must
+  never be the reason a bot doesn't start.
+
+<Aside type="tip">
+  Installing with a coding agent? The [install prompt](../../getting-started/install-with-an-agent/) walks it through
+  these choices for your project.
+</Aside>

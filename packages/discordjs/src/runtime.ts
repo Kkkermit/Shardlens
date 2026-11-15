@@ -1,10 +1,9 @@
 import { hostname } from 'node:os';
 import type { monitorEventLoopDelay } from 'node:perf_hooks';
-import type { SourceInfo } from '@shardlens/core';
-import { uuidv7 } from '@shardlens/core';
+import { cutText, type SourceInfo, uuidv7 } from '@shardlens/core';
 import type { EventInput } from '@shardlens/schema';
 import { type Client, version as djsVersion, Routes } from 'discord.js';
-import { localShardCount, managerShardCount, shardIds, shardPings } from './gateway.js';
+import { shardIds, shardPings } from './gateway.js';
 import { shardOf } from './guilds.js';
 
 /** Shards (and cluster) this process owns: discord-hybrid-sharding, ShardingManager, or internal sharding. */
@@ -15,21 +14,14 @@ export function detectSource(client: Client, instance: string): SourceInfo {
     const list = Array.isArray(cluster.shardList) ? cluster.shardList.filter((s) => typeof s === 'number') : wsShards;
     return { shards: list, cluster: cluster.id, instance };
   }
-  if (client.shard) return { shards: [...client.shard.ids], instance };
+  // discord.js 14's ShardClientUtil lists the process's shards; 15's has no `ids`, and its gateway manager knows them.
+  const ids: unknown = client.shard?.ids;
+  if (Array.isArray(ids)) return { shards: ids.filter((s) => typeof s === 'number'), instance };
   return { shards: wsShards, instance };
 }
 
 export function defaultInstance(): string {
   return `${hostname()}:${process.pid}`.slice(0, 128);
-}
-
-/** Total shard count across all processes, for `(guild_id >> 22) % count`. */
-export function totalShards(client: Client): number {
-  const fromShardUtil = client.shard?.count;
-  if (typeof fromShardUtil === 'number' && fromShardUtil > 0) return fromShardUtil;
-  const configured = (client.options as { shardCount?: unknown }).shardCount;
-  if (typeof configured === 'number' && configured > 0) return configured;
-  return managerShardCount(client) ?? Math.max(1, localShardCount(client));
 }
 
 export function ownsShardZero(client: Client): boolean {
@@ -68,7 +60,8 @@ export async function appInfo(client: Client<true>): Promise<EventInput> {
     : 'members' in owner
       ? [...owner.members.values()].filter((m) => Number(m.membershipState) === 2).map((m) => m.user.id)
       : [owner.id];
-  const skus = await app.fetchSKUs().catch(() => undefined);
+  // `fetchSKUs` is missing before discord.js 14.15; without it, the rest of the event still goes.
+  const skus = typeof app.fetchSKUs === 'function' ? await app.fetchSKUs().catch(() => undefined) : undefined;
   const gateway = (await client.rest.get(Routes.gatewayBot()).catch(() => undefined)) as
     { session_start_limit?: { remaining?: number; total?: number } } | undefined;
   const limit = gateway?.session_start_limit;
@@ -76,14 +69,14 @@ export async function appInfo(client: Client<true>): Promise<EventInput> {
     id: uuidv7(),
     ts: Date.now(),
     type: 'app_info',
-    name: String(app.name ?? 'unknown').slice(0, 100),
+    name: cutText(String(app.name ?? 'unknown'), 100),
     approximateGuildCount: app.approximateGuildCount ?? null,
     approximateUserInstallCount: app.approximateUserInstallCount ?? null,
     approximateUserAuthorizationCount: app.approximateUserAuthorizationCount ?? null,
     dashboardUserIds: dashboardUserIds.slice(0, 100),
     eventWebhooksStatus: app.eventWebhooksStatus ?? null,
     skus: skus
-      ? [...skus.values()].slice(0, 200).map((s) => ({ id: s.id, name: s.name.slice(0, 100), type: Number(s.type) }))
+      ? [...skus.values()].slice(0, 200).map((s) => ({ id: s.id, name: cutText(s.name, 100), type: Number(s.type) }))
       : [],
     ...(typeof limit?.remaining === 'number' ? { sessionStartRemaining: limit.remaining } : {}),
     ...(typeof limit?.total === 'number' ? { sessionStartTotal: limit.total } : {}),
@@ -101,7 +94,7 @@ export async function commandRegistry(client: Client<true>): Promise<EventInput>
     type: 'command_registry',
     commands: [...commands.values()].slice(0, 5000).map((c) => ({
       id: c.id,
-      name: c.name.slice(0, 32),
+      name: cutText(c.name, 32),
       type: Number(c.type),
       ...(c.guildId ? { guild: c.guildId } : {}),
       subcommands: (c.options ?? [])

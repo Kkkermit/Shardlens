@@ -18,7 +18,7 @@ user sees them.
 | `/privacy info`   | Explains what the bot records, with a link to your privacy policy             |
 | `/privacy optout` | Stops recording the user's usage                                              |
 | `/privacy optin`  | Allows recording again                                                        |
-| `/privacy erase`  | Deletes what was recorded about the user, and opts them out                   |
+| `/privacy erase`  | Deletes what was recorded about the user that the bot can still find, and opts them out |
 
 The command works in servers, in DMs with the bot and in private channels, for both server and user installs.
 
@@ -37,9 +37,20 @@ Opt-outs live in the SDK's memory. To keep them across restarts, save them in `o
 
 <Code code={forgetUser} lang="ts" />
 
-The collector deletes the user's raw events (by hash, across every salt period that still exists), unique-user rows,
-install and premium rows, and in audit mode their encrypted activity. Aggregate counts are kept, because they are
-anonymous. Every erasure is logged. An erasure from the dashboard (**Settings → Privacy**) takes an exact user ID.
+The collector deletes the user's raw events, unique-user rows, install and premium rows, and in audit mode their
+encrypted activity. Aggregate counts are kept, because they are anonymous. Every erasure is logged.
+
+How far back it reaches depends on who can still compute the user's hash:
+
+- **From the bot, in privacy mode**, the user's rows are found by hash, and the bot holds only the current salt and
+  the previous one. With a monthly or weekly salt that is every period that can still be linked to the user. With a
+  daily salt, the days before yesterday keep their rows until their salt is destroyed, a week after each day ends;
+  from then on nobody can link them to the user.
+- **From the dashboard** (**Settings → Privacy**), which takes an exact user ID, and from the bot in audit mode, the
+  collector hashes the ID with every salt that still exists, so every period that can still be linked is erased.
+
+The `/privacy erase` reply says what was done in those terms: what the bot can link to the user was deleted, and
+anything older expires on its own. See the [privacy model](../../concepts/privacy-model/#opt-out-and-erasure).
 
 `forgetUser` first sends whatever the SDK still has queued, so nothing about the user arrives after the erasure. It
 resolves to `{ erased }`, the number of stored rows that were deleted: `0` means nothing was stored about them, or it

@@ -3,8 +3,8 @@ import { useState } from 'react';
 import { api, errorText, useMeta } from '../api';
 import { NeedsDiscord, useAdminGate } from '../components/AdminGate';
 import { DataTable } from '../components/DataTable';
-import { Loading, PageHead, Panel } from '../components/ui';
-import { ago, dateTime } from '../format';
+import { Name, PageHead, Panel, QueryBody, StatusMessage, usePanelStatus } from '../components/ui';
+import { ago, dateTime, decimal, number, quoted } from '../format';
 
 interface AlertRule {
   id: string;
@@ -38,7 +38,14 @@ export function AlertsPage() {
     queryFn: () =>
       api<{
         rules: AlertRule[];
-        history: { ts: string; name: string; value: number; delivered: boolean; error: string | null }[];
+        history: {
+          ts: string;
+          ruleId: string;
+          name: string;
+          value: number;
+          delivered: boolean;
+          error: string | null;
+        }[];
       }>('/v1/alerts'),
     enabled: gate.allowed,
   });
@@ -50,7 +57,7 @@ export function AlertsPage() {
     windowMin: '10',
     webhookUrl: '',
   });
-  const [message, setMessage] = useState('');
+  const [messageFor, say] = usePanelStatus();
   const refresh = () => client.invalidateQueries({ queryKey: ['alerts'] });
   const create = useMutation({
     mutationFn: () =>
@@ -66,180 +73,206 @@ export function AlertsPage() {
       }),
     onSuccess: () => {
       setForm({ ...form, name: '', webhookUrl: '' });
-      setMessage('Alert created.');
+      say('new', 'Alert created.');
       void refresh();
     },
-    onError: (e) => setMessage(errorText(e)),
+    onError: (e) => say('new', errorText(e)),
   });
-  const action = async (path: string, method: string, body?: unknown, done?: string) => {
+  const action = async (path: string, method: string, body: unknown, done: string, failed: string) => {
+    say('rules', '');
     try {
-      await api(path, { method, body: body ?? {} });
-      if (done) setMessage(done);
-      void refresh();
+      await api(path, { method, body });
+      say('rules', done);
     } catch (e) {
-      setMessage(errorText(e));
+      say('rules', `${failed} ${errorText(e)}`);
     }
+    void refresh();
   };
 
-  if (gate.loading) return <Loading />;
-  if (!gate.allowed) return <NeedsDiscord />;
+  if (!gate.allowed && !gate.loading) return <NeedsDiscord title="Alerts" />;
   return (
     <>
       <PageHead
         title="Alerts"
         description="Messages to a Discord channel when something needs attention. At most one per rule every 30 minutes."
       />
-      {message ? (
-        <p role="status" className="notice">
-          {message}
-        </p>
-      ) : null}
-      <div className="stack">
-        <Panel title="Rules">
-          {alerts.isLoading ? (
-            <Loading />
-          ) : (
-            <DataTable
-              caption="Alert rules"
-              rowKey={(r) => r.id}
-              rows={alerts.data?.rules ?? []}
-              columns={[
-                { key: 'name', header: 'Name', render: (r) => r.name },
-                {
-                  key: 'rule',
-                  header: 'Rule',
-                  render: (r) =>
-                    `${METRICS[r.metric] ?? r.metric} ${r.comparator} ${r.threshold} over ${Math.round(r.windowS / 60)} min`,
-                },
-                { key: 'webhook', header: 'Webhook', render: (r) => <code>{r.webhook}</code> },
-                { key: 'fired', header: 'Last fired', render: (r) => (r.lastFired ? ago(r.lastFired) : 'never') },
-                {
-                  key: 'actions',
-                  header: 'Actions',
-                  render: (r) => (
-                    <span style={{ display: 'inline-flex', gap: 6 }}>
-                      <button
-                        type="button"
-                        aria-pressed={r.enabled}
-                        onClick={() => void action(`/v1/alerts/${r.id}`, 'PATCH', { enabled: !r.enabled })}
-                      >
-                        {r.enabled ? 'On' : 'Off'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void action(`/v1/alerts/${r.id}/test`, 'POST', {}, 'Test message sent.')}
-                      >
-                        Test
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (window.confirm(`Delete the alert “${r.name}”?`))
-                            void action(`/v1/alerts/${r.id}`, 'DELETE');
-                        }}
-                      >
-                        Delete
-                      </button>
-                    </span>
-                  ),
-                },
-              ]}
-            />
-          )}
-        </Panel>
-        <Panel title="New alert">
-          <form
-            className="filters"
-            onSubmit={(e) => {
-              e.preventDefault();
-              setMessage('');
-              create.mutate();
-            }}
-          >
-            <label>
-              Name
-              <input
-                required
-                maxLength={100}
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
+      <QueryBody query={{ isLoading: gate.loading, error: null }}>
+        <div className="stack">
+          <Panel title="Rules">
+            <StatusMessage message={messageFor('rules')} />
+            <QueryBody query={alerts}>
+              <DataTable
+                caption="Alert rules"
+                rowKey={(r) => r.id}
+                rows={alerts.data?.rules ?? []}
+                columns={[
+                  { key: 'name', header: 'Name', render: (r) => <Name>{r.name}</Name> },
+                  {
+                    key: 'rule',
+                    header: 'Rule',
+                    render: (r) =>
+                      `${METRICS[r.metric] ?? r.metric} ${r.comparator} ${number(r.threshold)} over ${number(r.windowS / 60)} min`,
+                  },
+                  { key: 'webhook', header: 'Webhook', render: (r) => <code>{r.webhook}</code> },
+                  { key: 'fired', header: 'Last fired', render: (r) => (r.lastFired ? ago(r.lastFired) : 'never') },
+                  {
+                    key: 'actions',
+                    header: 'Actions',
+                    render: (r) => (
+                      <span className="row-actions">
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={r.enabled}
+                            onChange={() =>
+                              void action(
+                                `/v1/alerts/${r.id}`,
+                                'PATCH',
+                                { enabled: !r.enabled },
+                                r.enabled ? `${quoted(r.name)} is off.` : `${quoted(r.name)} is on.`,
+                                `Couldn't change ${quoted(r.name)}.`,
+                              )
+                            }
+                          />
+                          Enabled
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void action(
+                              `/v1/alerts/${r.id}/test`,
+                              'POST',
+                              {},
+                              `Test message for ${quoted(r.name)} sent.`,
+                              `The test message for ${quoted(r.name)} failed.`,
+                            )
+                          }
+                        >
+                          Test
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (window.confirm(`Delete the alert ${quoted(r.name)}?`))
+                              void action(
+                                `/v1/alerts/${r.id}`,
+                                'DELETE',
+                                {},
+                                `${quoted(r.name)} deleted.`,
+                                `Couldn't delete ${quoted(r.name)}.`,
+                              );
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </span>
+                    ),
+                  },
+                ]}
               />
-            </label>
-            <label>
-              Metric
-              <select value={form.metric} onChange={(e) => setForm({ ...form, metric: e.target.value })}>
-                {Object.entries(METRICS).map(([k, v]) => (
-                  <option key={k} value={k}>
-                    {v}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span className="visually-hidden">Comparator</span>
-              <select value={form.comparator} onChange={(e) => setForm({ ...form, comparator: e.target.value })}>
-                {['>', '>=', '<', '<='].map((c) => (
-                  <option key={c}>{c}</option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Threshold
-              <input
-                required
-                type="number"
-                step="any"
-                value={form.threshold}
-                onChange={(e) => setForm({ ...form, threshold: e.target.value })}
-                style={{ width: 90 }}
+            </QueryBody>
+          </Panel>
+          <Panel title="New alert">
+            <StatusMessage message={messageFor('new')} />
+            <form
+              className="filters"
+              onSubmit={(e) => {
+                e.preventDefault();
+                say('new', '');
+                create.mutate();
+              }}
+            >
+              <label>
+                Name
+                <input
+                  required
+                  maxLength={100}
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                />
+              </label>
+              <label>
+                Metric
+                <select value={form.metric} onChange={(e) => setForm({ ...form, metric: e.target.value })}>
+                  {Object.entries(METRICS).map(([k, v]) => (
+                    <option key={k} value={k}>
+                      {v}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span className="visually-hidden">Comparator</span>
+                <select value={form.comparator} onChange={(e) => setForm({ ...form, comparator: e.target.value })}>
+                  {['>', '>=', '<', '<='].map((c) => (
+                    <option key={c}>{c}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Threshold
+                <input
+                  required
+                  type="number"
+                  step="any"
+                  value={form.threshold}
+                  onChange={(e) => setForm({ ...form, threshold: e.target.value })}
+                  className="narrow"
+                />
+              </label>
+              <label>
+                Over (minutes)
+                <input
+                  required
+                  type="number"
+                  min={1}
+                  max={1440}
+                  value={form.windowMin}
+                  onChange={(e) => setForm({ ...form, windowMin: e.target.value })}
+                  className="narrow"
+                />
+              </label>
+              <label className="wide-field">
+                Discord webhook URL
+                <input
+                  required
+                  type="url"
+                  placeholder="https://discord.com/api/webhooks/…"
+                  value={form.webhookUrl}
+                  onChange={(e) => setForm({ ...form, webhookUrl: e.target.value })}
+                />
+              </label>
+              <button type="submit" className="primary" disabled={create.isPending}>
+                Create
+              </button>
+            </form>
+          </Panel>
+          <Panel title="History">
+            <QueryBody query={alerts}>
+              <DataTable
+                caption="Alert history"
+                rowKey={(h) => `${h.ts}-${h.ruleId}`}
+                rows={alerts.data?.history ?? []}
+                columns={[
+                  { key: 'ts', header: 'When', render: (h) => dateTime(h.ts, tz) },
+                  { key: 'name', header: 'Rule', render: (h) => <Name>{h.name}</Name> },
+                  {
+                    key: 'value',
+                    header: 'Value',
+                    numeric: true,
+                    render: (h) => decimal(Number(h.value), 2),
+                  },
+                  {
+                    key: 'delivered',
+                    header: 'Delivered',
+                    render: (h) => (h.delivered ? 'Yes' : `No (${h.error ?? 'error'})`),
+                  },
+                ]}
               />
-            </label>
-            <label>
-              Over (minutes)
-              <input
-                required
-                type="number"
-                min={1}
-                max={1440}
-                value={form.windowMin}
-                onChange={(e) => setForm({ ...form, windowMin: e.target.value })}
-                style={{ width: 80 }}
-              />
-            </label>
-            <label style={{ flex: '1 1 320px' }}>
-              Discord webhook URL
-              <input
-                required
-                type="url"
-                placeholder="https://discord.com/api/webhooks/…"
-                value={form.webhookUrl}
-                onChange={(e) => setForm({ ...form, webhookUrl: e.target.value })}
-                style={{ flex: 1 }}
-              />
-            </label>
-            <button type="submit" className="primary" disabled={create.isPending}>
-              Create
-            </button>
-          </form>
-        </Panel>
-        <Panel title="History">
-          <DataTable
-            caption="Alert history"
-            rowKey={(h) => `${h.ts}-${h.name}`}
-            rows={alerts.data?.history ?? []}
-            columns={[
-              { key: 'ts', header: 'When', render: (h) => dateTime(h.ts, tz) },
-              { key: 'name', header: 'Rule', render: (h) => h.name },
-              { key: 'value', header: 'Value', numeric: true, render: (h) => Number(h.value).toFixed(2) },
-              {
-                key: 'delivered',
-                header: 'Delivered',
-                render: (h) => (h.delivered ? 'Yes' : `No (${h.error ?? 'error'})`),
-              },
-            ]}
-          />
-        </Panel>
-      </div>
+            </QueryBody>
+          </Panel>
+        </div>
+      </QueryBody>
     </>
   );
 }

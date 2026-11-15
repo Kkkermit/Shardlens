@@ -1,5 +1,5 @@
 import fc from 'fast-check';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { BoundedQueue, type Priority } from '../src/index.js';
 
 describe('BoundedQueue', () => {
@@ -77,6 +77,31 @@ describe('BoundedQueue', () => {
     q.requeue(batch);
     expect(q.take(10).map((x) => x.item)).toEqual(['i2']);
     expect(q.dropped[3]).toBe(1);
+  });
+
+  it('requeues a batch in one step per lane, not one per item', () => {
+    const q = new BoundedQueue<number>(100_000);
+    for (let i = 0; i < 99_000; i++) q.push(i, 3);
+    const batch = q.take(499);
+    // One `unshift` per item moves the whole lane each time, which stalled a very large queue on every retry. Counted
+    // rather than timed: a time limit fails on a busy machine.
+    const unshift = vi.spyOn(Array.prototype, 'unshift');
+    q.requeue(batch);
+    const calls = unshift.mock.calls.length;
+    unshift.mockRestore();
+    expect(calls).toBe(0);
+    expect(q.take(2).map((x) => x.item)).toEqual([0, 1]);
+    expect(q.size).toBe(98_998);
+  });
+
+  it('removes the items a predicate picks, from every lane', () => {
+    const q = new BoundedQueue<string>(10);
+    q.push('a:1', 3);
+    q.push('b:1', 2);
+    q.push('a:2', 0);
+    expect(q.removeWhere((item) => item.startsWith('a:'))).toBe(2);
+    expect(q.size).toBe(1);
+    expect(q.take(10).map((x) => x.item)).toEqual(['b:1']);
   });
 
   it('rejects a non-positive capacity', () => {

@@ -1,9 +1,9 @@
 import type { ShardlensExporter } from './exporter.js';
 import { periodLabel, type SaltPeriod, UserHasher } from './hash.js';
-import { redactSecrets } from './normalise.js';
+import { cutText, redactSecrets } from './normalise.js';
 import { BoundedQueue, PRIORITIES, type Priority, type QueuedItem } from './queue.js';
 import type { EventSpool } from './spool.js';
-import { backoffMs, gzipJson, isAllowedEndpoint } from './transport.js';
+import { backoffMs, gzip, isAllowedEndpoint } from './transport.js';
 import { uuidv7 } from './uuidv7.js';
 
 /** The fields every wire event has. Adapters pass full event objects from `@shardlens/schema`. */
@@ -112,12 +112,146 @@ const PENDING_SALT_MAX = 1_000;
 const PENDING_SALT_MAX_AGE_MS = 60_000;
 const AUTH_RETRY_MS = 5 * 60_000;
 const CONFIG_REFRESH_MS = 60 * 60_000;
+/** Asking again for a salt period's salt that the collector hasn't made yet: a few tries, 5 to 30 seconds apart. */
+const SALT_RETRIES = 10;
+const SALT_RETRY_MIN_MS = 5_000;
+const SALT_RETRY_SPREAD_MS = 25_000;
+/**
+ * The collector hands out the next period's salt in the last 5 minutes of a period. Asking for it 1 to 4 minutes
+ * before the boundary means no event waits for a salt when the period changes.
+ */
+const NEXT_SALT_LEAD_MS = 4 * 60_000;
+const NEXT_SALT_SPREAD_MS = 3 * 60_000;
+/** How often events for a period without a salt may make the SDK ask for settings outside its schedule. */
+const SALT_ASK_INTERVAL_MS = 30_000;
+const OUTAGE_WARN_INTERVAL_MS = 5 * 60_000;
+/** The collector refuses events weighing more than 10,000, so a lower rate would lose every event it keeps. */
+const MIN_SAMPLE_RATE = 1 / 10_000;
+/** A clock this far off the collector's starts salt periods at the wrong time. */
+const CLOCK_SKEW_WARN_MS = 30_000;
+const MAX_CONFIG_BYTES = 256 * 1024;
+const MAX_REPLY_BYTES = 64 * 1024;
+/** Erasures remembered, so events recorded before one and still on their way are dropped. */
+const MAX_ERASED = 10_000;
 const MAX_BATCHES_PER_FLUSH = 20;
 const SALT_RE = /^[A-Za-z0-9_-]{43}$/;
 const SNOWFLAKE_RE = /^\d{17,20}$/;
+/** Longer timer delays overflow, and Node then fires them after 1 ms. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
 
 function unref(timer: unknown): void {
   (timer as { unref?: () => void } | undefined)?.unref?.();
+}
+
+/**
+ * A numeric option as an integer within `[min, max]`, or `fallback` when it isn't a finite number. Options are often
+ * read from environment variables, where a missing one becomes `NaN`.
+ */
+function intOption(value: number | undefined, min: number, max: number, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(value)));
+}
+
+/** Waits for `work`, or for `ms` at most. */
+async function settleWithin(work: Promise<unknown>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, ms);
+    unref(timer);
+  });
+  try {
+    await Promise.race([work, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Releases a response body that won't be read. */
+async function discard(res: Response): Promise<void> {
+  await res.body?.cancel().catch(() => undefined);
+}
+
+/**
+ * Parses a JSON reply of at most `maxBytes` once decompressed, or gives `undefined`. A misbehaving collector or proxy
+ * can't make the bot buffer and parse an unbounded body.
+ */
+async function readJson(res: Response, maxBytes: number): Promise<unknown> {
+  const declared = Number(res.headers.get('content-length'));
+  if (!res.body || declared > maxBytes) {
+    await discard(res);
+    return undefined;
+  }
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        return undefined;
+      }
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A string option, also from a number (environment variables, wrangler vars), cut to `max`. Anything else: unset. */
+function textOption(value: unknown, max: number): string | undefined {
+  const text =
+    typeof value === 'string' ? value : typeof value === 'number' || typeof value === 'bigint' ? String(value) : '';
+  return text.length > 0 ? cutText(text, max) : undefined;
+}
+
+function isExporter(value: unknown): value is ShardlensExporter {
+  return typeof value === 'object' && value !== null && typeof (value as ShardlensExporter).observe === 'function';
+}
+
+/** The exporters in `value`, which should be an array, and whether it was one of exporters only. */
+function exporterList(value: unknown): { exporters: ShardlensExporter[]; valid: boolean } {
+  if (value === undefined || value === null) return { exporters: [], valid: true };
+  if (Array.isArray(value)) {
+    const exporters = value.filter(isExporter);
+    return { exporters, valid: exporters.length === value.length };
+  }
+  // A single exporter, passed without the array.
+  return { exporters: isExporter(value) ? [value] : [], valid: false };
+}
+
+/**
+ * What `on('error')` listeners get: a plain error with the original's class name, code and status, and its message,
+ * stack and URL with secrets removed. A discord.js REST error carries the request URL, which for an interaction reply
+ * holds the interaction token, and the request body, which is left out.
+ */
+function listenerError(error: unknown): unknown {
+  try {
+    if (typeof error === 'string') return redactSecrets(error);
+    if (typeof error !== 'object' || error === null) return error;
+    const e = error as Record<string, unknown>;
+    const safe = new Error(redactSecrets(typeof e.message === 'string' ? e.message : '')) as Error &
+      Record<string, unknown>;
+    safe.name = typeof e.name === 'string' ? e.name : 'Error';
+    safe.stack = typeof e.stack === 'string' ? redactSecrets(e.stack) : `${safe.name}: ${safe.message}`;
+    for (const key of ['code', 'status', 'method']) {
+      const value = e[key];
+      if (typeof value === 'string' || typeof value === 'number') safe[key] = value;
+    }
+    if (typeof e.url === 'string') safe.url = redactSecrets(e.url);
+    return safe;
+  } catch {
+    return new Error('unreadable error');
+  }
 }
 
 function base64UrlDecode(s: string): Uint8Array {
@@ -139,7 +273,7 @@ export function nextPeriodStart(period: SaltPeriod, at: Date): number {
   return Date.UTC(y, m, d + (8 - dow));
 }
 
-/** Parses `Retry-After` (seconds or HTTP date) into milliseconds from now. */
+/** Parses `Retry-After` (seconds or HTTP date) into milliseconds from now. Callers never wait less than the backoff. */
 function retryAfterMs(header: string | null, now: number): number | undefined {
   if (!header) return undefined;
   const seconds = Number(header);
@@ -154,6 +288,30 @@ function stripIdentifying<E extends WireEvent>(event: E): E {
   const { actor: _actor, ...rest } = event as E & { actor?: unknown };
   return rest as unknown as E;
 }
+
+/** The hashed user an event carries, if any. Spooled events come back from disk, possibly as anything. */
+function userOf(event: WireEvent): string | undefined {
+  const user = (event as { user?: unknown } | null)?.user;
+  return typeof user === 'string' ? user : undefined;
+}
+
+/**
+ * How many of a batch's first `n` events the collector's `rejected` list names, each once. The health event at the
+ * end of the batch is not one of them.
+ */
+function rejectedCount(rejected: unknown, n: number): number {
+  const seen = new Set<unknown>();
+  if (Array.isArray(rejected)) {
+    for (const r of rejected) {
+      const index = (r as { index?: unknown } | null)?.index;
+      if (Number.isInteger(index) && (index as number) >= 0 && (index as number) < n) seen.add(index);
+    }
+  }
+  return seen.size;
+}
+
+/** What `/v1/ingest` made of a batch: how many of its events it rejected once it took the batch, or why it didn't. */
+type SendResult = number | 'retry' | 'audit_off' | 'too_large' | 'refused';
 
 /**
  * The transport half of the SDK: a bounded priority queue, salt bootstrap, sampling, gzip batching, retries and
@@ -181,13 +339,19 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
   #retryAt = 0;
   #batchCap: number;
   #flushing: Promise<void> | undefined;
+  #spilling: Promise<void> | undefined;
   #flushScheduled = false;
   #flushTimer: unknown;
   #configTimer: unknown;
+  /** `shutdown()` has started: new events are refused. */
   #closed = false;
+  #stopping: Promise<void> | undefined;
+  /** `shutdown()` has returned: nothing more is sent, so events still being hashed are dropped. */
+  #stopped = false;
+  /** Nothing is sent (no collector, or a misconfigured one): events only go to exporters. */
   #disabled = false;
-  /** No collector configured: events only go to exporters. */
-  readonly #localOnly: boolean;
+  /** Never in a dry run, which must not send what an earlier run stored. */
+  readonly #spool: EventSpool | undefined;
   readonly #exporters: readonly ShardlensExporter[];
   #configLoading: Promise<void> | undefined;
   /** Hashing in progress (it is async: Web Crypto). */
@@ -196,24 +360,44 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
   readonly #maxQueue: number;
   #spooled = 0;
   #replayed = 0;
+  /** Erased user hashes, with when: their events recorded until then are dropped wherever they still wait. */
+  readonly #erased = new Map<string, number>();
+  #saltRetries = 0;
+  #configAskedAt = 0;
+  #outageWarnedAt = Number.NEGATIVE_INFINITY;
+  /** Aborts requests still in flight once shutdown is over, so a hanging collector can't keep the process alive. */
+  readonly #abort = new AbortController();
 
   constructor(options: ClientOptions) {
+    this.#logger = options.logger ?? { warn: (m) => console.warn(m), info: (m) => console.info(m) };
+    const { environment: rawEnvironment, release: rawRelease, exporters: rawExporters, ...rest } = options;
+    const environment = textOption(rawEnvironment, 32);
+    const release = textOption(rawRelease, 64);
+    if (rawEnvironment !== undefined && rawEnvironment !== '' && environment === undefined) {
+      this.#warn('environment', 'Shardlens: environment must be a string; using "production".');
+    }
+    if (rawRelease !== undefined && rawRelease !== '' && release === undefined) {
+      this.#warn('release', 'Shardlens: release must be a string; it is left out.');
+    }
     this.#opts = {
-      ...options,
-      flushIntervalMs: Math.max(250, options.flushIntervalMs ?? 5_000),
-      maxBatchSize: Math.min(MAX_BATCH_EVENTS - 1, Math.max(1, options.maxBatchSize ?? MAX_BATCH_EVENTS - 1)),
-      environment: (options.environment ?? 'production').slice(0, 32),
+      ...rest,
+      ...(release !== undefined ? { release } : {}),
+      flushIntervalMs: intOption(options.flushIntervalMs, 250, MAX_TIMER_MS, 5_000),
+      maxBatchSize: intOption(options.maxBatchSize, 1, MAX_BATCH_EVENTS - 1, MAX_BATCH_EVENTS - 1),
+      environment: environment ?? 'production',
     };
     this.#batchCap = this.#opts.maxBatchSize;
-    this.#maxQueue = Math.max(1, options.maxQueueSize ?? 10_000);
+    this.#maxQueue = intOption(options.maxQueueSize, 1, Number.MAX_SAFE_INTEGER, 10_000);
     this.#queue = new BoundedQueue<E>(this.#maxQueue);
     this.#fetch = options.fetch ?? ((input, init) => fetch(input, init));
     this.#random = options.random ?? Math.random;
-    this.#logger = options.logger ?? { warn: (m) => console.warn(m), info: (m) => console.info(m) };
-    this.#exporters = [...(options.exporters ?? [])];
-    this.#localOnly = !options.dryRun && !options.endpoint && !options.apiKey;
+    const { exporters, valid } = exporterList(rawExporters);
+    if (!valid)
+      this.#warn('exporters', 'Shardlens: exporters must be an array of exporters, such as [prometheusExporter()].');
+    this.#exporters = exporters;
+    this.#spool = options.dryRun ? undefined : options.spool;
 
-    if (this.#localOnly) {
+    if (!options.dryRun && !options.endpoint && !options.apiKey) {
       this.#disabled = true;
       if (this.#exporters.length === 0) {
         this.#warn('endpoint', 'Shardlens: no endpoint, apiKey or exporters configured; nothing is recorded.');
@@ -228,7 +412,7 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
 
     this.#flushTimer = setInterval(() => void this.flush(), this.#opts.flushIntervalMs);
     unref(this.#flushTimer);
-    if (options.dryRun) void this.#initDryRun();
+    if (options.dryRun) this.#configLoading = this.#initDryRun();
     else if (!this.#disabled) this.#configLoading = this.#loadConfig();
   }
 
@@ -257,13 +441,14 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
         return;
       }
       if (this.#exporters.length > 0) this.#export(event);
-      if (this.#localOnly) return;
+      if (this.#disabled) return;
       const sampled = this.#sample(event);
       if (!sampled) return;
       this.#queue.push(sampled, priority);
       if (this.#queue.size >= this.#batchCap) this.#scheduleFlush();
     } catch (error) {
       this.count('enqueue', error);
+      this.#extraDropped.invalid++;
     }
   }
 
@@ -279,12 +464,13 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
       }
       // Exporters see the event straight away, without a user (they never need one, and never wait for a salt).
       if (this.#exporters.length > 0) this.#export(build(''));
-      if (this.#localOnly) return;
+      if (this.#disabled) return;
       const label = this.#config ? periodLabel(this.#config.saltPeriod, new Date(ts)) : undefined;
       if (label && this.#hasher.hasSalt(label)) {
         void this.#hashAndQueue({ userId, ts, priority, build, addedAt: Date.now() }, label);
         return;
       }
+      if (this.#config) this.#askForSalt();
       if (this.#pendingSalt.length >= PENDING_SALT_MAX) {
         this.#dropForSalt();
         return;
@@ -292,6 +478,7 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
       this.#pendingSalt.push({ userId, ts, priority, build, addedAt: Date.now() });
     } catch (error) {
       this.count('enqueue', error);
+      this.#extraDropped.invalid++;
     }
   }
 
@@ -315,29 +502,44 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
    * encrypted. Resolves to the number of rows removed, or `undefined` if the request could not be made. Never throws.
    */
   async forgetUser(userId: string): Promise<{ erased: number } | undefined> {
+    const id = String(userId);
+    // Events waiting for a salt hold the raw ID: drop them here, whatever happens next.
+    this.#pendingSalt = this.#pendingSalt.filter((pending) => pending.userId !== id);
     if (!this.#config || this.#disabled || this.#opts.dryRun) return undefined;
     try {
-      // Send what was recorded a moment ago first, or it would be stored after the erasure and survive it.
+      // Events being hashed reach the queue first, so they are dropped below rather than sent after the erasure.
       await this.idle();
-      await this.flush();
+      this.#pendingSalt = this.#pendingSalt.filter((pending) => pending.userId !== id);
       const hashes: string[] = [];
       for (const label of this.#hasher.labels()) {
-        const h = await this.#hasher.hash(userId, label);
+        const h = await this.#hasher.hash(id, label);
         if (h) hashes.push(h);
       }
+      const at = Date.now();
+      for (const hash of hashes) this.#markErased(hash, at);
+      // Not sent yet, so not stored yet: dropping them here is the erasure. While the collector is unreachable they
+      // would otherwise arrive after the erasure request and survive it.
+      this.#queue.removeWhere((event) => this.#isErased(event));
+      try {
+        await this.#spool?.drop?.((event) => this.#isErased(event));
+      } catch (error) {
+        this.count('spool_drop', error);
+      }
+      // A batch already on its way must be stored before the erasure runs, or it would survive it.
+      await this.#flushing;
       const res = await this.#fetch(new URL('/v1/privacy/erase', this.#opts.endpoint), {
         method: 'POST',
         headers: { authorization: `Bearer ${this.#opts.apiKey}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ userHashes: hashes, ...(this.mode === 'audit' ? { userId } : {}) }),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        body: JSON.stringify({ userHashes: hashes, ...(this.mode === 'audit' ? { userId: id } : {}) }),
+        signal: this.#signal(),
       });
       if (!res.ok) {
-        await res.body?.cancel().catch(() => undefined);
+        await discard(res);
         this.count(`erase_${res.status}`);
         return undefined;
       }
-      const body = (await res.json()) as { erased?: unknown };
-      return { erased: typeof body.erased === 'number' ? body.erased : 0 };
+      const body = (await readJson(res, MAX_REPLY_BYTES)) as { erased?: unknown } | undefined;
+      return { erased: typeof body?.erased === 'number' ? body.erased : 0 };
     } catch (error) {
       this.count('erase', error);
       return undefined;
@@ -347,9 +549,11 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
   /** Increments an internal error counter and notifies listeners. For adapters; never throws. */
   count(name: string, error?: unknown): void {
     this.#internalErrors.set(name, (this.#internalErrors.get(name) ?? 0) + 1);
+    if (this.#listeners.size === 0) return;
+    const safe = error === undefined ? undefined : listenerError(error);
     for (const listener of this.#listeners) {
       try {
-        listener(name, error);
+        listener(name, safe);
       } catch {
         // a broken listener must not break the SDK
       }
@@ -378,17 +582,11 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
    * request are hashed and sent before the runtime stops. Never throws.
    */
   async idle(timeoutMs = 2_000): Promise<void> {
-    let timer: unknown;
-    const timeout = new Promise<void>((resolve) => {
-      timer = setTimeout(resolve, timeoutMs);
-      unref(timer);
-    });
     const work = (async () => {
       await this.#configLoading;
-      while (this.#inflight > 0) await new Promise<void>((resolve) => this.#idleWaiters.push(resolve));
+      await this.#hashed();
     })().catch((error: unknown) => this.count('idle', error));
-    await Promise.race([work, timeout]);
-    clearTimeout(timer as ReturnType<typeof setTimeout>);
+    await settleWithin(work, intOption(timeoutMs, 0, MAX_TIMER_MS, 2_000));
   }
 
   /** Sends queued events now. Concurrent calls share one flush. Never throws. */
@@ -399,26 +597,37 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
         .finally(() => {
           this.#flushing = undefined;
         });
+    } else if (this.#spool && this.#queue.size >= this.#maxQueue - this.#batchCap) {
+      // A request can hang for 10 seconds, while memory fills up and starts dropping events: spool them meanwhile.
+      this.#spilling ??= this.#spill(false)
+        .catch((error: unknown) => this.count('spool_write', error))
+        .finally(() => {
+          this.#spilling = undefined;
+        });
     }
     return this.#flushing;
   }
 
   /**
    * Stops timers and flushes what is queued, giving up after `timeoutMs`. The SDK never installs signal handlers;
-   * call this from your own shutdown code. Never throws.
+   * call this from your own shutdown code. Every call waits for the same flush. Never throws.
    */
-  async shutdown({ timeoutMs = 2_000 }: FlushOptions = {}): Promise<void> {
-    if (this.#closed) return;
+  shutdown(options?: FlushOptions): Promise<void> {
+    // `timeoutMs` often comes from an environment variable, where a missing one is NaN.
+    this.#stopping ??= this.#stop(intOption(options?.timeoutMs, 0, MAX_TIMER_MS, 2_000));
+    return this.#stopping;
+  }
+
+  async #stop(timeoutMs: number): Promise<void> {
     this.#closed = true;
     clearInterval(this.#flushTimer as ReturnType<typeof setInterval>);
     clearTimeout(this.#configTimer as ReturnType<typeof setTimeout>);
     const deadline = Date.now() + timeoutMs;
-    let timer: unknown;
-    const timeout = new Promise<void>((resolve) => {
-      timer = setTimeout(resolve, timeoutMs);
-      unref(timer);
-    });
     const drain = (async () => {
+      // Events recorded just before shutdown may still be waiting for their user hash, or already on their way.
+      this.#drainPendingSalt();
+      await this.#hashed();
+      await this.#flushing;
       while (this.#queue.size > 0 && Date.now() < deadline && !this.#disabled) {
         if (this.#retryAt > Date.now()) break;
         const before = this.#queue.size;
@@ -437,30 +646,67 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
         }
       }),
     );
-    await Promise.race([Promise.all([drain, exporters]), timeout]);
-    clearTimeout(timer as ReturnType<typeof setTimeout>);
-    // A send can hang past the deadline; the events still in memory go to the spool (local, quick) regardless.
-    if (this.#opts.spool && this.#queue.size > 0) {
-      let spillTimer: unknown;
-      await Promise.race([
+    await settleWithin(Promise.all([drain, exporters]), timeoutMs);
+    // Past the deadline, a request still hanging is given up, so it can't keep the process alive; its batch goes back
+    // to memory, and what is in memory goes to the spool (local, quick).
+    this.#abort.abort();
+    await settleWithin(this.#flushing ?? Promise.resolve(), 100);
+    if (this.#spool && this.#queue.size > 0) {
+      await settleWithin(
         this.#spill(true).catch((error: unknown) => this.count('shutdown', error)),
-        new Promise<void>((resolve) => {
-          spillTimer = setTimeout(resolve, 1_000);
-          unref(spillTimer);
-        }),
-      ]);
-      clearTimeout(spillTimer as ReturnType<typeof setTimeout>);
+        1_000,
+      );
+    }
+    this.#stopped = true;
+    // Never sent now, and they hold raw user IDs.
+    this.#extraDropped.salt_missing += this.#pendingSalt.length;
+    this.#pendingSalt = [];
+  }
+
+  /** Every request's signal: its own timeout, and the end of shutdown. */
+  #signal(): AbortSignal {
+    const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+    return typeof AbortSignal.any === 'function' ? AbortSignal.any([timeout, this.#abort.signal]) : timeout;
+  }
+
+  #markErased(hash: string, at: number): void {
+    this.#erased.delete(hash);
+    this.#erased.set(hash, at);
+    if (this.#erased.size > MAX_ERASED) this.#erased.delete(this.#erased.keys().next().value as string);
+  }
+
+  /** Recorded for a user, before that user's erasure. */
+  #isErased(event: WireEvent): boolean {
+    if (this.#erased.size === 0) return false;
+    const user = userOf(event);
+    const at = user === undefined ? undefined : this.#erased.get(user);
+    return at !== undefined && event.ts <= at;
+  }
+
+  /** The retry delay after a 429, 503 or failed request: what `Retry-After` says, but never less than the backoff. */
+  #backoff(retryAfter: string | null): number {
+    const backoff = backoffMs(this.#attempt++, this.#random);
+    return Math.max(backoff, retryAfterMs(retryAfter, Date.now()) ?? 0);
+  }
+
+  /** Resolves once no user hashing is in progress. */
+  async #hashed(): Promise<void> {
+    while (this.#inflight > 0) await new Promise<void>((resolve) => this.#idleWaiters.push(resolve));
+  }
+
+  #log(level: 'warn' | 'info', message: string): void {
+    try {
+      if (level === 'warn') this.#logger.warn(redactSecrets(message));
+      else this.#logger.info?.(redactSecrets(message));
+    } catch {
+      // a broken logger must not break the SDK
     }
   }
 
   #warn(key: string, message: string): void {
     if (this.#warned.has(key)) return;
     this.#warned.add(key);
-    try {
-      this.#logger.warn(redactSecrets(message));
-    } catch {
-      // ignore logger failures
-    }
+    this.#log('warn', message);
   }
 
   /**
@@ -477,12 +723,14 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
     this.#extraDropped.salt_missing++;
     this.#warn(
       'salt_missing',
-      'Shardlens: events recorded before the collector was reachable were dropped after 60 seconds (see stats().dropped.salt_missing).',
+      'Shardlens: user events were dropped waiting for a salt from the collector (see stats().dropped.salt_missing).',
     );
   }
 
-  /** One warning per outage, not one per failed request. */
+  /** One warning per outage, not one per failed request, and one every 5 minutes at most while the collector flaps. */
   #collectorDown(reason: unknown): void {
+    if (this.#warned.has('unreachable') || Date.now() - this.#outageWarnedAt < OUTAGE_WARN_INTERVAL_MS) return;
+    this.#outageWarnedAt = Date.now();
     const why = (reason instanceof Error ? reason.message : String(reason)).slice(0, 120);
     this.#warn(
       'unreachable',
@@ -492,11 +740,7 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
 
   #collectorUp(): void {
     if (!this.#warned.delete('unreachable')) return;
-    try {
-      this.#logger.info?.(`Shardlens: connected to the collector at ${this.#collector}.`);
-    } catch {
-      // ignore logger failures
-    }
+    this.#log('info', `Shardlens: connected to the collector at ${this.#collector}.`);
   }
 
   get #collector(): string {
@@ -509,9 +753,10 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
 
   #sample(event: E): E | undefined {
     const rate = this.#config?.sampling[event.type] ?? this.#opts.sampleRate?.[event.type];
-    if (rate === undefined || !(rate > 0 && rate < 1)) return event;
-    if (this.#random() >= rate) return undefined;
-    return { ...event, weight: (event.weight ?? 1) / rate };
+    if (!(rate !== undefined && rate > 0 && rate < 1)) return event;
+    const kept = Math.max(rate, MIN_SAMPLE_RATE);
+    if (this.#random() >= kept) return undefined;
+    return { ...event, weight: (event.weight ?? 1) / kept };
   }
 
   #scheduleFlush(): void {
@@ -535,6 +780,7 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
       this.#queueHashed(pending.build(hash), pending.priority);
     } catch (error) {
       this.count('hash', error);
+      this.#extraDropped.invalid++;
     } finally {
       // A counter rather than a set of promises: no extra allocation per event on the hot path.
       if (--this.#inflight === 0 && this.#idleWaiters.length > 0) {
@@ -546,10 +792,11 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
   }
 
   #queueHashed(event: E, priority: Priority): void {
-    if (this.#closed) {
+    if (this.#stopped) {
       this.#extraDropped.closed++;
       return;
     }
+    if (this.#isErased(event)) return;
     const sampled = this.#sample(event);
     if (!sampled) return;
     this.#queue.push(sampled, priority);
@@ -594,6 +841,17 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
     }
   }
 
+  /**
+   * An event for a period this process has no salt for, which the schedule didn't see coming: the clock was stepped,
+   * or the machine slept past a boundary. Ask soon rather than at the next hourly refresh.
+   */
+  #askForSalt(): void {
+    if (Date.now() - this.#configAskedAt < SALT_ASK_INTERVAL_MS) return;
+    this.#configAskedAt = Date.now();
+    if (this.#opts.dryRun) this.#configLoading = this.#initDryRun();
+    else this.#scheduleConfig(this.#random() * SALT_RETRY_MIN_MS);
+  }
+
   #scheduleConfig(delayMs: number): void {
     clearTimeout(this.#configTimer as ReturnType<typeof setTimeout>);
     if (this.#closed) return;
@@ -605,13 +863,14 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
 
   async #loadConfig(): Promise<void> {
     if (this.#closed || this.#disabled) return;
+    this.#configAskedAt = Date.now();
     try {
       const res = await this.#fetch(new URL('/v1/config', this.#opts.endpoint), {
         headers: { authorization: `Bearer ${this.#opts.apiKey}`, accept: 'application/json' },
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: this.#signal(),
       });
       if (res.status === 401 || res.status === 403) {
-        await res.body?.cancel();
+        await discard(res);
         this.#warn(
           'auth',
           `Shardlens: the collector rejected the API key (${res.status}). Check SHARDLENS_INGEST_KEY.`,
@@ -619,16 +878,34 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
         this.#scheduleConfig(AUTH_RETRY_MS);
         return;
       }
-      if (!res.ok) throw new Error(`config request failed with ${res.status}`);
-      const config = await this.#applyConfig(await res.json());
+      if (!res.ok) {
+        await discard(res);
+        throw new Error(`config request failed with ${res.status}`);
+      }
+      const config = await this.#applyConfig(await readJson(res, MAX_CONFIG_BYTES));
       this.#configAttempt = 0;
       this.#collectorUp();
       const now = new Date();
-      const boundary = nextPeriodStart(config.saltPeriod, now) - now.getTime() + this.#random() * 60_000;
-      this.#scheduleConfig(Math.max(1_000, Math.min(boundary, CONFIG_REFRESH_MS)));
+      if (!this.#hasher.hasSalt(periodLabel(config.saltPeriod, now)) && this.#saltRetries < SALT_RETRIES) {
+        // No salt yet for the period this clock is in, usually because it runs a little ahead of the collector's
+        // around a period boundary. Events wait for it at most 60 seconds, so ask again soon, not in an hour.
+        this.#saltRetries++;
+        this.#scheduleConfig(SALT_RETRY_MIN_MS + this.#random() * SALT_RETRY_SPREAD_MS);
+      } else {
+        this.#saltRetries = 0;
+        const next = nextPeriodStart(config.saltPeriod, now);
+        const early = next - now.getTime() - NEXT_SALT_LEAD_MS;
+        // Once the next period's salt is here, or it's too late to ask for it in time, ask again after the boundary.
+        const delay =
+          early > 0 && !this.#hasher.hasSalt(periodLabel(config.saltPeriod, new Date(next)))
+            ? early + this.#random() * NEXT_SALT_SPREAD_MS
+            : next - now.getTime() + this.#random() * 60_000;
+        this.#scheduleConfig(Math.max(1_000, Math.min(delay, CONFIG_REFRESH_MS)));
+      }
       this.#drainPendingSalt();
       if (this.#queue.size > 0) this.#scheduleFlush();
     } catch (error) {
+      if (this.#closed) return; // given up by shutdown: not an outage
       this.count('config', error);
       this.#collectorDown(error);
       this.#scheduleConfig(backoffMs(this.#configAttempt++, this.#random));
@@ -643,6 +920,7 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
       saltPeriod: string;
       salts: { period: string; salt: string }[];
       sampling: Record<string, number>;
+      serverTime: string;
     }>;
     const valid =
       b &&
@@ -654,6 +932,9 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
       Array.isArray(b.salts) &&
       b.salts.every((s) => typeof s?.period === 'string' && typeof s.salt === 'string' && SALT_RE.test(s.salt));
     if (!valid) throw new Error('config response has an unexpected shape');
+    // A salt the collector no longer serves has been destroyed there, and must not outlive it here.
+    const served = new Set(b.salts!.map((s) => s.period));
+    for (const label of this.#hasher.labels()) if (!served.has(label)) this.#hasher.deleteSalt(label);
     // Install the previous period first so the current one is kept as most recent.
     for (const s of [...b.salts!].reverse()) await this.#hasher.setSalt(s.period, base64UrlDecode(s.salt));
     const sampling: Record<string, number> = {};
@@ -666,6 +947,13 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
       saltPeriod: b.saltPeriod as SaltPeriod,
       sampling,
     };
+    const skew = typeof b.serverTime === 'string' ? Date.now() - Date.parse(b.serverTime) : 0;
+    if (Math.abs(skew) > CLOCK_SKEW_WARN_MS) {
+      this.#warn(
+        'clock',
+        `Shardlens: this machine's clock is ${Math.round(Math.abs(skew) / 1000)} s ${skew > 0 ? 'ahead of' : 'behind'} the collector's. Events near the start of a salt period may wait or be dropped; sync the clock (NTP).`,
+      );
+    }
     if (this.#opts.mode === 'audit' && config.mode !== 'audit') {
       this.#warn(
         'mode',
@@ -677,17 +965,18 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
   }
 
   async #runFlush(): Promise<void> {
+    // After shutdown every request is aborted at once: trying would only report an outage that isn't one.
+    if (this.#disabled || this.#stopped) return;
     this.#drainPendingSalt();
-    if (this.#disabled || !this.#config) return;
-    // The collector is unreachable (backing off): move what memory can't comfortably hold to the spool.
-    if (Date.now() < this.#retryAt || !(await this.#replaySpool())) {
+    // The collector is unreachable (no settings yet, or backing off): move what memory can't comfortably hold to the
+    // spool.
+    if (!this.#config || Date.now() < this.#retryAt || !(await this.#replaySpool())) {
       await this.#spill(false);
       return;
     }
     for (let i = 0; i < MAX_BATCHES_PER_FLUSH && this.#queue.size > 0; i++) {
       if (Date.now() < this.#retryAt) return;
-      const sent = await this.#sendBatch(this.#queue.take(this.#batchCap));
-      if (!sent) {
+      if (!(await this.#sendBatch(this.#queue.take(this.#batchCap)))) {
         await this.#spill(false);
         return;
       }
@@ -699,27 +988,28 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
    * an outage, before memory would start dropping). Most important events go first. Identities never reach disk.
    */
   async #spill(everything: boolean): Promise<void> {
-    const spool = this.#opts.spool;
-    if (!spool || this.#localOnly) return;
+    const spool = this.#spool;
+    if (!spool) return;
     const keep = everything ? 0 : Math.floor(this.#maxQueue / 2);
+    // During an outage every enqueue can trigger a flush: waiting for a fair-sized batch keeps the spool from filling
+    // with batches of one or two events, each of which would later be a request of its own.
+    const least = everything ? 1 : Math.max(1, Math.min(this.#batchCap, Math.floor((this.#maxQueue - keep) / 2)));
+    if (this.#queue.size - keep < least) return;
     while (this.#queue.size > keep) {
       const items = this.#queue.take(Math.min(this.#batchCap, this.#queue.size - keep));
-      let stored = false;
+      const events = items.filter((i) => !this.#isErased(i.item)).map((i) => stripIdentifying(i.item));
+      let stored = events.length === 0;
       try {
-        stored = await spool.write(items.map((i) => stripIdentifying(i.item)));
+        stored ||= await spool.write(events);
       } catch (error) {
         this.count('spool_write', error);
       }
-      if (stored) {
-        this.#spooled += items.length;
-        continue;
+      if (stored) this.#spooled += events.length;
+      else if (everything) this.#extraDropped.spool_full += events.length;
+      else {
+        this.#queue.requeue(items);
+        return;
       }
-      if (everything) {
-        this.#extraDropped.spool_full += items.length;
-        continue;
-      }
-      this.#queue.requeue(items);
-      return;
     }
   }
 
@@ -728,7 +1018,7 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
    * A batch is deleted only once the collector accepted it; replays are safe because the collector dedupes by ID.
    */
   async #replaySpool(): Promise<boolean> {
-    const spool = this.#opts.spool;
+    const spool = this.#spool;
     if (!spool) return true;
     for (let i = 0; i < MAX_BATCHES_PER_FLUSH; i++) {
       let batch: { id: string; events: WireEvent[] } | undefined;
@@ -739,10 +1029,29 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
         return true;
       }
       if (!batch) return true;
-      const outcome = await this.#postSpooled(batch.events);
-      if (outcome === 'retry') return false;
-      if (outcome === 'ok') this.#replayed += batch.events.length;
-      else this.#extraDropped.invalid += batch.events.length;
+      // Whatever a spool hands back, a batch that can't be sent is dropped, or it would hold up every later one.
+      const events = Array.isArray(batch.events) ? batch.events.filter((event) => !this.#isErased(event)) : [];
+      let result: SendResult = 0;
+      try {
+        if (events.length > 0) result = await this.#send(this.#encode([...events, this.#health()]), events.length);
+      } catch (error) {
+        this.count('send', error);
+        result = 'refused';
+      }
+      if (result === 'retry' || result === 'audit_off') return false;
+      let lost = typeof result === 'number' ? result : events.length;
+      if (typeof result === 'number') this.#replayed += events.length - result;
+      else if (result === 'too_large' && events.length > 1) {
+        // A proxy in front of the collector may take less than it does: put the batch back in two halves.
+        const half = Math.ceil(events.length / 2);
+        try {
+          if (await spool.write(events.slice(0, half))) lost -= half;
+          if (await spool.write(events.slice(half))) lost -= events.length - half;
+        } catch (error) {
+          this.count('spool_write', error);
+        }
+      }
+      this.#extraDropped.invalid += lost;
       try {
         await spool.ack(batch.id);
       } catch (error) {
@@ -751,57 +1060,6 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
       }
     }
     return true;
-  }
-
-  async #postSpooled(events: WireEvent[]): Promise<'ok' | 'drop' | 'retry'> {
-    let res: Response;
-    try {
-      res = await this.#post(this.#envelope([...events, this.#health()]));
-    } catch (error) {
-      this.count('network', error);
-      this.#collectorDown(error);
-      this.#failedFlushes++;
-      this.#retryAt = Date.now() + backoffMs(this.#attempt++, this.#random);
-      return 'retry';
-    }
-    const status = res.status;
-    const retryAfter = res.headers.get('retry-after');
-    if (status === 400) {
-      const reply = (await res.json().catch(() => undefined)) as { error?: unknown } | undefined;
-      if (reply?.error === 'audit_mode_disabled') {
-        this.#auditSwitchedOff();
-        return 'retry';
-      }
-      // A batch the collector will never accept: drop it rather than block the spool.
-      return 'drop';
-    }
-    await res.body?.cancel().catch(() => undefined);
-    if (status >= 200 && status < 300) {
-      this.#attempt = 0;
-      return 'ok';
-    }
-    if (status === 413) return 'drop';
-    this.#failedFlushes++;
-    const wait =
-      status === 401 || status === 403
-        ? AUTH_RETRY_MS
-        : (retryAfterMs(retryAfter, Date.now()) ?? backoffMs(this.#attempt++, this.#random));
-    this.#retryAt = Date.now() + wait;
-    return 'retry';
-  }
-
-  /** POSTs one gzipped envelope to the collector. Rejects on network errors and timeouts. */
-  async #post(envelope: Record<string, unknown>): Promise<Response> {
-    return this.#fetch(new URL('/v1/ingest', this.#opts.endpoint), {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${this.#opts.apiKey}`,
-        'content-type': 'application/json',
-        'content-encoding': 'gzip',
-      },
-      body: (await gzipJson(envelope)) as Uint8Array<ArrayBuffer>,
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
   }
 
   #health(): WireEvent {
@@ -817,123 +1075,142 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
     } as WireEvent;
   }
 
-  #envelope(events: WireEvent[]): Record<string, unknown> {
+  /** A batch's envelope as UTF-8 JSON. Throws if an event can't be serialised. */
+  #encode(events: WireEvent[]): Uint8Array {
     const config = this.#config!;
     let source: SourceInfo = { shards: [], instance: 'unknown' };
     try {
-      if (this.#opts.source) source = this.#opts.source();
+      const s = this.#opts.source?.();
+      // A NUL in the envelope would make the collector refuse the whole batch.
+      if (typeof s === 'object' && s !== null) source = { ...s, instance: cutText(String(s.instance), 128) };
     } catch (error) {
       this.count('source', error);
     }
-    return {
+    const envelope = {
       v: 1,
       mode: this.mode,
       sdk: this.#opts.sdk,
       app: {
         id: config.appId,
         env: this.#opts.environment,
-        ...(this.#opts.release ? { release: this.#opts.release.slice(0, 64) } : {}),
+        ...(this.#opts.release ? { release: this.#opts.release } : {}),
       },
-      source: { ...source, instance: source.instance.slice(0, 128) },
+      source,
       sentAt: new Date().toISOString(),
       events,
     };
+    return new TextEncoder().encode(JSON.stringify(envelope));
   }
 
-  /** Sends one batch. Returns true when the batch left the queue for good (sent, or dropped as invalid). */
-  async #sendBatch(items: QueuedItem<E>[]): Promise<boolean> {
-    if (items.length === 0) return true;
-    const privacy = this.mode !== 'audit';
-    const events: WireEvent[] = items.map((i) => (privacy ? stripIdentifying(i.item) : i.item));
-    events.push(this.#health());
-    const envelope = this.#envelope(events);
-    const json = JSON.stringify(envelope);
-
-    if (new TextEncoder().encode(json).byteLength > MAX_BATCH_BYTES && items.length > 1) {
-      const half = Math.ceil(items.length / 2);
-      this.#queue.requeue(items.slice(half));
-      return this.#sendBatch(items.slice(0, half));
+  /**
+   * Sends one batch from the queue, putting back what should be tried again. Returns false when sending must wait for
+   * the backoff.
+   */
+  async #sendBatch(batch: QueuedItem<E>[]): Promise<boolean> {
+    let items = batch.filter((i) => !this.#isErased(i.item));
+    let events: WireEvent[] = [];
+    let body: Uint8Array | undefined;
+    try {
+      while (items.length > 0) {
+        const privacy = this.mode !== 'audit';
+        events = items.map((i) => (privacy ? stripIdentifying(i.item) : i.item));
+        events.push(this.#health());
+        body = this.#encode(events);
+        if (body.byteLength <= MAX_BATCH_BYTES || items.length === 1) break;
+        const half = Math.ceil(items.length / 2);
+        this.#queue.requeue(items.slice(half));
+        items = items.slice(0, half);
+      }
+    } catch (error) {
+      // Nothing was sent: count the events rather than lose them without a trace or retry them forever.
+      this.count('send', error);
+      this.#extraDropped.invalid += items.length;
+      return true;
     }
+    if (!body) return true;
 
     if (this.#opts.dryRun) {
-      for (const event of events) this.#logger.info?.(`[shardlens dry-run] ${redactSecrets(JSON.stringify(event))}`);
+      // A console is not encrypted storage: audit-mode identities are shown as present, never printed.
+      for (const event of events) {
+        const shown = 'actor' in event ? { ...stripIdentifying(event), actor: '[hidden]' } : event;
+        this.#log('info', `[shardlens dry-run] ${JSON.stringify(shown)}`);
+      }
       return true;
     }
 
+    const result = await this.#send(body, items.length);
+    if (typeof result === 'number') {
+      this.#extraDropped.invalid += result;
+      this.#batchCap = Math.min(this.#opts.maxBatchSize, this.#batchCap * 2);
+      return true;
+    }
+    if (result === 'refused' || (result === 'too_large' && items.length === 1)) {
+      // A batch the collector will never accept: drop it rather than retry it forever.
+      this.#extraDropped.invalid += items.length;
+      return true;
+    }
+    if (result === 'too_large') this.#batchCap = Math.max(1, Math.floor(items.length / 2));
+    this.#queue.requeue(items);
+    return result !== 'retry';
+  }
+
+  /** POSTs one batch of `count` events (plus the health event) to the collector. Never throws for a failed request. */
+  async #send(body: Uint8Array, count: number): Promise<SendResult> {
     let res: Response;
     try {
-      res = await this.#post(envelope);
+      res = await this.#fetch(new URL('/v1/ingest', this.#opts.endpoint), {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${this.#opts.apiKey}`,
+          'content-type': 'application/json',
+          'content-encoding': 'gzip',
+        },
+        body: (await gzip(body)) as Uint8Array<ArrayBuffer>,
+        signal: this.#signal(),
+      });
     } catch (error) {
-      this.count('network', error);
-      this.#collectorDown(error);
-      return this.#retryLater(items);
+      // Given up at the end of shutdown: not an outage.
+      if (!this.#abort.signal.aborted) {
+        this.count('network', error);
+        this.#collectorDown(error);
+      }
+      return this.#retryLater(null);
     }
 
     const status = res.status;
     if (status >= 200 && status < 300) {
-      const reply = (await res.json().catch(() => undefined)) as { rejected?: unknown } | undefined;
-      if (Array.isArray(reply?.rejected)) this.#extraDropped.invalid += reply.rejected.length;
+      const reply = (await readJson(res, MAX_REPLY_BYTES)) as { rejected?: unknown } | undefined;
       this.#attempt = 0;
       this.#collectorUp();
-      this.#batchCap = Math.min(this.#opts.maxBatchSize, this.#batchCap * 2);
-      return true;
+      return rejectedCount(reply?.rejected, count);
     }
-
     if (status === 400) {
-      const reply = (await res.json().catch(() => undefined)) as
-        { error?: unknown; rejected?: { index?: unknown }[] } | undefined;
+      const reply = (await readJson(res, MAX_REPLY_BYTES)) as { error?: unknown } | undefined;
       if (reply?.error === 'audit_mode_disabled') {
         this.#auditSwitchedOff();
-        this.#queue.requeue(items);
-        return true;
+        return 'audit_off';
       }
-      const bad = new Set(
-        Array.isArray(reply?.rejected) ? reply.rejected.map((r) => r.index).filter((i) => typeof i === 'number') : [],
-      );
-      if (bad.size === 0) {
-        this.#extraDropped.invalid += items.length;
-        this.#warn('invalid', 'Shardlens: the collector rejected a batch as invalid; it was dropped.');
-        return true;
-      }
-      this.#extraDropped.invalid += [...bad].filter((i) => (i as number) < items.length).length;
-      this.#queue.requeue(items.filter((_, i) => !bad.has(i)));
-      return true;
+      this.#warn('invalid', 'Shardlens: the collector rejected a batch as invalid; it was dropped.');
+      return 'refused';
     }
-
-    await res.body?.cancel().catch(() => undefined);
+    await discard(res);
+    if (status === 413) return 'too_large';
     if (status === 401 || status === 403) {
       this.#warn('auth', `Shardlens: the collector rejected the API key (${status}). Sending is paused.`);
       this.#failedFlushes++;
-      this.#queue.requeue(items);
       this.#retryAt = Date.now() + AUTH_RETRY_MS;
-      return false;
+      return 'retry';
     }
-    if (status === 413) {
-      if (items.length === 1) {
-        // One event the collector will never accept: drop it rather than retry forever.
-        this.#extraDropped.invalid++;
-        return true;
-      }
-      this.#batchCap = Math.max(1, Math.floor(items.length / 2));
-      this.#queue.requeue(items);
-      return true;
+    if (status !== 429 && status !== 503) {
+      this.count(`http_${status >= 500 ? '5xx' : status}`);
+      this.#collectorDown(`HTTP ${status}`);
     }
-    if (status === 429 || status === 503) {
-      const wait = retryAfterMs(res.headers.get('retry-after'), Date.now());
-      this.#failedFlushes++;
-      this.#queue.requeue(items);
-      this.#retryAt = Date.now() + (wait ?? backoffMs(this.#attempt++, this.#random));
-      return false;
-    }
-    this.count(`http_${status >= 500 ? '5xx' : status}`);
-    this.#collectorDown(`HTTP ${status}`);
-    return this.#retryLater(items);
+    return this.#retryLater(res.headers.get('retry-after'));
   }
 
-  #retryLater(items: QueuedItem<E>[]): false {
+  #retryLater(retryAfter: string | null): 'retry' {
     this.#failedFlushes++;
-    this.#queue.requeue(items);
-    this.#retryAt = Date.now() + backoffMs(this.#attempt++, this.#random);
-    return false;
+    this.#retryAt = Date.now() + this.#backoff(retryAfter);
+    return 'retry';
   }
 }

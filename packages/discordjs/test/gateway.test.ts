@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import type { Client } from 'discord.js';
 import { describe, expect, it } from 'vitest';
 import { listenShardEvents, localShardCount, managerShardCount, shardIds, shardPings } from '../src/gateway.js';
+import { detectSource } from '../src/runtime.js';
 
 const wrap =
   <A extends unknown[]>(_name: string, fn: (...args: A) => void) =>
@@ -30,7 +31,8 @@ function recorder() {
   return {
     calls,
     handlers: {
-      ready: (shard: number, unavailable: number) => void calls.push(['ready', shard, unavailable]),
+      ready: (shard: number, unavailable: number | undefined, guilds: string[] | undefined) =>
+        void calls.push(['ready', shard, unavailable, guilds]),
       resumed: (shard: number, replayed: number | undefined) => void calls.push(['resumed', shard, replayed]),
       reconnecting: (shard: number) => void calls.push(['reconnecting', shard]),
       disconnected: (shard: number, code: number | undefined) => void calls.push(['disconnected', shard, code]),
@@ -75,6 +77,7 @@ describe('gateway compatibility (discord.js 14 and 15)', () => {
     const client = v14Client();
     const rec = recorder();
     const off = listenShardEvents(client, rec.handlers, wrap, true);
+    client.emit('raw', { t: 'READY', d: { guilds: [{ id: '10' }, { id: '11' }] } }, 1);
     client.emit('shardReady', 1, new Set(['a', 'b']));
     client.emit('shardResume', 1, 12);
     client.emit('shardReconnecting', 1);
@@ -83,7 +86,7 @@ describe('gateway compatibility (discord.js 14 and 15)', () => {
     off();
     client.emit('shardReady', 1, new Set());
     expect(rec.calls).toEqual([
-      ['ready', 1, 2],
+      ['ready', 1, 2, ['10', '11']],
       ['resumed', 1, 12],
       ['reconnecting', 1],
       ['disconnected', 1, 4004],
@@ -98,14 +101,26 @@ describe('gateway compatibility (discord.js 14 and 15)', () => {
     client.ws.emit('ready', { guilds: [{ id: '1' }, { id: '2' }, { id: '3' }] }, 2);
     client.ws.emit('resumed', 2);
     client.ws.emit('closed', 4000, 3);
-    client.ws.emit('error', new Error('x'), 3);
     off();
     client.ws.emit('ready', { guilds: [] }, 2);
     expect(rec.calls).toEqual([
-      ['ready', 2, 3],
+      ['ready', 2, undefined, ['1', '2', '3']],
       ['resumed', 2, undefined],
       ['disconnected', 3, 4000],
-      ['error', 3],
     ]);
+  });
+
+  it('leaves a fatal discord.js 15 gateway error unhandled, so it still crashes the bot', () => {
+    const client = v15Client();
+    listenShardEvents(client, recorder().handlers, wrap, false);
+    expect(() => client.ws.emit('error', new Error('Authentication failed'), 0)).toThrow('Authentication failed');
+  });
+
+  it("finds a ShardingManager process's shards on discord.js 14 and 15", () => {
+    const v14 = Object.assign(v14Client(), { shard: { ids: [4, 5], count: 8 } });
+    expect(detectSource(v14, 'host:1')).toEqual({ shards: [4, 5], instance: 'host:1' });
+    // discord.js 15's ShardClientUtil has no `ids`; the gateway manager knows them.
+    const v15 = Object.assign(v15Client(), { shard: { mode: 'process' } });
+    expect(detectSource(v15, 'host:2')).toEqual({ shards: [2, 3], instance: 'host:2' });
   });
 });

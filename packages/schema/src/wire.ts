@@ -8,6 +8,7 @@
  */
 import { z } from 'zod';
 
+/** Major version of the wire format, sent as `v` in every batch. */
 export const WIRE_VERSION = 1;
 
 /**
@@ -15,6 +16,23 @@ export const WIRE_VERSION = 1;
  * value the collector's `bigint` columns hold; real IDs stay under it until about 2084.
  */
 export const Snowflake = z.string().regex(/^(?:\d{17,18}|[1-8]\d{18}|9[01]\d{17})$/);
+
+/**
+ * Decimal strings, leading zeros allowed, whose value is at most `max`: shorter strings, or `max.length` digits that
+ * fall below `max` at their first differing digit. A pattern rather than a numeric check, so the JSON Schema says the
+ * same, and a malformed value is refused rather than thrown on.
+ */
+function decimalAtMost(max: string): RegExp {
+  const below = [`\\d{1,${max.length - 1}}`, max];
+  for (let i = 0; i < max.length; i++) {
+    const digit = Number(max[i]);
+    if (digit > 0) below.push(`${max.slice(0, i)}[0-${digit - 1}]\\d{${max.length - i - 1}}`);
+  }
+  return new RegExp(`^(?:${below.join('|')})$`);
+}
+
+/** A Discord permission bitfield as a decimal string. Discord's are 64 bits wide. */
+const PermissionBits = z.string().regex(decimalAtMost('18446744073709551615')); // 2^64 - 1
 
 /**
  * Pseudonymised user: `h1:<salt period>:<32 hex>`, where the hex is the first 16 bytes of
@@ -28,16 +46,19 @@ export const Ts = z.number().int().positive();
 /** RFC 9562 UUIDv7: time-ordered, so the collector can de-duplicate within one partition. */
 export const Id = z.uuid({ version: 'v7' });
 
+/** Largest `weight` an event may carry, which makes 1 / `MAX_EVENT_WEIGHT` the lowest usable sample rate. */
+export const MAX_EVENT_WEIGHT = 10_000;
+
 const Base = z.object({
   id: Id,
   ts: Ts,
   /** Inverse sample rate: an event kept at a 10% sample rate carries `weight: 10`. */
-  weight: z.number().positive().max(10_000).default(1),
+  weight: z.number().positive().max(MAX_EVENT_WEIGHT).default(1),
 });
 
 /**
- * Who ran an interaction: a user ID, a username and an avatar, and nothing else. Present only when the SDK runs in
- * audit mode. Never sent in privacy mode.
+ * Who ran an interaction or a message command: a user ID, a username and an avatar, and nothing else. Present only
+ * when the SDK runs in audit mode. Never sent in privacy mode.
  */
 export const Actor = z.object({
   userId: Snowflake,
@@ -49,6 +70,7 @@ export const Actor = z.object({
     .optional(),
 });
 
+/** What ran: a slash command, a context menu, an entry point, a component, a modal submission or autocomplete. */
 export const InteractionKind = z.enum([
   'chat_input',
   'user_context',
@@ -60,8 +82,13 @@ export const InteractionKind = z.enum([
   'autocomplete',
 ]);
 
+/**
+ * How an interaction ended. `timeout`: the first response missed Discord's 3-second deadline. `no_response`: none was
+ * seen within 10 seconds.
+ */
 export const InteractionOutcome = z.enum(['ok', 'error', 'timeout', 'no_response']);
 
+/** One interaction (command, context menu, entry point, component, modal or autocomplete) and its first response. */
 export const InteractionEvent = Base.extend({
   type: z.literal('interaction'),
   kind: InteractionKind,
@@ -102,6 +129,7 @@ export const InteractionEvent = Base.extend({
   shard: z.number().int().nonnegative().optional(),
 });
 
+/** A server's profile, read from the discord.js cache with the Guilds intent only. Nothing in it identifies a person. */
 export const GuildInfo = z.object({
   guild: Snowflake,
   /** Untrusted text: render as text only, neutralise in CSV. */
@@ -125,26 +153,30 @@ export const GuildInfo = z.object({
   emojiCount: z.number().int().nonnegative(),
   stickerCount: z.number().int().nonnegative(),
   /** Bot permission bitfield as a decimal string. */
-  botPermissions: z.string().regex(/^\d+$/),
+  botPermissions: PermissionBits,
 });
 
+/** The bot was added to a server, or found in one at startup that it had joined while offline. */
 export const GuildJoin = Base.extend({
   type: z.literal('guild_join'),
   info: GuildInfo,
   detectedAtStartup: z.boolean(),
 });
 
+/** A server's profile, sent when it changes and again after a restart. */
 export const GuildUpdate = Base.extend({
   type: z.literal('guild_update'),
   info: GuildInfo,
 });
 
+/** The bot was removed from a server, or found at startup to have been removed while offline. */
 export const GuildLeave = Base.extend({
   type: z.literal('guild_leave'),
   guild: Snowflake,
   detectedAtStartup: z.boolean(),
 });
 
+/** A server went down in a Discord outage, or came back after one. */
 export const GuildAvailability = Base.extend({
   type: z.literal('guild_availability'),
   guild: Snowflake,
@@ -152,6 +184,7 @@ export const GuildAvailability = Base.extend({
   shard: z.number().int(),
 });
 
+/** The servers on some shards when they start, so the collector can find joins and removals made while offline. */
 export const GuildSnapshot = Base.extend({
   type: z.literal('guild_snapshot'),
   shards: z.array(z.number().int().nonnegative()),
@@ -159,6 +192,7 @@ export const GuildSnapshot = Base.extend({
   guilds: z.array(Snowflake).max(2500 * 16),
 });
 
+/** The app's registered global commands, sent at startup and hourly, so unused ones can be found. */
 export const CommandRegistry = Base.extend({
   type: z.literal('command_registry'),
   commands: z
@@ -174,6 +208,7 @@ export const CommandRegistry = Base.extend({
     .max(5000),
 });
 
+/** A shard's gateway connection changed state. */
 export const ShardState = Base.extend({
   type: z.literal('shard_state'),
   shard: z.number().int(),
@@ -185,8 +220,13 @@ export const ShardState = Base.extend({
 
 /** Number of latency histogram buckets: log scale, 1 ms .. 60 s. Must match `@shardlens/core` and SQL. */
 export const HISTOGRAM_BUCKETS = 40;
-export const Histogram = z.array(z.number().int().nonnegative()).length(HISTOGRAM_BUCKETS);
+/**
+ * Request counts per latency bucket. A bucket counts one window's requests: a billion is far beyond any bot, and keeps
+ * hourly sums in range.
+ */
+export const Histogram = z.array(z.number().int().nonnegative().max(1e9)).length(HISTOGRAM_BUCKETS);
 
+/** REST calls since the previous window, counted by method, route and status. */
 export const RestWindow = Base.extend({
   type: z.literal('rest_window'),
   windowMs: z.number().int().positive(),
@@ -211,6 +251,7 @@ export const RestWindow = Base.extend({
   }),
 });
 
+/** discord.js held a request back for a rate limit. */
 export const RateLimit = Base.extend({
   type: z.literal('rate_limit'),
   scope: z.enum(['user', 'global', 'shared']),
@@ -218,16 +259,19 @@ export const RateLimit = Base.extend({
   route: z.string().max(200),
   method: z.string().max(8),
   limit: z.number().int(),
-  retryAfter: z.number().nonnegative(),
-  sublimitTimeout: z.number().nonnegative(),
+  /** Milliseconds. Capped at 30 days, so rollup sums can't overflow. */
+  retryAfter: z.number().nonnegative().max(2_592_000_000),
+  sublimitTimeout: z.number().nonnegative().max(2_592_000_000),
 });
 
+/** discord.js's warning that invalid requests are adding up (sent only with `invalidRequestWarningInterval` set). */
 export const InvalidRequestWarning = Base.extend({
   type: z.literal('invalid_request_warning'),
   count: z.number().int(),
   remainingTime: z.number(),
 });
 
+/** Process and gateway gauges, sampled every 30 seconds. */
 export const GaugeWindow = Base.extend({
   type: z.literal('gauge_window'),
   gauges: z
@@ -241,6 +285,7 @@ export const GaugeWindow = Base.extend({
     .max(500),
 });
 
+/** An entitlement (a purchase, a subscription's access, a test) was created, updated or deleted. */
 export const EntitlementEvent = Base.extend({
   type: z.literal('entitlement'),
   action: z.enum(['create', 'update', 'delete']),
@@ -253,6 +298,7 @@ export const EntitlementEvent = Base.extend({
   endsAt: Ts.nullable(),
 });
 
+/** A premium subscription was created, updated or deleted. */
 export const SubscriptionEvent = Base.extend({
   type: z.literal('subscription'),
   action: z.enum(['create', 'update', 'delete']),
@@ -266,6 +312,7 @@ export const SubscriptionEvent = Base.extend({
 /** Custom event names: lower snake case, starting with a letter, up to 64 characters. */
 export const CUSTOM_EVENT_NAME = /^[a-z][a-z0-9_]{0,63}$/;
 
+/** An event the bot sent with `track()`. */
 export const CustomEvent = Base.extend({
   type: z.literal('custom'),
   name: z.string().regex(CUSTOM_EVENT_NAME),
@@ -292,6 +339,7 @@ export const AppInfo = Base.extend({
   libVersion: z.string().max(32),
 });
 
+/** The sending SDK's own health, added to every batch. */
 export const SdkHealth = Base.extend({
   type: z.literal('sdk_health'),
   queueDepth: z.number().int(),
@@ -315,6 +363,33 @@ export const InteractionError = Base.extend({
   handlerMs: z.number().int().nonnegative().optional(),
 });
 
+/**
+ * A command run from a message, such as a prefix command (`!ban`) or a mention (`@bot ban`). The bot reports it after
+ * its own parser matched a command; the SDK never reads message content. Stored and counted with interactions.
+ */
+export const MessageCommandEvent = Base.extend({
+  type: z.literal('message_command'),
+  /** The command's own name after aliases are resolved, never the text the user typed. */
+  command: z.string().min(1).max(32),
+  group: z.string().max(32).optional(),
+  sub: z.string().max(32).optional(),
+  options: z.array(z.string().max(32)).max(25).default([]),
+  optionValues: z.record(z.string().max(32), z.union([z.string().max(100), z.number(), z.boolean()])).optional(),
+  guild: Snowflake.optional(),
+  channelType: z.number().int().optional(),
+  guildLocale: z.string().max(10).optional(),
+  memberTier: z.enum(['admin', 'manager', 'member', 'dm']).optional(),
+  user: UserHash,
+  actor: Actor.optional(),
+  /** A message command has no response deadline, so it either worked or failed. */
+  outcome: z.enum(['ok', 'error']),
+  /** Error constructor name only, never a message or stack. */
+  errorClass: z.string().max(64).optional(),
+  errorCode: z.number().int().optional(),
+  handlerMs: z.number().int().nonnegative().optional(),
+  shard: z.number().int().nonnegative().optional(),
+});
+
 /** A server changed who may use the app's commands (`APPLICATION_COMMAND_PERMISSIONS_UPDATE`). */
 export const CommandPermissions = Base.extend({
   type: z.literal('command_permissions'),
@@ -325,9 +400,11 @@ export const CommandPermissions = Base.extend({
   overwrites: z.number().int().nonnegative(),
 });
 
+/** Any event, told apart by `type`. */
 export const Event = z.discriminatedUnion('type', [
   InteractionEvent,
   InteractionError,
+  MessageCommandEvent,
   CommandPermissions,
   GuildJoin,
   GuildUpdate,
@@ -347,8 +424,10 @@ export const Event = z.discriminatedUnion('type', [
   SdkHealth,
 ]);
 
+/** `privacy` (the default), or `audit`, in which interactions and message commands also say who ran them. */
 export const Mode = z.enum(['privacy', 'audit']);
 
+/** Most events one batch may hold. */
 export const MAX_BATCH_EVENTS = 500;
 /** Maximum batch size before compression, in bytes. The SDK splits larger batches. */
 export const MAX_BATCH_BYTES = 1024 * 1024;
@@ -371,16 +450,17 @@ export const BatchEnvelope = z.object({
 });
 
 /**
- * Returns a reason when an event carries identifying data that its batch mode does not allow.
- * In privacy mode no interaction may carry an `actor`.
+ * Returns a reason when an event carries identifying data that its batch mode does not allow: in privacy mode, no
+ * event may carry an `actor`. The emitted JSON Schema states the same rule.
  */
 export function privacyViolation(event: Event, mode: Mode): string | undefined {
-  if (mode === 'audit') return undefined;
-  if (event.type === 'interaction' && event.actor !== undefined) return 'actor_in_privacy_mode';
-  return undefined;
+  return mode === 'privacy' && 'actor' in event && event.actor !== undefined ? 'actor_in_privacy_mode' : undefined;
 }
 
-/** A whole batch, fully validated. Privacy-mode batches carrying identifying fields are rejected. */
+/**
+ * A whole batch, fully validated. Privacy-mode batches carrying identifying fields are rejected. The collector uses
+ * `parseBatch()` instead, which also refuses NUL characters and drops invalid events one by one.
+ */
 export const Batch = BatchEnvelope.extend({
   events: z.array(Event).min(1).max(MAX_BATCH_EVENTS),
 }).superRefine((batch, ctx) => {
@@ -419,6 +499,7 @@ export type CustomEvent = z.output<typeof CustomEvent>;
 export type AppInfo = z.output<typeof AppInfo>;
 export type SdkHealth = z.output<typeof SdkHealth>;
 export type InteractionError = z.output<typeof InteractionError>;
+export type MessageCommandEvent = z.output<typeof MessageCommandEvent>;
 export type CommandPermissions = z.output<typeof CommandPermissions>;
 
 /** What an SDK may send (input types: defaulted fields are optional). */

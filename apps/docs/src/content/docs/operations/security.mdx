@@ -29,7 +29,7 @@ days. The full policy is in
 | XSS from server names or usernames      | Rendered as text only, and a strict Content Security Policy                                                        |
 | CSV formula injection                   | Exported cells starting with `= + - @`, tab or carriage return are neutralised                                     |
 | Cross-site requests                     | `SameSite=Lax` cookies and a required CSRF header on every change                                                  |
-| Session theft                           | `HttpOnly` and `Secure` cookies, hashed session IDs, 7-day expiry, rotation on sign-in, server-side sign-out      |
+| Session theft                           | `HttpOnly` and `Secure` cookies, hashed session IDs, 7-day expiry, rotation on sign-in, server-side sign-out. Revoking a read key ends the sessions opened with it; an admin taken off the team loses access on their next request |
 | Unauthorised dashboard access           | Full access only for the application owner, team and listed extras; OAuth state and PKCE                         |
 | SSRF through alert and report webhooks  | Only Discord webhook URLs are accepted, redirects are refused, and the URLs are stored encrypted |
 | Re-identification of hashes             | HMAC with secret salts that are destroyed after their period                                                       |
@@ -37,7 +37,7 @@ days. The full policy is in
 | Database exposure                       | PostgreSQL is not published by Docker Compose                                                                      |
 | The SDK harming the bot                 | Bounded queue, priority dropping, no I/O in listeners, timers that don't keep the process alive, chaos tests       |
 | Supply chain                            | Zero-dependency core, lockfile, Renovate, npm provenance, CodeQL, dependency review, OpenSSF Scorecard              |
-| Container escape                        | Non-root user, read-only root filesystem, no Linux capabilities                                                    |
+| Container escape                        | Non-root user that can't change the collector's files, read-only root filesystem, no Linux capabilities           |
 
 ## Rate limits
 
@@ -51,13 +51,14 @@ which the SDK honours.
 | `GET /v1/config`, `GET /v1/badge/*`         | 120   |
 | `POST /v1/privacy/erase`                    | 60    |
 | `/auth/discord`, `/auth/read-key`           | 20    |
-| `GET /v1/audit/export.csv`, `POST /v1/alerts/:id/test` | 10 |
+| `GET /v1/audit/export.csv`, `POST /v1/alerts/:id/test`, `POST /v1/reports/:id/send` | 10 |
 | Everything else, including unknown paths    | 1,200 |
 
 <Aside type="caution" title="Behind a reverse proxy">
-  Set `SHARDLENS_TRUST_PROXY=true` when Caddy, a load balancer or a platform router sits in front of the collector (the
-  bundled Docker Compose file does). Otherwise every visitor appears to come from the proxy's address and shares one
-  limit.
+  Set `SHARDLENS_TRUST_PROXY` to the number of proxies in front of the collector (`1` for Caddy, one load balancer or a
+  platform router; the bundled Docker Compose file sets it). Otherwise every visitor appears to come from the proxy's
+  address and shares one limit. Avoid `true` unless your proxy replaces `X-Forwarded-For`: a proxy that adds to it lets
+  a visitor choose the address their limits are counted under.
 </Aside>
 
 ## If you are breached

@@ -1,39 +1,11 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { Link, Outlet } from '@tanstack/react-router';
-import { type FormEvent, useEffect, useState } from 'react';
-import { ApiError, api, useMe, useMeta } from '../api';
-import { ErrorNote, Loading, PageHead } from '../components/ui';
+import { Link, Outlet, useRouter, useRouterState } from '@tanstack/react-router';
+import { type FormEvent, useEffect, useRef, useState } from 'react';
+import { ApiError, api, errorText, type Me, useMe, useMeta } from '../api';
+import { ErrorNote, Loading, Name, NotFoundPage, useDocumentTitle } from '../components/ui';
+import { type Theme, useTheme } from '../theme';
 
-type Theme = 'system' | 'light' | 'dark';
-const THEME_KEY = 'shardlens:theme';
-
-function applyTheme(theme: Theme) {
-  if (theme === 'system') document.documentElement.removeAttribute('data-theme');
-  else document.documentElement.setAttribute('data-theme', theme);
-}
-
-function useTheme(): [Theme, (t: Theme) => void] {
-  const [theme, setTheme] = useState<Theme>(() => {
-    try {
-      const t = localStorage.getItem(THEME_KEY);
-      return t === 'light' || t === 'dark' ? t : 'system';
-    } catch {
-      return 'system';
-    }
-  });
-  useEffect(() => applyTheme(theme), [theme]);
-  return [
-    theme,
-    (t) => {
-      setTheme(t);
-      try {
-        localStorage.setItem(THEME_KEY, t);
-      } catch {
-        // ignore
-      }
-    },
-  ];
-}
+const NEXT_THEME: Record<Theme, Theme> = { system: 'light', light: 'dark', dark: 'system' };
 
 const NAV = [
   { to: '/', label: 'Overview' },
@@ -57,52 +29,94 @@ const ADMIN_NAV = [
 
 export function NotFound() {
   return (
-    <>
-      <PageHead title="Page not found" description="There is nothing at this address." />
-      <p>
-        <Link to="/">Back to the overview</Link>
-      </p>
-    </>
+    <NotFoundPage title="Page not found" back={<Link to="/">← Back to the overview</Link>}>
+      There is nothing at this address.
+    </NotFoundPage>
   );
 }
 
 export function Root() {
   const me = useMe();
   if (me.isLoading) return <Loading />;
-  if (me.error && !(me.error instanceof ApiError)) return <ErrorNote error={me.error} />;
+  // Only an answer that there is no session means signed out: a collector that is down is not a sign-in problem.
+  if (!me.data && !(me.error instanceof ApiError && me.error.status === 401)) {
+    return (
+      <div className="login">
+        <main className="panel">
+          <ErrorNote error={me.error} retry={() => void me.refetch()} />
+        </main>
+      </div>
+    );
+  }
   if (!me.data?.authenticated) return <Login discordLogin={me.data?.discordLogin ?? false} />;
   return <Shell demo={me.data.method === 'demo'} />;
+}
+
+/**
+ * After navigating, focus the new page's heading, so screen readers announce it and Tab starts from the content.
+ * The resolved location, not the pending one: that changes while the old page is still shown, and a heading focused
+ * then is removed a moment later, leaving the focus on the body.
+ */
+function useFocusOnNavigate() {
+  const pathname = useRouterState({ select: (state) => state.resolvedLocation?.pathname });
+  const previous = useRef(pathname);
+  useEffect(() => {
+    if (previous.current === pathname) return;
+    const first = previous.current === undefined;
+    previous.current = pathname;
+    // The first page keeps the browser's own starting point.
+    if (first) return;
+    const target = document.querySelector<HTMLElement>('#main h1') ?? document.getElementById('main');
+    if (!target) return;
+    target.tabIndex = -1;
+    target.focus();
+  }, [pathname]);
 }
 
 function Shell(props: { demo: boolean }) {
   const meta = useMeta();
   const [theme, setTheme] = useTheme();
   const client = useQueryClient();
+  const [signOutError, setSignOutError] = useState('');
+  useFocusOnNavigate();
   const logout = async () => {
-    await api('/auth/logout', { method: 'POST', body: {} }).catch(() => undefined);
-    await client.invalidateQueries();
+    setSignOutError('');
+    try {
+      await api('/auth/logout', { method: 'POST', body: {} });
+    } catch (error) {
+      // 401: the session had already ended, which is what signing out wanted.
+      if (!(error instanceof ApiError && error.status === 401)) {
+        setSignOutError(`Couldn't sign out: ${errorText(error)}`);
+        return;
+      }
+    }
+    // Straight to the sign-in page, which drops the cached answers. Asking the collector again for every query on
+    // this page would only collect a 401 for each.
+    client.setQueryData<Me>(['me'], (me) => me && { ...me, authenticated: false, method: null, userId: null });
   };
-  const next: Record<Theme, Theme> = { system: 'light', light: 'dark', dark: 'system' };
   return (
     <div className="shell">
+      <a className="skip-link" href="#main">
+        Skip to content
+      </a>
       <nav className="nav" aria-label="Main">
         <div className="brand">
           <img src="/favicon.svg" alt="" />
-          <span>{meta.data?.name ?? 'Shardlens'}</span>
+          <Name>{meta.data?.name ?? 'Shardlens'}</Name>
         </div>
         {NAV.map((item) => (
           <Link key={item.to} to={item.to} activeOptions={{ exact: item.to === '/' }}>
             {item.label}
           </Link>
         ))}
-        <hr style={{ border: 0, borderTop: '1px solid var(--border)', width: '100%', margin: '8px 0' }} />
+        <hr />
         {ADMIN_NAV.filter((item) => !item.auditOnly || meta.data?.mode === 'audit').map((item) => (
           <Link key={item.to} to={item.to}>
             {item.label}
           </Link>
         ))}
         <div className="spacer" />
-        <button type="button" className="ghost" onClick={() => setTheme(next[theme])}>
+        <button type="button" className="ghost" onClick={() => setTheme(NEXT_THEME[theme])}>
           Theme: {theme}
         </button>
         {props.demo ? null : (
@@ -111,7 +125,12 @@ function Shell(props: { demo: boolean }) {
           </button>
         )}
       </nav>
-      <main className="main" id="main">
+      <main className="main" id="main" tabIndex={-1}>
+        {signOutError ? (
+          <p className="notice" role="alert">
+            {signOutError}
+          </p>
+        ) : null}
         {props.demo ? (
           <div className="notice" role="note">
             <strong>Public demo.</strong> Every number here is fictional seeded data. Settings, keys and alerts need a
@@ -132,49 +151,69 @@ function Shell(props: { demo: boolean }) {
 
 const LOGIN_ERRORS: Record<string, string> = {
   not_a_team_member: 'Only the app owner and its team members can open this dashboard.',
+  bot_not_reported:
+    'The bot has not connected to Shardlens yet, so its owner and team are not known. Start the bot, or sign in with a read key.',
   invalid_state: 'The sign-in link expired. Please try again.',
   discord_error: 'Discord sign-in failed. Please try again.',
 };
 
+/** The message for an `?error=` code from the sign-in redirect. Only known codes: the URL is anyone's to write. */
+export function loginError(code: string | null): string {
+  if (!code) return '';
+  return Object.hasOwn(LOGIN_ERRORS, code) ? (LOGIN_ERRORS[code] as string) : 'Sign-in failed.';
+}
+
 function Login(props: { discordLogin: boolean }) {
   const client = useQueryClient();
+  const router = useRouter();
+  useDocumentTitle('Sign in');
+  // Signed out, or the session ended: nothing from the last session stays in memory for the next one to see.
+  useEffect(() => {
+    client.removeQueries({ predicate: (query) => query.queryKey[0] !== 'me' });
+  }, [client]);
   const [key, setKey] = useState('');
-  const [error, setError] = useState<string>(() => {
-    const code = new URLSearchParams(window.location.search).get('error');
-    return code ? (LOGIN_ERRORS[code] ?? 'Sign-in failed.') : '';
-  });
+  const [error, setError] = useState<string>(() =>
+    loginError(new URLSearchParams(window.location.search).get('error')),
+  );
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
     try {
       await api('/auth/read-key', { body: { key } });
-      window.history.replaceState(null, '', '/');
+      // Stay on the page that was asked for (a deep link), without the sign-in error in its address.
+      const here = new URL(window.location.href);
+      here.searchParams.delete('error');
+      router.history.replace(here.pathname === '/login' ? '/' : `${here.pathname}${here.search}${here.hash}`);
       await client.invalidateQueries();
     } catch (err) {
-      setError(err instanceof ApiError && err.status === 401 ? 'That read key was not accepted.' : 'Sign-in failed.');
+      setError(
+        err instanceof ApiError && err.status === 401
+          ? 'That read key was not accepted.'
+          : err instanceof ApiError && err.status === 429
+            ? 'Too many sign-in attempts. Wait a minute and try again.'
+            : 'Sign-in failed.',
+      );
     }
   };
   return (
     <div className="login">
       <main className="panel">
-        <div className="brand" style={{ padding: 0 }}>
+        <div className="brand">
           <img src="/favicon.svg" alt="" />
           <h1>Shardlens</h1>
         </div>
-        <p className="muted" style={{ margin: 0 }}>
-          Sign in to see your bot's analytics.
-        </p>
+        <p className="muted">Sign in to see your bot's analytics.</p>
         {error ? (
-          <p role="alert" className="badge bad" style={{ justifyContent: 'flex-start', borderRadius: 6, padding: 8 }}>
+          <p role="alert" className="form-error">
             {error}
           </p>
         ) : null}
         {props.discordLogin ? (
-          <a className="button primary" href="/auth/discord" style={{ justifyContent: 'center' }}>
+          <a className="button primary" href="/auth/discord">
             Sign in with Discord
           </a>
         ) : null}
-        <form onSubmit={(e) => void submit(e)} style={{ display: 'grid', gap: 8 }}>
+        <form onSubmit={(e) => void submit(e)}>
           <label htmlFor="read-key">{props.discordLogin ? 'Or use a read key' : 'Read key'}</label>
           <input
             id="read-key"

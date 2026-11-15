@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import type { Db, Tx } from '../db.js';
+import { type Db, type Tx, transaction } from '../db.js';
 import {
   nextPeriodLabel,
   periodBounds,
@@ -11,7 +11,7 @@ import {
 } from './periods.js';
 
 /** Raw tables partitioned by day, and how many days of partitions to keep by default. */
-export const DAILY_TABLES = [
+const DAILY_TABLES = [
   'interactions',
   'interaction_errors',
   'rest_calls',
@@ -46,8 +46,18 @@ function day(ms: number): string {
 }
 
 /**
+ * Attaching or dropping a partition locks its parent table against everything, ingest included, and has to wait for
+ * the queries already reading it. The scheduled jobs give up after this long and try again a minute later, instead of
+ * holding ingest up behind a long dashboard query.
+ */
+const JOB_LOCK_TIMEOUT = '2s';
+/** PostgreSQL's `lock_not_available`, raised when `lock_timeout` runs out. */
+const LOCK_NOT_AVAILABLE = '55P03';
+
+/**
  * Creates daily partitions for each table from the start of its retention window to 7 days ahead, so late events
- * within retention always have a partition and nothing is recreated only to be dropped again. Idempotent.
+ * within retention always have a partition and nothing is recreated only to be dropped again. Idempotent, and safe
+ * for collectors starting together (the SQL function takes a lock).
  */
 export async function ensurePartitions(
   db: Db | Tx,
@@ -73,13 +83,29 @@ export async function ensurePartitions(
   return created;
 }
 
-/** Drops daily partitions older than each table's retention. Returns the dropped partition names. */
+/** The scheduled job's `ensurePartitions`: throws rather than wait more than `JOB_LOCK_TIMEOUT` for a busy table. */
+export function ensurePartitionsPatiently(
+  db: Db,
+  now: Date,
+  retention: { rawDays: number; auditDays: number },
+): Promise<number> {
+  return transaction(db, async (tx) => {
+    await tx.query(`SET LOCAL lock_timeout = '${JOB_LOCK_TIMEOUT}'`);
+    return ensurePartitions(tx, now, retention);
+  });
+}
+
+/**
+ * Drops daily partitions older than each table's retention. A partition whose table stays locked for
+ * `JOB_LOCK_TIMEOUT` is left for the next run and listed in `busy`.
+ */
 export async function dropExpiredPartitions(
   db: Db,
   now: Date,
   retention: { rawDays: number; auditDays: number },
-): Promise<string[]> {
+): Promise<{ dropped: string[]; busy: string[] }> {
   const dropped: string[] = [];
+  const busy: string[] = [];
   for (const table of DAILY_TABLES) {
     const setting = RETENTION_DAYS[table];
     const days = setting === 'raw' ? retention.rawDays : setting === 'audit' ? retention.auditDays : setting;
@@ -94,24 +120,42 @@ export async function dropExpiredPartitions(
     for (const { name } of parts.rows) {
       const suffix = name.slice(table.length + 1);
       if (!/^\d{8}$/.test(suffix) || suffix >= cutoff) continue;
-      await db.query(`DROP TABLE IF EXISTS "${name.replace(/"/g, '')}"`);
-      dropped.push(name);
+      try {
+        await transaction(db, async (tx) => {
+          await tx.query(`SET LOCAL lock_timeout = '${JOB_LOCK_TIMEOUT}'`);
+          await tx.query(`DROP TABLE IF EXISTS "${name.replace(/"/g, '')}"`);
+        });
+        dropped.push(name);
+      } catch (error) {
+        if ((error as { code?: unknown } | null)?.code !== LOCK_NOT_AVAILABLE) throw error;
+        busy.push(name);
+      }
     }
   }
-  return dropped;
+  return { dropped, busy };
 }
 
-const knownUniquesPartitions = new Set<string>();
+/** Partitions known to exist, per database handle: one process can use several databases (embedded mode, tests). */
+const knownUniquesPartitions = new WeakMap<Db | Tx, Set<string>>();
 
 /** Creates the `uniques` LIST partition for a salt period if needed. */
 export async function ensureUniquesPartition(db: Db | Tx, label: string): Promise<void> {
-  if (knownUniquesPartitions.has(label)) return;
+  const known = knownUniquesPartitions.get(db) ?? new Set<string>();
+  if (known.has(label)) return;
   const ident = `uniques_${periodIdent(label)}`;
-  await db.query(`CREATE TABLE IF NOT EXISTS "${ident}" PARTITION OF uniques FOR VALUES IN ('${label}')`);
-  knownUniquesPartitions.add(label);
+  // One statement holding a lock for its transaction: two requests creating the same partition at once (every shard
+  // asking for its config when a period starts) would otherwise both try, and one would fail.
+  await db.query(
+    `DO $$ BEGIN
+       PERFORM pg_advisory_xact_lock(7241865327);
+       CREATE TABLE IF NOT EXISTS "${ident}" PARTITION OF uniques FOR VALUES IN ('${label}');
+     END $$`,
+  );
+  known.add(label);
+  knownUniquesPartitions.set(db, known);
 }
 
-export interface SaltRow {
+interface SaltRow {
   period: string;
   secret: Buffer;
 }
@@ -129,8 +173,16 @@ export async function ensureSalt(db: Db | Tx, appId: string, label: string): Pro
 }
 
 /**
- * Salts the SDK should hold right now: the current period (created on demand) and the previous one while it is still
- * inside its grace window. Destroyed salts are never returned. Current period first.
+ * How long before a period ends its successor's salt is handed out too. At least 5 minutes: the SDK asks for its
+ * settings again 1 to 4 minutes before a salt boundary and counts on finding the next salt in the answer.
+ */
+export const UPCOMING_SALT_MS = 5 * 60_000;
+
+/**
+ * Salts the SDK should hold right now: the current period (created on demand), the previous one while it is still
+ * inside its grace window and, in the last `UPCOMING_SALT_MS` of the period, the next one, so a bot whose clock runs
+ * slightly ahead already has the salt for the period it thinks has begun. Destroyed salts are never returned. Current
+ * period first, the next one last (an SDK that keeps only two drops it).
  */
 export async function activeSalts(
   db: Db | Tx,
@@ -141,12 +193,20 @@ export async function activeSalts(
   const current = periodLabel(period, now);
   await ensureSalt(db, appId, current);
   const previous = previousPeriodLabel(period, now);
+  const wanted = [current, previous];
+  const end = periodBounds(current)?.end;
+  const upcoming = nextPeriodLabel(period, now);
+  if (end !== undefined && end - now.getTime() <= UPCOMING_SALT_MS) {
+    await ensureSalt(db, appId, upcoming);
+    wanted.push(upcoming);
+  }
   const res = await db.query<{ period: string; secret: Buffer }>(
     `SELECT period, secret FROM salts
       WHERE app_id = $1 AND period = ANY($2::text[]) AND secret IS NOT NULL AND destroy_after > $3`,
-    [appId, [current, previous], now],
+    [appId, wanted, now],
   );
-  return res.rows.sort((a, b) => (a.period === current ? -1 : b.period === current ? 1 : 0));
+  const rank = (label: string) => (label === current ? 0 : label === upcoming ? 2 : 1);
+  return res.rows.sort((a, b) => rank(a.period) - rank(b.period));
 }
 
 /** Labels whose salt is still alive, so ingest can refuse hashes from destroyed or unknown periods. */
@@ -193,7 +253,7 @@ export async function destroyExpiredSalts(
     const stillLive = await db.query('SELECT 1 FROM salts WHERE period = $1 AND secret IS NOT NULL LIMIT 1', [period]);
     if (stillLive.rowCount === 0) {
       await db.query(`DROP TABLE IF EXISTS "uniques_${periodIdent(period)}"`);
-      knownUniquesPartitions.delete(period);
+      knownUniquesPartitions.get(db)?.delete(period);
     }
     destroyed.push(`${app_id}:${period}`);
   }

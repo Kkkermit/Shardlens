@@ -7,15 +7,22 @@ sidebar:
 
 import MetricsTable from '../../../components/MetricsTable.astro';
 
-This page is **generated from the metric registry** in `@shardlens/schema`, the same list the collector's rollups use.
+This page is **generated from the metric registry** in `@shardlens/schema`, the list the collector's rollups and gauges
+follow. **From** names the [wire event types](../data-collected/) each metric is computed from; `webhook` means
+[Discord webhook events](../../guides/webhook-events/) the collector receives itself.
 
-- **Counters** are summed into minute, hour and day rollups.
+- **Counters** are summed into minute, hour and day rollups, kept for 14 days, 13 months and for good. Two are stored
+  as single events instead, as their descriptions say.
 - **Histograms** use 40 fixed buckets on a logarithmic scale from 1 ms to 60 s, so percentiles can be merged across
   shards and time ranges. A percentile is reported as the upper edge of the bucket it falls in: up to a third above
   the true value, never below it. Anything slower than 60 s lands in the last bucket and reads as about 80 s.
-- **Gauges** are reported by every shard and process. Totals (`shard.guilds`, `memory.*`, `cache.*`) are added up
-  across them; latencies (`shard.ping_ms`, `eventloop.p99_ms`) are averaged, with the worst kept as the maximum.
+- **Gauges** are samples, kept for 30 days. Process gauges come from every shard and process every 30 seconds: totals
+  (`shard.guilds`, `memory.*`, `cache.*`) are added up across them, and latencies (`shard.ping_ms`,
+  `eventloop.p99_ms`) are averaged, with the worst kept as the maximum. The `app.*` and `identify.remaining` gauges come
+  from the process that runs shard 0, every 30 minutes.
 
 <MetricsTable />
 
-Custom events from `track()` are counted as `custom.<name>`, and Discord webhook events as `webhook.<type>`.
+Names ending in `.<name>` or `.<type>` are patterns: custom events from `track()` are counted as `custom.<name>`, and
+Discord webhook events as `webhook.<type>`. The [HTTP API reference](../../reference/http-api/) lists the ones its
+query route serves.

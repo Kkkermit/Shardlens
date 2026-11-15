@@ -30,7 +30,8 @@ export const DEFAULT_DURATION_BUCKETS: readonly number[] = [0.05, 0.1, 0.25, 0.5
 export const EXPORTER_METRICS = {
   interactions: {
     kind: 'counter',
-    description: 'Interactions handled (commands, context menus, components, modals, autocomplete), by outcome.',
+    description:
+      'Interactions handled (commands, context menus, components, modals, autocomplete) and message (prefix) commands, by outcome.',
     unit: '1',
     labels: ['kind', 'command', 'outcome'],
   },
@@ -42,7 +43,7 @@ export const EXPORTER_METRICS = {
   },
   interaction_handler: {
     kind: 'histogram',
-    description: 'Time spent in a handler wrapped with lens.wrap().',
+    description: 'Time spent in a handler wrapped with lens.wrap(), or reported for a message command.',
     unit: 'seconds',
     labels: ['kind', 'command'],
   },
@@ -66,7 +67,7 @@ export const EXPORTER_METRICS = {
   },
   ratelimits: {
     kind: 'counter',
-    description: 'Rate limits hit, by scope (user, global or shared).',
+    description: 'Requests held back for a rate limit, by scope (user, global or shared).',
     unit: '1',
     labels: ['scope'],
   },
@@ -129,6 +130,9 @@ export interface MetricSink {
 
 const str = (v: unknown, fallback = ''): string => (typeof v === 'string' ? v : fallback);
 const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+/** The objects in `v`, if it is an array: a malformed row or gauge is skipped, not thrown on. */
+const objects = (v: unknown): Record<string, unknown>[] =>
+  Array.isArray(v) ? v.filter((x): x is Record<string, unknown> => typeof x === 'object' && x !== null) : [];
 
 const GAUGES: Record<string, [ExporterMetricName, (shardOrNothing: string) => MetricLabels, number]> = {
   'shard.ping_ms': ['shard_ping', (shard) => ({ shard }), 1 / 1000],
@@ -159,11 +163,22 @@ export function translateEvent(event: WireEvent, sink: MetricSink): void {
       if (handler !== undefined) sink.record('interaction_handler', { kind, command }, handler / 1000);
       return;
     }
+    case 'message_command': {
+      const command = str(e.command);
+      const labels = { kind: 'message_command', command };
+      sink.add('interactions', { ...labels, outcome: str(e.outcome, 'unknown') }, weight);
+      if (e.outcome === 'error' && e.errorClass !== undefined) {
+        sink.add('interaction_errors', { command, error_class: str(e.errorClass, 'Error') }, weight);
+      }
+      const handler = num(e.handlerMs);
+      if (handler !== undefined) sink.record('interaction_handler', labels, handler / 1000);
+      return;
+    }
     case 'interaction_error':
       sink.add('interaction_errors', { command: str(e.command), error_class: str(e.errorClass, 'Error') }, weight);
       return;
     case 'rest_window': {
-      for (const row of Array.isArray(e.rows) ? (e.rows as Record<string, unknown>[]) : []) {
+      for (const row of objects(e.rows)) {
         const labels = { method: str(row.method), route: str(row.route), status: String(num(row.status) ?? 0) };
         sink.add('rest_requests', labels, num(row.count) ?? 0);
       }
@@ -200,7 +215,7 @@ export function translateEvent(event: WireEvent, sink: MetricSink): void {
       sink.add('entitlements', { action: str(e.action, 'unknown') }, 1);
       return;
     case 'gauge_window':
-      for (const g of Array.isArray(e.gauges) ? (e.gauges as Record<string, unknown>[]) : []) {
+      for (const g of objects(e.gauges)) {
         const spec = GAUGES[str(g.name)];
         const value = num(g.value);
         if (!spec || value === undefined) continue;

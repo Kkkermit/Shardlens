@@ -18,7 +18,22 @@ test('audit mode: switch on, view the activity log, export with confirmation, sw
   await page.getByRole('link', { name: 'Activity' }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Activity' })).toBeVisible();
   await expect(page.getByRole('status').filter({ hasText: 'Loading' })).toHaveCount(0);
+  await page.getByRole('group', { name: 'Top users over' }).getByRole('button', { name: '7 days' }).click();
+  await expect(page.getByRole('button', { name: '7 days' })).toHaveAttribute('aria-pressed', 'true');
   await expectAccessible(page);
+
+  // An ID the collector would refuse is caught in the form, not shown as a failed load.
+  await page.getByLabel('Server ID').fill('not-an-id');
+  await page.getByRole('button', { name: 'Apply' }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'A server ID is 17 to 19 digits.' })).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await page.getByLabel('Server ID').fill('');
+
+  // On a phone the log has the full width, with the top users under it instead of beside it.
+  await page.setViewportSize({ width: 375, height: 812 });
+  const logPanel = await page.getByRole('region', { name: 'Activity log' }).boundingBox();
+  expect(logPanel?.width).toBeGreaterThan(300);
+  await page.setViewportSize({ width: 1280, height: 720 });
 
   const unconfirmed = await page.request.get('/v1/audit/export.csv', { headers: { 'x-shardlens-csrf': '1' } });
   expect(unconfirmed.status()).toBe(428);

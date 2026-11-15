@@ -48,6 +48,26 @@ describe('translateEvent', () => {
     expect(ok.calls.map((c) => c[1])).not.toContain('interaction_errors');
   });
 
+  it('counts message (prefix) commands with interactions, without a response time', () => {
+    const { sink, calls } = capture();
+    translateEvent(
+      ev('message_command', {
+        command: 'ban',
+        outcome: 'error',
+        errorClass: 'TypeError',
+        handlerMs: 40,
+        user: '',
+        guild: '112233445566778899',
+      }),
+      sink,
+    );
+    expect(calls).toEqual([
+      ['add', 'interactions', { kind: 'message_command', command: 'ban', outcome: 'error' }, 1],
+      ['add', 'interaction_errors', { command: 'ban', error_class: 'TypeError' }, 1],
+      ['record', 'interaction_handler', { kind: 'message_command', command: 'ban' }, 0.04],
+    ]);
+  });
+
   it('labels components with the command that created their message', () => {
     const { sink, calls } = capture();
     translateEvent(ev('interaction', { kind: 'button', sourceCommand: 'poll', outcome: 'no_response' }), sink);
@@ -86,6 +106,19 @@ describe('translateEvent', () => {
     expect(calls).toEqual([
       ['set', 'shard_ping', { shard: '3' }, 0.042],
       ['set', 'memory', { type: 'rss' }, 1000],
+    ]);
+  });
+
+  it('skips rows and gauges that are not objects instead of throwing', () => {
+    const { sink, calls } = capture();
+    const rows = [null, 5, 'x', { method: 'GET', route: '/gateway', status: 200, count: 1 }];
+    expect(() => translateEvent(ev('rest_window', { rows, invalid: null }), sink)).not.toThrow();
+    expect(() =>
+      translateEvent(ev('gauge_window', { gauges: [null, { name: 'shard.guilds', value: 9 }] }), sink),
+    ).not.toThrow();
+    expect(calls).toEqual([
+      ['add', 'rest_requests', { method: 'GET', route: '/gateway', status: '200' }, 1],
+      ['set', 'guilds', { shard: '0' }, 9],
     ]);
   });
 

@@ -1,8 +1,9 @@
-import { Snowflake } from '@shardlens/schema';
+import { MAX_EVENT_WEIGHT, Snowflake } from '@shardlens/schema';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { isDiscordWebhookUrl, maskWebhook, postToDiscordWebhook } from '../discord-webhook.js';
-import { TimeZone } from '../query/spec.js';
+import { isDiscordWebhookUrl, maskStoredWebhook, postToDiscordWebhook } from '../discord-webhook.js';
+import { UNREADABLE_WEBHOOK } from '../jobs/alerts.js';
+import { TimeZoneName } from '../query/spec.js';
 import { auditCipher } from '../security/crypto.js';
 import { newApiKey } from '../security/keys.js';
 import type { Deps } from '../server.js';
@@ -10,17 +11,26 @@ import { adminAudit, requireAdmin } from './guard.js';
 
 const BADGES = ['servers', 'users-monthly', 'commands-daily'] as const;
 
+/** A kept event carries the weight 1 / rate, and the wire refuses weights over `MAX_EVENT_WEIGHT`. */
+const SampleRate = z
+  .number()
+  .min(1 / MAX_EVENT_WEIGHT)
+  .max(1);
+
 export const SettingsPatch = z
   .object({
-    timezone: TimeZone.optional(),
+    // Not `TimeZone.optional()`: its default would reset the zone to UTC on every save that leaves it out.
+    timezone: TimeZoneName.optional(),
     rawRetentionDays: z.number().int().min(7).max(90).optional(),
     /** Hard maximum 90 days: larger values are rejected, not clamped. */
     auditRetentionDays: z.number().int().min(1).max(90).optional(),
     mode: z.enum(['privacy', 'audit']).optional(),
     saltPeriod: z.enum(['day', 'week', 'month']).optional(),
+    // The Servers filter compares it with each server's bits as a PostgreSQL bigint.
     requiredPermissions: z
       .string()
-      .regex(/^\d{1,20}$/)
+      .regex(/^\d{1,19}$/)
+      .refine((bits) => BigInt(bits) < 2n ** 63n, 'over 63 bits')
       .nullable()
       .optional(),
     skuPrices: z
@@ -29,7 +39,7 @@ export const SettingsPatch = z
         z.object({ amount: z.number().nonnegative().max(1_000_000), currency: z.string().regex(/^[A-Z]{3}$/) }),
       )
       .optional(),
-    sampling: z.record(z.string().max(32), z.number().gt(0).max(1)).optional(),
+    sampling: z.record(z.string().max(32), SampleRate).optional(),
     badges: z.array(z.enum(BADGES)).max(BADGES.length).optional(),
   })
   .strict();
@@ -57,6 +67,12 @@ export const AlertBody = z
       .refine(isDiscordWebhookUrl, 'must be a Discord webhook URL (https://discord.com/api/webhooks/…)'),
   })
   .strict();
+
+/** The path parameter of a key, an alert or a report. */
+export const IdParam = z.object({ id: z.string().regex(/^\d{1,18}$/) });
+
+/** Turns an alert or a report on or off. */
+export const EnabledBody = z.object({ enabled: z.boolean() }).strict();
 
 const SETTING_KEYS: Record<string, string> = {
   auditRetentionDays: 'audit_retention_days',
@@ -110,6 +126,15 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
       return reply
         .code(400)
         .send({ error: 'audit_key_missing', message: 'Set SHARDLENS_AUDIT_KEY on the collector first.' });
+    }
+    // Every chart query converts with this zone, so PostgreSQL must know it too, not just this runtime.
+    if (patch.timezone !== undefined) {
+      const known = await deps.db.query('SELECT 1 FROM pg_timezone_names WHERE name = $1', [patch.timezone]);
+      if (!known.rowCount) {
+        return reply
+          .code(400)
+          .send({ error: 'invalid_request', issues: [{ path: ['timezone'], message: 'unknown time zone' }] });
+      }
     }
     const columns: Record<string, unknown> = {};
     if (patch.timezone !== undefined) columns.timezone = patch.timezone;
@@ -174,13 +199,15 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
   app.delete('/v1/keys/:id', async (req, reply) => {
     const admin = await requireAdmin(deps, req, reply, { mutate: true });
     if (!admin) return;
-    const { id } = z.object({ id: z.string().regex(/^\d{1,18}$/) }).parse(req.params);
+    const { id } = IdParam.parse(req.params);
     const res = await deps.db.query(
       'UPDATE api_keys SET revoked_at = now() WHERE app_id = $1 AND id = $2 AND revoked_at IS NULL',
       [admin.appId, id],
     );
     deps.keys.clear();
     if (!res.rowCount) return reply.code(404).send({ error: 'not_found' });
+    // "Anything using it stops working immediately": that includes dashboards signed in with it.
+    await deps.db.query('DELETE FROM sessions WHERE key_id = $1', [id]);
     await adminAudit(deps, admin.appId, admin.userId, 'key_revoke', { id });
     return { ok: true };
   });
@@ -209,25 +236,17 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
       [admin.appId],
     );
     return {
-      rules: rules.rows.map((r) => {
-        let webhook = '•••';
-        try {
-          webhook = maskWebhook(settingsCipher.decrypt(r.webhook_enc));
-        } catch {
-          webhook = '•••';
-        }
-        return {
-          id: r.id,
-          name: r.name,
-          metric: r.metric,
-          comparator: r.comparator,
-          threshold: r.threshold,
-          windowS: r.window_s,
-          webhook,
-          enabled: r.enabled,
-          lastFired: r.last_fired,
-        };
-      }),
+      rules: rules.rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        metric: r.metric,
+        comparator: r.comparator,
+        threshold: r.threshold,
+        windowS: r.window_s,
+        webhook: maskStoredWebhook(settingsCipher, r.webhook_enc),
+        enabled: r.enabled,
+        lastFired: r.last_fired,
+      })),
       history: history.rows,
     };
   });
@@ -256,11 +275,8 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
   app.patch('/v1/alerts/:id', async (req, reply) => {
     const admin = await requireAdmin(deps, req, reply, { mutate: true });
     if (!admin) return;
-    const { id } = z.object({ id: z.string().regex(/^\d{1,18}$/) }).parse(req.params);
-    const { enabled } = z
-      .object({ enabled: z.boolean() })
-      .strict()
-      .parse(req.body ?? {});
+    const { id } = IdParam.parse(req.params);
+    const { enabled } = EnabledBody.parse(req.body ?? {});
     const res = await deps.db.query('UPDATE alert_rules SET enabled = $3 WHERE app_id = $1 AND id = $2', [
       admin.appId,
       id,
@@ -273,7 +289,7 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
   app.delete('/v1/alerts/:id', async (req, reply) => {
     const admin = await requireAdmin(deps, req, reply, { mutate: true });
     if (!admin) return;
-    const { id } = z.object({ id: z.string().regex(/^\d{1,18}$/) }).parse(req.params);
+    const { id } = IdParam.parse(req.params);
     const res = await deps.db.query('DELETE FROM alert_rules WHERE app_id = $1 AND id = $2', [admin.appId, id]);
     if (!res.rowCount) return reply.code(404).send({ error: 'not_found' });
     await adminAudit(deps, admin.appId, admin.userId, 'alert_delete', { id });
@@ -286,14 +302,20 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
     async (req, reply) => {
       const admin = await requireAdmin(deps, req, reply, { mutate: true });
       if (!admin) return;
-      const { id } = z.object({ id: z.string().regex(/^\d{1,18}$/) }).parse(req.params);
+      const { id } = IdParam.parse(req.params);
       const rule = await deps.db.query<{ name: string; webhook_enc: Buffer }>(
         'SELECT name, webhook_enc FROM alert_rules WHERE app_id = $1 AND id = $2',
         [admin.appId, id],
       );
       const row = rule.rows[0];
       if (!row) return reply.code(404).send({ error: 'not_found' });
-      const result = await postToDiscordWebhook(settingsCipher.decrypt(row.webhook_enc), {
+      let url: string;
+      try {
+        url = settingsCipher.decrypt(row.webhook_enc);
+      } catch {
+        return reply.code(502).send({ error: 'webhook_failed', message: UNREADABLE_WEBHOOK });
+      }
+      const result = await postToDiscordWebhook(url, {
         title: `Test: ${row.name}`,
         body: 'This is a test message from Shardlens. Alerts for this rule will look like this.',
         link: new URL('/reliability', deps.config.publicUrl).toString(),

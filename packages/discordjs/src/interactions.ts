@@ -1,7 +1,16 @@
-import { avatarHash, compact, normaliseCustomId, redactSecrets, type ShardlensClient, uuidv7 } from '@shardlens/core';
+import {
+  compact,
+  cutText,
+  MAX_CUSTOM_ID_LENGTH,
+  normaliseCustomId,
+  redactSecrets,
+  type ShardlensClient,
+  uuidv7,
+} from '@shardlens/core';
 import type { EventInput } from '@shardlens/schema';
-import { ApplicationIntegrationType, type Interaction, PermissionFlagsBits } from 'discord.js';
+import type { Interaction } from 'discord.js';
 import type { ShardlensOptions } from './options.js';
+import { auditActor, capturedValues, memberTier } from './run-details.js';
 import { LruMap, shardForGuild } from './util.js';
 
 type InteractionInput = Extract<EventInput, { type: 'interaction' }>;
@@ -23,7 +32,7 @@ interface ResponseInfo {
   modalCustomId?: string;
 }
 
-type HandlerState = { state: 'running'; start: number } | { state: 'done'; ms: number; error?: HandlerError };
+type HandlerState = { state: 'running'; start: number } | { state: 'done'; ms?: number; error?: HandlerError };
 
 interface HandlerError {
   errorClass: string;
@@ -41,25 +50,34 @@ interface Pending {
 interface Emitted {
   eventId: string;
   command?: string;
-  handlerRunning: boolean;
 }
 
-export interface TrackerContext {
+interface TrackerContext {
   client: ShardlensClient<EventInput>;
   options: ShardlensOptions;
   count: (name: string, error?: unknown) => void;
   shardCount: () => number;
+  /** Users whose interactions are never recorded. Owned by the caller, which also applies it to other events. */
+  optedOut: ReadonlySet<string>;
 }
 
-type FlatOption = { name: string; value?: unknown };
+type FlatOption = { name: string; value?: unknown; type?: number };
+
+/** A custom ID as it is recorded: secrets redacted, then the bot's normaliser (or the default one), then capped. */
+function recordedCustomId(customId: string, options: ShardlensOptions): string {
+  const normalise = options.normaliseCustomId ?? normaliseCustomId;
+  return cutText(normalise(redactSecrets(customId)), MAX_CUSTOM_ID_LENGTH);
+}
 
 function flattenOptions(
-  data: readonly { name: string; value?: unknown; options?: readonly unknown[] }[],
+  data: readonly { name: string; value?: unknown; type?: unknown; options?: readonly unknown[] }[],
 ): FlatOption[] {
   const out: FlatOption[] = [];
   for (const o of data) {
     if (o.options && o.options.length > 0) out.push(...flattenOptions(o.options as typeof data));
-    else if (o.value !== undefined) out.push({ name: o.name, value: o.value });
+    else if (o.value !== undefined) {
+      out.push({ name: o.name, value: o.value, ...(typeof o.type === 'number' ? { type: o.type } : {}) });
+    }
   }
   return out;
 }
@@ -69,19 +87,12 @@ function describeInteraction(
   options: ShardlensOptions,
   shardCount: number,
 ): InteractionBase | undefined {
+  // Keyed by `ApplicationIntegrationType`: 0 for a server install, 1 for a user install. Not the enum itself: some
+  // discord.js 14 releases don't export it, and importing a missing name stops an ES module from loading.
   const owners = (i.authorizingIntegrationOwners ?? {}) as unknown as Record<string, unknown>;
-  const guildInstalled = owners[String(ApplicationIntegrationType.GuildInstall)] !== undefined;
-  const userInstalled = owners[String(ApplicationIntegrationType.UserInstall)] !== undefined;
-  const normalise = options.normaliseCustomId ?? normaliseCustomId;
-  const memberTier = !i.inGuild()
-    ? 'dm'
-    : i.memberPermissions?.has(PermissionFlagsBits.Administrator)
-      ? 'admin'
-      : i.memberPermissions?.has(PermissionFlagsBits.ManageGuild)
-        ? 'manager'
-        : 'member';
+  const guildInstalled = owners[0] !== undefined;
+  const userInstalled = owners[1] !== undefined;
   const context = i.context;
-  const profile = options.auditIncludeProfile !== false;
   const common = compact({
     id: uuidv7(i.createdTimestamp),
     ts: i.createdTimestamp,
@@ -93,29 +104,15 @@ function describeInteraction(
     channelType: i.channel?.type,
     locale: String(i.locale).slice(0, 10),
     guildLocale: i.guildLocale ? String(i.guildLocale).slice(0, 10) : undefined,
-    memberTier: memberTier as InteractionBase['memberTier'],
+    memberTier: memberTier(i.inGuild(), i.memberPermissions, 'member'),
     premium: (i.entitlements?.size ?? 0) > 0,
     options: [] as string[],
     shard: i.guild?.shardId ?? (i.guildId ? shardForGuild(i.guildId, shardCount) : 0),
-    actor:
-      options.mode === 'audit'
-        ? compact({
-            userId: i.user.id,
-            username: profile ? i.user.username.slice(0, 64) : undefined,
-            avatar: profile ? avatarHash(i.user.avatar) : undefined,
-          })
-        : undefined,
+    actor: auditActor(i.user, options),
   });
 
   if (i.isChatInputCommand()) {
     const leaves = flattenOptions(i.options.data);
-    const allow = new Set(options.captureOptionValues ?? []);
-    const values: Record<string, string | number | boolean> = {};
-    for (const o of leaves) {
-      if (!allow.has(o.name)) continue;
-      if (typeof o.value === 'string') values[o.name] = redactSecrets(o.value).slice(0, 100);
-      else if (typeof o.value === 'number' || typeof o.value === 'boolean') values[o.name] = o.value;
-    }
     return compact({
       ...common,
       kind: 'chat_input' as const,
@@ -125,7 +122,10 @@ function describeInteraction(
       commandId: i.commandId,
       commandScope: i.commandGuildId ? ('guild' as const) : ('global' as const),
       options: leaves.map((o) => o.name).slice(0, 25),
-      optionValues: Object.keys(values).length > 0 ? values : undefined,
+      optionValues: capturedValues(
+        leaves.map((o) => [o.name, o.value, o.type] as const),
+        options.captureOptionValues,
+      ),
     });
   }
   if (i.isUserContextMenuCommand() || i.isMessageContextMenuCommand()) {
@@ -137,7 +137,8 @@ function describeInteraction(
       commandScope: i.commandGuildId ? ('guild' as const) : ('global' as const),
     });
   }
-  if (i.isPrimaryEntryPointCommand()) {
+  // discord.js 14.18 and older don't have this check; without the guard, every component would fail here.
+  if (typeof i.isPrimaryEntryPointCommand === 'function' && i.isPrimaryEntryPointCommand()) {
     return compact({ ...common, kind: 'primary_entry_point' as const, command: i.commandName, commandId: i.commandId });
   }
   if (i.isAutocomplete()) {
@@ -159,7 +160,7 @@ function describeInteraction(
     return compact({
       ...common,
       kind: i.isButton() ? ('button' as const) : ('select' as const),
-      customId: normalise(redactSecrets(i.customId)).slice(0, 100),
+      customId: recordedCustomId(i.customId, options),
       componentType: i.componentType,
     });
   }
@@ -167,7 +168,7 @@ function describeInteraction(
     return compact({
       ...common,
       kind: 'modal_submit' as const,
-      customId: normalise(redactSecrets(i.customId)).slice(0, 100),
+      customId: recordedCustomId(i.customId, options),
     });
   }
   return undefined;
@@ -184,7 +185,6 @@ export class InteractionTracker {
   readonly #sourceCommand = new LruMap<string, string>(20_000);
   /** interaction ID → emitted event, for handler errors that arrive after the row was sent. */
   readonly #emitted = new LruMap<string, Emitted>(5_000);
-  readonly #optedOut = new Set<string>();
 
   constructor(ctx: TrackerContext) {
     this.#ctx = ctx;
@@ -194,9 +194,8 @@ export class InteractionTracker {
     return this.#pending.size;
   }
 
-  /** Stops recording a user, including the interaction they opted out with, if it has not been sent yet. */
-  optOut(userId: string): void {
-    this.#optedOut.add(userId);
+  /** Drops a user's interactions that have not been sent yet, such as the one they opted out with. */
+  dropPending(userId: string): void {
     for (const [id, p] of this.#pending) {
       if (p.userId !== userId) continue;
       clearTimeout(p.timer);
@@ -204,22 +203,9 @@ export class InteractionTracker {
     }
   }
 
-  #normaliseCustomId(customId: string): string {
-    const normalise = this.#ctx.options.normaliseCustomId ?? normaliseCustomId;
-    return normalise(redactSecrets(customId)).slice(0, 100);
-  }
-
-  optIn(userId: string): void {
-    this.#optedOut.delete(userId);
-  }
-
-  isOptedOut(userId: string): boolean {
-    return this.#optedOut.has(userId);
-  }
-
   /** Starts tracking an interaction. Safe to call more than once (the listener and `wrap()` both call it). */
   observe(i: Interaction): void {
-    if (this.#pending.has(i.id) || this.#emitted.has(i.id) || this.#optedOut.has(i.user.id)) return;
+    if (this.#pending.has(i.id) || this.#emitted.has(i.id) || this.#ctx.optedOut.has(i.user.id)) return;
     const base = describeInteraction(i, this.#ctx.options, this.#ctx.shardCount());
     if (!base) return;
     if (base.command && base.kind !== 'autocomplete') this.#sourceCommand.set(i.id, base.command);
@@ -243,10 +229,12 @@ export class InteractionTracker {
     if (p) p.handler = { state: 'running', start: performance.now() };
   }
 
-  handlerFinished(i: Interaction, ms: number, error?: HandlerError): void {
+  /** `ms` may be left out when the handler's start was reported; without either, no handler time is recorded. */
+  handlerFinished(i: Interaction, given: number | undefined, error?: HandlerError): void {
     const p = this.#pending.get(i.id);
+    const ms = given ?? (p?.handler?.state === 'running' ? performance.now() - p.handler.start : undefined);
     if (p) {
-      p.handler = error ? { state: 'done', ms, error } : { state: 'done', ms };
+      p.handler = { state: 'done', ...(ms !== undefined ? { ms } : {}), ...(error ? { error } : {}) };
       if (p.response) this.#emit(i.id);
       return;
     }
@@ -262,7 +250,7 @@ export class InteractionTracker {
           command: emitted.command,
           errorClass: error.errorClass,
           errorCode: error.errorCode,
-          handlerMs: Math.round(ms),
+          handlerMs: ms === undefined ? undefined : Math.round(ms),
         }),
         3,
       );
@@ -304,7 +292,7 @@ export class InteractionTracker {
     const event = compact({
       ...p.base,
       // A command answered with a modal carries the modal's ID, which links it to the later submission.
-      customId: p.base.customId ?? (modal === undefined ? undefined : this.#normaliseCustomId(modal)),
+      customId: p.base.customId ?? (modal === undefined ? undefined : recordedCustomId(modal, this.#ctx.options)),
       outcome,
       ackMs: p.response?.ackMs,
       responseType: p.response?.responseType,
@@ -312,13 +300,11 @@ export class InteractionTracker {
       ephemeral: p.response?.ephemeral,
       errorCode: error?.errorCode ?? p.response?.errorCode,
       errorClass: error?.errorClass,
-      handlerMs: handler ? Math.round(handler.ms) : undefined,
+      handlerMs: handler?.ms === undefined ? undefined : Math.round(handler.ms),
     });
-    this.#emitted.set(interactionId, {
-      eventId: p.base.id,
-      ...(p.base.command ? { command: p.base.command } : {}),
-      handlerRunning: p.handler?.state === 'running',
-    });
+    // A component's late failure belongs to the command that created its message.
+    const command = p.base.command || p.base.sourceCommand;
+    this.#emitted.set(interactionId, { eventId: p.base.id, ...(command ? { command } : {}) });
     this.#ctx.client.enqueueWithUser(p.userId, p.base.ts, 3, (user) => ({ ...event, user }) as InteractionInput);
   }
 }

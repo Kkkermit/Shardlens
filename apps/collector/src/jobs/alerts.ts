@@ -1,6 +1,10 @@
 import type { Db } from '../db.js';
 import { postToDiscordWebhook } from '../discord-webhook.js';
+import { INTERACTIONS_ONLY_SQL } from '../ingest/codes.js';
 import { auditCipher } from '../security/crypto.js';
+
+/** Usually a changed `SHARDLENS_SETTINGS_KEY`. */
+export const UNREADABLE_WEBHOOK = 'The saved webhook could not be decrypted. Save the alert again.';
 
 /** Minimum time between two notifications for the same rule. */
 const ALERT_DEBOUNCE_MS = 30 * 60_000;
@@ -28,9 +32,11 @@ export async function evaluateMetric(db: Db, appId: string, metric: string, wind
     case 'missed_deadline_rate':
     case 'error_rate': {
       const cond = metric === 'missed_deadline_rate' ? 'outcome IN (2, 3)' : 'outcome <> 0';
+      // Message commands have no deadline to miss, so they don't count towards that rate.
+      const scope = metric === 'missed_deadline_rate' ? ` AND ${INTERACTIONS_ONLY_SQL}` : '';
       const r = await db.query<{ v: number | null }>(
         `SELECT 100.0 * sum(weight) FILTER (WHERE ${cond}) / nullif(sum(weight), 0) AS v
-           FROM interactions WHERE app_id = $1 AND ts > now() - $2::interval`,
+           FROM interactions WHERE app_id = $1 AND ts > now() - $2::interval${scope}`,
         p,
       );
       return r.rows[0]?.v ?? null;
@@ -127,11 +133,11 @@ export async function runAlerts(
     try {
       url = cipher.decrypt(rule.webhook_enc);
     } catch {
-      // Usually a changed SHARDLENS_SETTINGS_KEY. Shown in the alert's history instead of failing silently.
+      // Shown in the alert's history instead of failing silently.
       await db.query('UPDATE alert_rules SET last_fired = $2 WHERE id = $1', [rule.id, now]);
       await db.query(
         'INSERT INTO alert_events (rule_id, app_id, ts, value, delivered, error) VALUES ($1, $2, $3, $4, false, $5)',
-        [rule.id, rule.app_id, now, value, 'The saved webhook could not be decrypted. Save the alert again.'],
+        [rule.id, rule.app_id, now, value, UNREADABLE_WEBHOOK],
       );
       continue;
     }

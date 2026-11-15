@@ -3,8 +3,8 @@ import { useState } from 'react';
 import { api, errorText } from '../api';
 import { NeedsDiscord, useAdminGate } from '../components/AdminGate';
 import { DataTable } from '../components/DataTable';
-import { Loading, PageHead, Panel } from '../components/ui';
-import { ago } from '../format';
+import { Name, PageHead, Panel, QueryBody, StatusMessage, usePanelStatus } from '../components/ui';
+import { ago, quoted } from '../format';
 
 interface Report {
   id: string;
@@ -35,7 +35,7 @@ export function ReportsPage() {
     enabled: gate.allowed,
   });
   const [form, setForm] = useState({ name: '', schedule: 'daily', hour: '9', weekday: '1', webhookUrl: '' });
-  const [message, setMessage] = useState('');
+  const [messageFor, say] = usePanelStatus();
   const refresh = () => client.invalidateQueries({ queryKey: ['reports'] });
   const create = useMutation({
     mutationFn: () =>
@@ -50,23 +50,23 @@ export function ReportsPage() {
       }),
     onSuccess: () => {
       setForm({ ...form, name: '', webhookUrl: '' });
-      setMessage('Report created. Use “Send now” to see it in your channel.');
+      say('new', 'Report created. Use “Send now” to see it in your channel.');
       void refresh();
     },
-    onError: (e) => setMessage(errorText(e)),
+    onError: (e) => say('new', errorText(e)),
   });
-  const action = async (path: string, method: string, body?: unknown, done?: string) => {
+  const action = async (path: string, method: string, body: unknown, done: string, failed: string) => {
+    say('list', '');
     try {
-      await api(path, { method, body: body ?? {} });
-      if (done) setMessage(done);
+      await api(path, { method, body });
+      say('list', done);
     } catch (e) {
-      setMessage(errorText(e));
+      say('list', `${failed} ${errorText(e)}`);
     }
     void refresh();
   };
 
-  if (gate.loading) return <Loading />;
-  if (!gate.allowed) return <NeedsDiscord />;
+  if (!gate.allowed && !gate.loading) return <NeedsDiscord title="Reports" />;
   const timezone = reports.data?.timezone ?? 'UTC';
   return (
     <>
@@ -74,135 +74,157 @@ export function ReportsPage() {
         title="Reports"
         description="A daily or weekly summary posted to a Discord channel of your choice: commands run, unique users, failures, response time, servers and your top commands. Counts only."
       />
-      {message ? (
-        <p role="status" className="notice">
-          {message}
-        </p>
-      ) : null}
-      <div className="stack">
-        <Panel title="Scheduled reports" subtitle={`Times are in ${timezone}, the time zone from Settings`}>
-          {reports.isLoading ? (
-            <Loading />
-          ) : (
-            <DataTable
-              caption="Scheduled reports"
-              rowKey={(r) => r.id}
-              rows={reports.data?.reports ?? []}
-              empty="No reports yet. Create one below."
-              columns={[
-                { key: 'name', header: 'Name', render: (r) => r.name },
-                { key: 'when', header: 'Sent', render: when },
-                { key: 'webhook', header: 'Webhook', render: (r) => <code>{r.webhook}</code> },
-                {
-                  key: 'last',
-                  header: 'Last sent',
-                  render: (r) => {
-                    if (!r.lastSent) return 'never';
-                    return r.lastError ? `Failed ${ago(r.lastSent)}: ${r.lastError}` : ago(r.lastSent);
-                  },
-                },
-                {
-                  key: 'actions',
-                  header: 'Actions',
-                  render: (r) => (
-                    <span style={{ display: 'inline-flex', gap: 6 }}>
-                      <button
-                        type="button"
-                        aria-pressed={r.enabled}
-                        onClick={() => void action(`/v1/reports/${r.id}`, 'PATCH', { enabled: !r.enabled })}
-                      >
-                        {r.enabled ? 'On' : 'Off'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void action(`/v1/reports/${r.id}/send`, 'POST', {}, 'Report sent.')}
-                      >
-                        Send now
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (window.confirm(`Delete the report “${r.name}”?`))
-                            void action(`/v1/reports/${r.id}`, 'DELETE');
-                        }}
-                      >
-                        Delete
-                      </button>
-                    </span>
-                  ),
-                },
-              ]}
-            />
-          )}
-        </Panel>
-        <Panel
-          title="New report"
-          subtitle="In Discord: channel settings → Integrations → Webhooks → New Webhook → Copy Webhook URL"
-        >
-          <form
-            className="filters"
-            onSubmit={(e) => {
-              e.preventDefault();
-              setMessage('');
-              create.mutate();
-            }}
+      <QueryBody query={{ isLoading: gate.loading, error: null }}>
+        <div className="stack">
+          <Panel
+            title="Scheduled reports"
+            subtitle={reports.data ? `Times are in ${timezone}, the time zone from Settings` : undefined}
           >
-            <label>
-              Name
-              <input
-                required
-                maxLength={64}
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
+            <StatusMessage message={messageFor('list')} />
+            <QueryBody query={reports}>
+              <DataTable
+                caption="Scheduled reports"
+                rowKey={(r) => r.id}
+                rows={reports.data?.reports ?? []}
+                empty="No reports yet. Create one below."
+                columns={[
+                  { key: 'name', header: 'Name', render: (r) => <Name>{r.name}</Name> },
+                  { key: 'when', header: 'Sent', render: when },
+                  { key: 'webhook', header: 'Webhook', render: (r) => <code>{r.webhook}</code> },
+                  {
+                    key: 'last',
+                    header: 'Last sent',
+                    render: (r) => {
+                      if (!r.lastSent) return 'never';
+                      return r.lastError ? `Failed ${ago(r.lastSent)}: ${r.lastError}` : ago(r.lastSent);
+                    },
+                  },
+                  {
+                    key: 'actions',
+                    header: 'Actions',
+                    render: (r) => (
+                      <span className="row-actions">
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={r.enabled}
+                            onChange={() =>
+                              void action(
+                                `/v1/reports/${r.id}`,
+                                'PATCH',
+                                { enabled: !r.enabled },
+                                r.enabled ? `${quoted(r.name)} is off.` : `${quoted(r.name)} is on.`,
+                                `Couldn't change ${quoted(r.name)}.`,
+                              )
+                            }
+                          />
+                          Enabled
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void action(
+                              `/v1/reports/${r.id}/send`,
+                              'POST',
+                              {},
+                              `${quoted(r.name)} sent.`,
+                              `Sending ${quoted(r.name)} failed.`,
+                            )
+                          }
+                        >
+                          Send now
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (window.confirm(`Delete the report ${quoted(r.name)}?`))
+                              void action(
+                                `/v1/reports/${r.id}`,
+                                'DELETE',
+                                {},
+                                `${quoted(r.name)} deleted.`,
+                                `Couldn't delete ${quoted(r.name)}.`,
+                              );
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </span>
+                    ),
+                  },
+                ]}
               />
-            </label>
-            <label>
-              How often
-              <select value={form.schedule} onChange={(e) => setForm({ ...form, schedule: e.target.value })}>
-                <option value="daily">Daily</option>
-                <option value="weekly">Weekly</option>
-              </select>
-            </label>
-            {form.schedule === 'weekly' ? (
+            </QueryBody>
+          </Panel>
+          <Panel
+            title="New report"
+            subtitle="In Discord: channel settings → Integrations → Webhooks → New Webhook → Copy Webhook URL"
+          >
+            <StatusMessage message={messageFor('new')} />
+            <form
+              className="filters"
+              onSubmit={(e) => {
+                e.preventDefault();
+                say('new', '');
+                create.mutate();
+              }}
+            >
               <label>
-                Day
-                <select value={form.weekday} onChange={(e) => setForm({ ...form, weekday: e.target.value })}>
-                  {WEEKDAYS.map((day, i) => (
-                    <option key={day} value={i + 1}>
-                      {day}
+                Name
+                <input
+                  required
+                  maxLength={64}
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                />
+              </label>
+              <label>
+                How often
+                <select value={form.schedule} onChange={(e) => setForm({ ...form, schedule: e.target.value })}>
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                </select>
+              </label>
+              {form.schedule === 'weekly' ? (
+                <label>
+                  Day
+                  <select value={form.weekday} onChange={(e) => setForm({ ...form, weekday: e.target.value })}>
+                    {WEEKDAYS.map((day, i) => (
+                      <option key={day} value={i + 1}>
+                        {day}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              <label>
+                At
+                <select value={form.hour} onChange={(e) => setForm({ ...form, hour: e.target.value })}>
+                  {Array.from({ length: 24 }, (_, hour) => (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: the hour is the option's identity
+                    <option key={hour} value={hour}>
+                      {clock(hour)}
                     </option>
                   ))}
                 </select>
               </label>
-            ) : null}
-            <label>
-              At
-              <select value={form.hour} onChange={(e) => setForm({ ...form, hour: e.target.value })}>
-                {Array.from({ length: 24 }, (_, hour) => (
-                  // biome-ignore lint/suspicious/noArrayIndexKey: the hour is the option's identity
-                  <option key={hour} value={hour}>
-                    {clock(hour)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label style={{ flex: '1 1 320px' }}>
-              Discord webhook URL
-              <input
-                required
-                type="url"
-                placeholder="https://discord.com/api/webhooks/…"
-                value={form.webhookUrl}
-                onChange={(e) => setForm({ ...form, webhookUrl: e.target.value })}
-                style={{ flex: 1 }}
-              />
-            </label>
-            <button type="submit" className="primary" disabled={create.isPending}>
-              Create
-            </button>
-          </form>
-        </Panel>
-      </div>
+              <label className="wide-field">
+                Discord webhook URL
+                <input
+                  required
+                  type="url"
+                  placeholder="https://discord.com/api/webhooks/…"
+                  value={form.webhookUrl}
+                  onChange={(e) => setForm({ ...form, webhookUrl: e.target.value })}
+                />
+              </label>
+              <button type="submit" className="primary" disabled={create.isPending}>
+                Create
+              </button>
+            </form>
+          </Panel>
+        </div>
+      </QueryBody>
     </>
   );
 }

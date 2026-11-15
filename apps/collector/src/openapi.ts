@@ -1,4 +1,5 @@
-import { BatchEnvelope, ConfigResponse, ErrorResponse, Event, IngestAccepted } from '@shardlens/schema';
+import { readFileSync } from 'node:fs';
+import { batchJsonSchema, ConfigResponse, ErrorResponse, IngestAccepted } from '@shardlens/schema';
 import { z } from 'zod';
 import { QuerySpec } from './query/spec.js';
 import { AlertBody, SettingsPatch } from './routes/admin.js';
@@ -31,14 +32,17 @@ const auditLogFilters = Object.entries(
   (json(AuditLogFilters) as { properties: Record<string, object> }).properties,
 ).map(([name, schema]) => ({ name, in: 'query', required: false, schema }));
 
-/** The batch an SDK sends: the envelope, with `events` described by the event union. */
-const IngestBatch = BatchEnvelope.extend({ events: z.array(Event).min(1).max(500) });
+/** This collector's version, from its package.json: one folder up from `src/` and from `dist/` alike. */
+function collectorVersion(): string {
+  const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
+  return manifest.version;
+}
 
 /**
  * OpenAPI 3.1 description of the collector's HTTP API, generated from the same zod schemas the routes validate with,
  * so the document cannot drift from the code. Served at `/openapi.json` and rendered on the docs site.
  */
-export function openApiDocument(version = '0.0.0'): Record<string, unknown> {
+export function openApiDocument(version = collectorVersion()): Record<string, unknown> {
   return {
     openapi: '3.1.0',
     info: {
@@ -85,7 +89,8 @@ export function openApiDocument(version = '0.0.0'): Record<string, unknown> {
           description:
             'Gzipped JSON (`Content-Encoding: gzip`), at most 500 events, 1 MB compressed and 5 MB decompressed. Invalid events are rejected one by one; duplicates (retries) are counted, not stored twice.',
           security: [{ ingestKey: [] }],
-          requestBody: body(IngestBatch),
+          // The published batch schema, with the rules checked in code (no NUL, no `actor` in privacy mode).
+          requestBody: { required: true, content: { 'application/json': { schema: batchJsonSchema() } } },
           responses: {
             '202': ok('Accepted', IngestAccepted),
             '400': error('Invalid batch envelope, or audit data sent to a privacy-mode app'),
@@ -101,6 +106,8 @@ export function openApiDocument(version = '0.0.0'): Record<string, unknown> {
         get: {
           tags: ['SDK'],
           summary: 'Salts, sampling and data mode for the SDK',
+          description:
+            'The salt of the current period first, then the previous one while it is inside its grace week. In the last 5 minutes of a period the next period’s salt comes too, last: SDKs ask again 1 to 4 minutes before a boundary, so they hold it before the period starts.',
           security: [{ ingestKey: [] }],
           responses: { '200': ok('Current configuration', ConfigResponse), ...unauthorized },
         },

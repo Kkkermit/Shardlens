@@ -9,7 +9,24 @@ export const KIND = {
   select: 6,
   modal_submit: 7,
   autocomplete: 8,
+  /** Not an interaction: a message (prefix) command the bot reported. No locale, response or deadline. */
+  message_command: 9,
 } as const;
+
+/** Kinds that are commands rather than components, modals or autocomplete: what the `interactions` metric counts. */
+export const COMMAND_KINDS_SQL = `(${[
+  KIND.chat_input,
+  KIND.user_context,
+  KIND.message_context,
+  KIND.primary_entry_point,
+  KIND.message_command,
+].join(', ')})`;
+
+/**
+ * For figures only Discord interactions have (response deadline, defer and ephemeral rates, entitlements): leaves out
+ * message commands, which have no response and would dilute them.
+ */
+export const INTERACTIONS_ONLY_SQL = `kind <> ${KIND.message_command}`;
 
 export const OUTCOME = { ok: 0, error: 1, timeout: 2, no_response: 3 } as const;
 export const INSTALL = { guild: 0, user: 1, both: 2 } as const;

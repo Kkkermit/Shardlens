@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
+import { readdirSync, readFileSync } from 'node:fs';
+import { batchJsonSchema } from '@shardlens/schema';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Db } from '../src/db.js';
 import { ENV_VARIABLES, loadConfig } from '../src/env.js';
@@ -9,7 +11,7 @@ import { LiveHub } from '../src/live.js';
 import { openApiDocument } from '../src/openapi.js';
 import { rollupSource } from '../src/query/rollup-source.js';
 import { KeyStore } from '../src/security/auth.js';
-import { clientKey } from '../src/server.js';
+import { buildServer, clientKey } from '../src/server.js';
 import { periodBounds, periodIdent } from '../src/storage/periods.js';
 
 const base = {
@@ -20,7 +22,24 @@ const base = {
   SHARDLENS_SETTINGS_KEY: Buffer.alloc(32, 1).toString('base64'),
 };
 
+/** A pool connection that answers every query with `rows` and records how it was released. */
+function fakeClient(rows: object[] = []) {
+  const released: unknown[] = [];
+  const client = Object.assign(new EventEmitter(), {
+    query: async () => ({ rows, rowCount: rows.length }),
+    release: (broken?: boolean) => void released.push(broken ?? false),
+  });
+  return { client, released };
+}
+
 describe('loadConfig', () => {
+  it('reads the trusted proxy setting as a hop count, true or false', () => {
+    expect(loadConfig({ ...base, SHARDLENS_TRUST_PROXY: '1' }).trustProxy).toBe(1);
+    expect(loadConfig({ ...base, SHARDLENS_TRUST_PROXY: 'true' }).trustProxy).toBe(true);
+    expect(loadConfig(base).trustProxy).toBe(false);
+    expect(() => loadConfig({ ...base, SHARDLENS_TRUST_PROXY: 'yes' })).toThrow(/SHARDLENS_TRUST_PROXY/);
+  });
+
   it('loads a minimal valid configuration', () => {
     const config = loadConfig(base);
     expect(config.port).toBe(8080);
@@ -51,6 +70,9 @@ describe('loadConfig', () => {
   });
 });
 
+/** Read by `docker-compose.yml` and its ClickHouse override, not by the collector. */
+const COMPOSE_ONLY = ['SHARDLENS_DOMAIN', 'POSTGRES_PASSWORD', 'SHARDLENS_IMAGE', 'CLICKHOUSE_PASSWORD'];
+
 describe('docs stay in step with the code', () => {
   it('documents every environment variable the collector reads', () => {
     const page = readFileSync(
@@ -59,6 +81,24 @@ describe('docs stay in step with the code', () => {
     );
     const missing = ENV_VARIABLES.filter((name) => !page.includes(`\`${name}\``));
     expect(missing).toEqual([]);
+    // And documents nothing it doesn't read, apart from the variables Docker Compose itself reads.
+    const listed = [...page.matchAll(/^\| `([A-Z][A-Z0-9_]*)`/gm)].map((m) => m[1] as string);
+    expect(listed.filter((name) => !ENV_VARIABLES.includes(name) && !COMPOSE_ONLY.includes(name))).toEqual([]);
+    expect(COMPOSE_ONLY.filter((name) => !listed.includes(name))).toEqual([]);
+  });
+
+  it('lists every environment variable in deploy/.env.example, and nothing else', () => {
+    const example = readFileSync(new URL('../../../deploy/.env.example', import.meta.url), 'utf8');
+    const names = [...example.matchAll(/^([A-Z][A-Z0-9_]*)=/gm)].map((m) => m[1] as string);
+    expect(ENV_VARIABLES.filter((name) => !names.includes(name))).toEqual([]);
+    expect(names.filter((name) => !ENV_VARIABLES.includes(name) && !COMPOSE_ONLY.includes(name))).toEqual([]);
+    // The values it suggests are valid, apart from the ones the operator has to fill in.
+    const filled: Record<string, string> = { ...base };
+    for (const line of example.split('\n')) {
+      const m = /^([A-Z][A-Z0-9_]*)=(.+)$/.exec(line);
+      if (m) filled[m[1] as string] = m[2] as string;
+    }
+    expect(() => loadConfig(filled)).not.toThrow();
   });
 
   it('describes every route in the OpenAPI document with valid security schemes', () => {
@@ -70,6 +110,11 @@ describe('docs stay in step with the code', () => {
     };
     expect(doc.openapi).toBe('3.1.0');
     expect(doc.info.version).toBe('1.2.3');
+    // Served and published without an argument: the collector's own version, not a placeholder.
+    const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+      version: string;
+    };
+    expect((openApiDocument() as typeof doc).info.version).toBe(manifest.version);
     for (const path of [
       '/v1/ingest',
       '/v1/config',
@@ -94,6 +139,14 @@ describe('docs stay in step with the code', () => {
     const json = JSON.stringify(doc);
     expect(json).toContain('interaction_error');
     expect(json).not.toMatch(/"groupBy"[^}]*"user"/);
+    // The ingest body is the published batch schema, privacy-mode rule included.
+    const ingestBody = (
+      doc.paths['/v1/ingest'] as unknown as {
+        post: { requestBody: { content: { 'application/json': { schema: Record<string, unknown> } } } };
+      }
+    ).post.requestBody.content['application/json'].schema;
+    expect(ingestBody).toEqual(batchJsonSchema());
+    expect(JSON.stringify(ingestBody.then)).toContain('actor');
   });
 
   it('lists the filters of the activity log and of its export', () => {
@@ -107,6 +160,16 @@ describe('docs stay in step with the code', () => {
         parameters.map((parameter) => parameter.name),
         path,
       ).toEqual(['from', 'to', 'before', 'command', 'guild', 'user', 'limit']);
+    }
+  });
+});
+
+describe('image build', () => {
+  it('copies every package manifest before installing, so the build step does not install a second time', () => {
+    const dockerfile = readFileSync(new URL('../Dockerfile', import.meta.url), 'utf8');
+    const beforeInstall = dockerfile.slice(0, dockerfile.indexOf('RUN pnpm install'));
+    for (const dir of readdirSync(new URL('../../../packages/', import.meta.url))) {
+      expect(beforeInstall).toContain(`COPY packages/${dir}/package.json packages/${dir}/`);
     }
   });
 });
@@ -169,6 +232,31 @@ describe('job scheduler', () => {
     await vi.advanceTimersByTimeAsync(60_000);
     await stopped;
   });
+
+  it('keeps one connection, with one error listener, while another collector leads', async () => {
+    vi.useFakeTimers();
+    const clients: ReturnType<typeof fakeClient>[] = [];
+    const db = {
+      query: async () => ({ rows: [], rowCount: 0 }),
+      connect: async () => {
+        const c = fakeClient([{ ok: false }]);
+        clients.push(c);
+        return c.client;
+      },
+    } as unknown as Db;
+    const jobs = startJobs(db, { info: () => undefined, error: () => undefined });
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(clients).toHaveLength(1);
+    expect(clients[0]?.client.listenerCount('error')).toBe(1);
+
+    // A broken connection goes back to the pool to be destroyed, and the next attempt opens a new one.
+    clients[0]?.client.emit('error', new Error('Connection terminated unexpectedly'));
+    expect(clients[0]?.released).toEqual([true]);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(clients).toHaveLength(2);
+    await jobs.stop();
+    expect(clients[1]?.released).toEqual([false]);
+  });
 });
 
 describe('periods', () => {
@@ -198,6 +286,10 @@ describe('periods', () => {
 });
 
 describe('LiveHub tiles', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('sums the last minute of interactions and 15 minutes of failures', () => {
     const hub = new LiveHub({} as never);
     const now = Date.now();
@@ -207,6 +299,88 @@ describe('LiveHub tiles', () => {
     hub.bump('1', now - 20 * 60_000, 50, 50);
     expect(hub.tiles('1', now)).toMatchObject({ perMinute: 8, errors15m: 3 });
     expect(hub.tiles('2', now)).toMatchObject({ perMinute: 0, errors15m: 0 });
+  });
+
+  it('keeps counting after 2038, when epoch seconds no longer fit 32 bits', () => {
+    const hub = new LiveHub({} as never);
+    const at = Date.UTC(2040, 0, 1);
+    hub.bump('1', at, 5, 1);
+    expect(hub.tiles('1', at)).toMatchObject({ perMinute: 5, errors15m: 1 });
+  });
+
+  it('gives a broken listening connection back to the pool, once', async () => {
+    const { client, released } = fakeClient();
+    const hub = new LiveHub({ connect: async () => client } as unknown as Db);
+    expect(await hub.start()).toBe(true);
+    client.emit('error', new Error('Connection terminated unexpectedly'));
+    client.emit('error', new Error('Connection terminated unexpectedly'));
+    await hub.stop();
+    expect(released).toEqual([true]);
+  });
+
+  it('shares a burst spread over many seconds with the other instances', async () => {
+    vi.useFakeTimers();
+    const payloads: string[] = [];
+    const db = {
+      connect: async () => fakeClient().client,
+      query: async (_sql: string, params: string[]) => {
+        payloads.push(params[1] as string);
+        return { rows: [] };
+      },
+    } as unknown as Db;
+    const hub = new LiveHub(db);
+    await hub.start();
+    const now = Date.now();
+    for (let back = 0; back < 900; back++) hub.bump('1', now - back * 1_000, 1 / 3, 1 / 3);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await hub.stop();
+    expect(payloads.length).toBeGreaterThan(1);
+    for (const payload of payloads) expect(Buffer.byteLength(payload)).toBeLessThan(8_000);
+    expect(payloads.flatMap((payload) => (JSON.parse(payload) as { c: unknown[] }).c)).toHaveLength(900);
+  });
+});
+
+describe('live tiles stream', () => {
+  it('keeps slots for other visitors when one opens too many streams', { timeout: 10_000 }, async () => {
+    const db = { query: () => new Promise(() => undefined) } as unknown as Db;
+    const config = loadConfig({ ...base, SHARDLENS_DEMO: 'true', SHARDLENS_TRUST_PROXY: '1', LOG_LEVEL: 'silent' });
+    const app = await buildServer({ config, db, keys: new KeyStore(db), live: new LiveHub(db) });
+    const address = await app.listen({ port: 0, host: '127.0.0.1' });
+    const aborted = new AbortController();
+    const open = (visitor: string) =>
+      fetch(`${address}/v1/live`, { signal: aborted.signal, headers: { 'x-forwarded-for': visitor } });
+    try {
+      for (let i = 0; i < 10; i++) expect((await open('198.51.100.1')).status).toBe(200);
+      expect((await open('198.51.100.1')).status).toBe(503);
+      expect((await open('198.51.100.2')).status).toBe(200);
+    } finally {
+      aborted.abort();
+      await app.close();
+    }
+  });
+
+  it('waits for a slow database instead of starting another refresh every second', { timeout: 10_000 }, async () => {
+    let queries = 0;
+    const db = {
+      query: () => {
+        queries++;
+        return new Promise(() => undefined);
+      },
+    } as unknown as Db;
+    const config = loadConfig({ ...base, SHARDLENS_DEMO: 'true', LOG_LEVEL: 'silent' });
+    const app = await buildServer({ config, db, keys: new KeyStore(db), live: new LiveHub(db) });
+    const address = await app.listen({ port: 0, host: '127.0.0.1' });
+    const aborted = new AbortController();
+    try {
+      const res = await fetch(`${address}/v1/live`, { signal: aborted.signal });
+      expect(res.status).toBe(200);
+      await new Promise((resolve) => setTimeout(resolve, 2_500));
+      // One refresh (three queries) still waiting, not one started for every second.
+      expect(queries).toBe(3);
+    } finally {
+      aborted.abort();
+      await app.close();
+    }
   });
 });
 

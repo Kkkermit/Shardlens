@@ -4,22 +4,26 @@ The [Shardlens](https://github.com/Kkkermit/Shardlens) command-line tool: set up
 write a paragraph for your privacy policy and check your setup. Shardlens is self-hosted, privacy-first analytics and
 health monitoring for discord.js bots.
 
+Needs Node.js 22.12 or newer; no dependencies.
+
 ```sh
-# Write docker-compose.yml, a Caddyfile and a .env with generated secrets and keys
+# Write docker-compose.yml, a Caddyfile, a .env with generated secrets and keys, and bot.env with your bot's two settings
 npx shardlens init --domain stats.example.com --app-id 123456789012345678
 
 # Print a new API key (ingest or read)
-npx shardlens keys --scope ingest
+npx shardlens keys --scope read
 
 # Print a privacy-policy paragraph that matches your setup
 npx shardlens privacy
 
 # Check Node.js, discord.js, the collector and your key
-npx shardlens doctor --url https://stats.example.com
+npx shardlens doctor --url https://stats.example.com --key slk_ingest_…
 ```
 
-`doctor` also reads `SHARDLENS_URL` and `SHARDLENS_INGEST_KEY` from the environment. It only talks to the collector
-URL you give it and never prints the key.
+`init` never overwrites files without `--force`, and with it keeps the secrets of an existing `.env`, so it is safe to run
+again on a running collector. `doctor` also reads `SHARDLENS_URL` and `SHARDLENS_INGEST_KEY` from the environment or from
+a `.env` in the current folder. It only talks to the collector URL you give it, never over plain HTTP except to
+localhost, and never prints the key. `shardlens --help` lists every option.
 
 ## Links
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { Batch, ConfigResponse, IngestAccepted } from '../src/index.js';
-import { batch } from './fixtures.js';
+import { Batch, ConfigResponse, IngestAccepted, MAX_EVENT_WEIGHT } from '../src/index.js';
+import { batch, interaction } from './fixtures.js';
 
 describe('ConfigResponse', () => {
   const valid = {
@@ -24,6 +24,17 @@ describe('ConfigResponse', () => {
     ).toBe(false);
     expect(ConfigResponse.safeParse({ ...valid, sampling: { gauge_window: 0 } }).success).toBe(false);
     expect(ConfigResponse.safeParse({ ...valid, sampling: { gauge_window: 1.5 } }).success).toBe(false);
+  });
+
+  it('serves no sample rate whose kept events the wire format would refuse for their weight', () => {
+    const lowest = 1 / MAX_EVENT_WEIGHT;
+    const config = (rate: number) => ConfigResponse.safeParse({ ...valid, sampling: { interaction: rate } }).success;
+    expect(config(lowest)).toBe(true);
+    // Regression: rates down to 0 were allowed, and every event kept at one below 1 / 10,000 was refused.
+    expect(config(lowest / 2)).toBe(false);
+    for (const rate of [lowest, 0.001, 1 / 3, 0.5, 1]) {
+      expect(Batch.safeParse(batch([interaction({ weight: 1 / rate })])).success, String(rate)).toBe(true);
+    }
   });
 });
 

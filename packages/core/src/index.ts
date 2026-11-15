@@ -4,7 +4,7 @@
  *
  * @packageDocumentation
  */
-export { avatarHash, compact, errorClass, errorCode } from './adapter-helpers.js';
+export { avatarHash, compact, errorClass, errorCode, recordedOptionValue } from './adapter-helpers.js';
 export {
   type ClientOptions,
   type ClientStats,
@@ -48,7 +48,7 @@ export {
   observe,
   quantile,
 } from './histogram.js';
-export { MAX_CUSTOM_ID_LENGTH, normaliseCustomId, redactSecrets } from './normalise.js';
+export { cutText, MAX_CUSTOM_ID_LENGTH, normaliseCustomId, redactSecrets } from './normalise.js';
 export { BoundedQueue, PRIORITIES, type Priority, type QueuedItem } from './queue.js';
 export type { EventSpool } from './spool.js';
 export { BACKOFF_MAX_MS, BACKOFF_MIN_MS, backoffMs, gzipJson, isAllowedEndpoint } from './transport.js';

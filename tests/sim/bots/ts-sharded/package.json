@@ -1,0 +1,21 @@
+{
+  "name": "ts-sharded-bot",
+  "version": "1.4.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node --env-file-if-exists=.env dist/index.js",
+    "deploy": "node --env-file-if-exists=.env dist/deploy-commands.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@shardlens/discordjs": "^1.0.0",
+    "discord.js": "^14.28.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3"
+  },
+  "description": "The discord.js guide bot, sharded with ShardingManager."
+}

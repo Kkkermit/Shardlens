@@ -1,14 +1,20 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { bucketOf, uuidv7 } from '@shardlens/core';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { signInProblems } from '../src/app.js';
+import { createPool, migrate } from '../src/db.js';
 import { evaluateMetric } from '../src/jobs/alerts.js';
-import { runRollups, runUniques } from '../src/jobs/rollups.js';
+import { backfillRollups, runRollups, runUniques } from '../src/jobs/rollups.js';
 import { runRetention, runSalts } from '../src/jobs/scheduler.js';
+import { allowedUser } from '../src/routes/auth.js';
 import { KeyStore } from '../src/security/auth.js';
 import { buildServer } from '../src/server.js';
+import { activeSalts } from '../src/storage/maintenance.js';
+import { periodIdent } from '../src/storage/periods.js';
 import {
   APP_ID,
   envelope,
@@ -85,6 +91,66 @@ describe('ingest', () => {
     expect(first.json()).toMatchObject({ accepted: 3, duplicates: 0, rejected: [] });
     const retry = await ingest(h.app, batch);
     expect(retry.json()).toMatchObject({ accepted: 0, duplicates: 3 });
+  });
+
+  it('counts a batch once in the live tiles, even when the SDK sends it again', async () => {
+    const { hasher, period } = await sdkHasher(h.app);
+    const user = (await hasher.hash('121212121212121212', period))!;
+    const probe = { command: 'live_probe' };
+    // PostgreSQL hands IDs back in lower case; an SDK may send them in upper case.
+    const shouted = { ...probe, id: uuidv7().toUpperCase(), outcome: 'error' };
+    const batch = envelope([interaction(user, probe), interaction(user, shouted)]);
+    const before = h.live.tiles(APP_ID);
+    try {
+      expect((await ingest(h.app, batch)).json()).toMatchObject({ accepted: 2 });
+      expect((await ingest(h.app, batch)).json()).toMatchObject({ duplicates: 2 });
+      expect(h.live.tiles(APP_ID)).toMatchObject({ perMinute: before.perMinute + 2, errors15m: before.errors15m + 1 });
+    } finally {
+      await h.db.query("DELETE FROM interactions WHERE command = 'live_probe'");
+    }
+  });
+
+  it('counts a retried server availability change as a duplicate', async () => {
+    const event = {
+      id: uuidv7(),
+      ts: Date.now(),
+      type: 'guild_availability',
+      guild: GUILD,
+      available: false,
+      shard: 0,
+    };
+    expect((await ingest(h.app, envelope([event]))).json()).toMatchObject({ accepted: 1, duplicates: 0 });
+    expect((await ingest(h.app, envelope([event]))).json()).toMatchObject({ accepted: 0, duplicates: 1 });
+  });
+
+  it('keeps the newest bot name when an older app report arrives late', async () => {
+    const report = (name: string, ts: number) => ({
+      id: uuidv7(ts),
+      ts,
+      type: 'app_info',
+      name,
+      approximateGuildCount: 3,
+      approximateUserInstallCount: null,
+      approximateUserAuthorizationCount: null,
+      dashboardUserIds: [],
+      eventWebhooksStatus: 1,
+      skus: [],
+      nodeVersion: 'v24.11.0',
+      libVersion: '14.22.0',
+    });
+    try {
+      await ingest(h.app, envelope([report('Newer name', Date.now())]));
+      await ingest(h.app, envelope([report('Older name', Date.now() - 3_600_000)]));
+      const meta = await h.app.inject({
+        method: 'GET',
+        url: '/v1/meta',
+        headers: { authorization: `Bearer ${READ_KEY}` },
+      });
+      expect(meta.json().name).toBe('Newer name');
+    } finally {
+      await h.db.query('DELETE FROM app_info WHERE app_id = $1', [APP_ID]);
+      await h.db.query("UPDATE apps SET name = '' WHERE app_id = $1", [APP_ID]);
+    }
   });
 
   it('drops events carrying identifying data in privacy mode, and audit batches when the app is in privacy mode', async () => {
@@ -206,6 +272,31 @@ describe('ingest', () => {
     expect(left.rows[0].n).toBe(0);
   });
 
+  it('warns at start-up when the bot or its owner would have no way in, and says why Discord sign-in is refused', async () => {
+    expect(await signInProblems(h.db, h.config)).toEqual([]);
+    const fresh = { ...h.config, appId: '1234567890123456780' };
+    await h.db.query('INSERT INTO apps (app_id) VALUES ($1) ON CONFLICT DO NOTHING', [fresh.appId]);
+    expect(await signInProblems(h.db, fresh)).toEqual([
+      expect.stringMatching(/^No ingest key/),
+      expect.stringMatching(/^No way to open the dashboard/),
+    ]);
+    const discordOnly = { ...fresh, discord: { clientId: fresh.appId, clientSecret: 'x'.repeat(32) } };
+    expect(await signInProblems(h.db, discordOnly)).toEqual([
+      expect.stringMatching(/^No ingest key/),
+      expect.stringMatching(/^Discord sign-in works once the bot has reported/),
+    ]);
+    expect(await signInProblems(h.db, { ...discordOnly, extraAdmins: ['334455667788990011'] })).toHaveLength(1);
+
+    const deps = { config: discordOnly, db: h.db } as unknown as Parameters<typeof allowedUser>[0];
+    expect(await allowedUser(deps, fresh.appId, '334455667788990011')).toBe('bot_not_reported');
+    await h.db.query(
+      `INSERT INTO app_info (app_id, ts, name, dashboard_user_ids) VALUES ($1, now(), 'bot', ARRAY[334455667788990011]::bigint[])`,
+      [fresh.appId],
+    );
+    expect(await allowedUser(deps, fresh.appId, '334455667788990011')).toBe('ok');
+    expect(await allowedUser(deps, fresh.appId, '445566778899001122')).toBe('not_a_team_member');
+  });
+
   it('rejects a batch for another app', async () => {
     const res = await ingest(
       h.app,
@@ -214,6 +305,117 @@ describe('ingest', () => {
       }),
     );
     expect(res.statusCode).toBe(403);
+  });
+});
+
+describe('ingest edge cases', () => {
+  // Two days back, outside the ranges the rollup tests below count.
+  const earlier = () => Date.now() - 2 * 86_400_000;
+  const cleanUp = () => h.db.query("DELETE FROM interactions WHERE command LIKE 'edge_%'");
+
+  it('stores the rest of a batch when the database refuses one of its values', async () => {
+    const { hasher, period } = await sdkHasher(h.app);
+    const user = (await hasher.hash('700000000000000111', period))!;
+    const res = await ingest(
+      h.app,
+      envelope([
+        interaction(user, { command: 'edge_kept', ts: earlier() }),
+        // Wider than its column (smallint).
+        interaction(user, { command: 'edge_refused', ts: earlier(), channelType: 40_000 }),
+      ]),
+    );
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toMatchObject({ accepted: 1, rejected: [{ index: 1, reason: 'refused_by_database' }] });
+    const rows = await h.db.query("SELECT command FROM interactions WHERE command LIKE 'edge_%'");
+    expect(rows.rows).toEqual([{ command: 'edge_kept' }]);
+    await cleanUp();
+  });
+
+  it('keeps an option value cut through an emoji, with the broken half replaced', async () => {
+    const { hasher, period } = await sdkHasher(h.app);
+    const user = (await hasher.hash('700000000000000112', period))!;
+    const res = await ingest(
+      h.app,
+      envelope([
+        interaction(user, { command: 'edge_emoji', ts: earlier(), optionValues: { category: 'pizza \ud83c' } }),
+      ]),
+    );
+    expect(res.json(), res.body).toMatchObject({ accepted: 1, rejected: [] });
+    const row = await h.db.query(
+      "SELECT option_values->>'category' AS v FROM interactions WHERE command = 'edge_emoji'",
+    );
+    expect(row.rows[0].v).toBe('pizza \ufffd');
+    await cleanUp();
+  });
+
+  it('stores a retried batch once when the bot clock is minutes off', async () => {
+    const { hasher, period } = await sdkHasher(h.app);
+    const user = (await hasher.hash('700000000000000113', period))!;
+    const event = interaction(user, { command: 'edge_skewed', ts: earlier() });
+    const sentAt = Date.now() - 10 * 60_000;
+    const send = (jitter: number) =>
+      ingest(
+        h.app,
+        envelope([event], {
+          sentAt: new Date(sentAt + jitter).toISOString(),
+          source: { shards: [0], instance: 'skewed:1' },
+        }),
+      );
+    expect((await send(0)).json()).toMatchObject({ accepted: 1 });
+    // The retry is sent a little later: network delay makes the measured skew differ by milliseconds.
+    expect((await send(7)).json()).toMatchObject({ accepted: 0, duplicates: 1 });
+    const rows = await h.db.query("SELECT count(*)::int AS n FROM interactions WHERE command = 'edge_skewed'");
+    expect(rows.rows[0].n).toBe(1);
+    await cleanUp();
+  });
+
+  it('accepts a command list naming one command twice', async () => {
+    const command = { id: '1300000000000000001', name: 'edge', type: 1, subcommands: [] };
+    const res = await ingest(
+      h.app,
+      envelope([
+        { id: uuidv7(), ts: Date.now(), type: 'command_registry', commands: [command, { ...command, name: 'edge2' }] },
+      ]),
+    );
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toMatchObject({ accepted: 1, rejected: [] });
+    await h.db.query('DELETE FROM command_registry WHERE command_id = $1', [command.id]);
+  });
+
+  it('keeps two entitlements bought in the same millisecond, and counts a retried event as a duplicate', async () => {
+    const { hasher, period } = await sdkHasher(h.app);
+    const ts = earlier();
+    const entitlement = async (userId: string) => ({
+      id: uuidv7(ts),
+      ts,
+      type: 'entitlement',
+      action: 'create',
+      sku: '1300000000000000002',
+      entitlementType: 8,
+      owner: 'user',
+      user: (await hasher.hash(userId, period))!,
+      startsAt: null,
+      endsAt: null,
+    });
+    const batch = envelope([await entitlement('700000000000000114'), await entitlement('700000000000000115')]);
+    expect((await ingest(h.app, batch)).json()).toMatchObject({ accepted: 2, duplicates: 0 });
+    expect((await ingest(h.app, batch)).json()).toMatchObject({ accepted: 0, duplicates: 2 });
+    const rows = await h.db.query('SELECT count(*)::int AS n FROM entitlements WHERE sku_id = 1300000000000000002');
+    expect(rows.rows[0].n).toBe(2);
+  });
+
+  it('marks the minute of a late server outage for the rollups to recount', async () => {
+    const ts = Date.now() - 20 * 60_000;
+    const res = await ingest(
+      h.app,
+      envelope([
+        { id: uuidv7(ts), ts, type: 'guild_availability', guild: '1300000000000000003', available: false, shard: 0 },
+      ]),
+    );
+    expect(res.json()).toMatchObject({ accepted: 1 });
+    const minute = new Date(Math.floor(ts / 60_000) * 60_000);
+    const dirty = await h.db.query('SELECT count(*)::int AS n FROM dirty_buckets WHERE bucket = $1', [minute]);
+    expect(dirty.rows[0].n).toBe(1);
   });
 });
 
@@ -245,6 +447,43 @@ describe('rollups, uniques and queries', () => {
   const range = () => ({
     from: new Date(Date.now() - 86_400_000).toISOString(),
     to: new Date(Date.now() + 3_600_000).toISOString(),
+  });
+
+  it('shows hourly buckets at their real start in a time zone half an hour off UTC', async () => {
+    const res = await query(h.app, {
+      kind: 'series',
+      metric: 'interactions',
+      range: range(),
+      interval: 'hour',
+      timezone: 'Asia/Kolkata',
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const points = res.json().points as { t: string }[];
+    expect(points.length).toBeGreaterThan(0);
+    // UTC hours start at half past in India (UTC+5:30), so the bucket holding 11:14 is 10:30–11:30, not 10:00.
+    for (const point of points) expect(point.t).toMatch(/:30:00$/);
+  });
+
+  it('labels days older than 13 months with their UTC date, the only days kept that long', async () => {
+    const day = new Date(Date.now() - 400 * 86_400_000).toISOString().slice(0, 10);
+    const dims = { kind: 1, command: 'old_day', sub: null, outcome: 0 };
+    await h.db.query(
+      `INSERT INTO rollup_1d (app_id, bucket, metric, dims_hash, dims, count, sum)
+       VALUES ($1, $2, 'interactions', sha256(convert_to($3::jsonb::text, 'UTF8')), $3::jsonb, 7, 0)`,
+      [APP_ID, `${day}T00:00:00Z`, JSON.stringify(dims)],
+    );
+    const from = new Date(Date.parse(`${day}T00:00:00Z`) - 2 * 86_400_000).toISOString();
+    const to = new Date(Date.parse(`${day}T00:00:00Z`) + 2 * 86_400_000).toISOString();
+    const res = await query(h.app, {
+      kind: 'series',
+      metric: 'interactions',
+      range: { from, to },
+      interval: 'day',
+      timezone: 'America/Los_Angeles',
+      filters: [{ field: 'command', value: 'old_day' }],
+    });
+    expect(res.json().points).toEqual([expect.objectContaining({ t: `${day}T00:00:00`, value: 7 })]);
+    await h.db.query("DELETE FROM rollup_1d WHERE dims->>'command' = 'old_day'");
   });
 
   it('counts every interaction exactly once in rollups', async () => {
@@ -450,6 +689,43 @@ describe('rollups, uniques and queries', () => {
     // A latency is not a total: averaged across shards, with the worst as the maximum.
     expect(await points('shard.ping_ms')).toEqual([expect.objectContaining({ value: 65, max: 90 })]);
   });
+
+  it('counts a restarted process once, not alongside the process it replaced', async () => {
+    await h.db.query('DELETE FROM gauges');
+    await h.db.query('DELETE FROM sdk_health');
+    const minute = Math.floor((Date.now() - 120_000) / 60_000) * 60_000;
+    const report = (instance: string, shard: number, ts: number, rssBytes: number, guilds: number) =>
+      ingest(
+        h.app,
+        envelope(
+          [
+            {
+              id: uuidv7(),
+              ts,
+              type: 'gauge_window',
+              gauges: [
+                { name: 'memory.rss_bytes', value: rssBytes },
+                { name: 'shard.guilds', shard, value: guilds },
+              ],
+            },
+            { id: uuidv7(), ts, type: 'sdk_health', queueDepth: 0, dropped: {}, failedFlushes: 0, internalErrors: {} },
+          ],
+          { source: { shards: [shard], instance } },
+        ),
+      );
+    // The process for shard 0 keeps running; the one for shard 1 is restarted within the minute.
+    await report('host:10', 0, minute + 5_000, 50e6, 30);
+    await report('host:11', 1, minute + 5_000, 100e6, 40);
+    await report('host:12', 1, minute + 40_000, 120e6, 41);
+
+    const window = { from: new Date(minute).toISOString(), to: new Date(minute + 60_000).toISOString() };
+    const points = async (name: string) =>
+      (await query(h.app, { kind: 'gauge', name, range: window, interval: 'minute' })).json().points;
+    expect(await points('memory.rss_bytes')).toEqual([expect.objectContaining({ value: 170e6 })]);
+    expect(await points('shard.guilds')).toEqual([expect.objectContaining({ value: 71 })]);
+    const { process } = (await query(h.app, { kind: 'reliability', range: range() })).json();
+    expect(process).toMatchObject({ 'memory.rss_bytes': 170e6 });
+  });
 });
 
 describe('servers and snapshots', () => {
@@ -489,6 +765,45 @@ describe('servers and snapshots', () => {
     expect(bRow.rows[0].left_at).toBeNull();
   });
 
+  it('keeps a server whose profile arrives before the last shard reports as an existing install', async () => {
+    await h.db.query('DELETE FROM guilds');
+    await h.db.query('DELETE FROM guild_events');
+    await h.db.query('UPDATE apps SET shard_count = NULL, baseline_done = false');
+    const a = snowflakeOnShard(0, 2, 31);
+    const b = snowflakeOnShard(1, 2, 32);
+    const snapshot = (shard: number, guilds: string[]) => ({
+      id: uuidv7(),
+      ts: Date.now(),
+      type: 'guild_snapshot',
+      shards: [shard],
+      shardCount: 2,
+      guilds,
+    });
+    const update = (guild: string) => ({
+      id: uuidv7(),
+      ts: Date.now(),
+      type: 'guild_update',
+      info: guildInfo(guild, { joinedAt: Date.now() - 3 * 86_400_000 }),
+    });
+
+    // A ShardingManager spawns shards seconds apart: shard 0 is ready and sends its profiles before shard 1 starts.
+    await ingest(h.app, envelope([snapshot(0, [a])], { source: { shards: [0], instance: 'host:1' } }));
+    await ingest(h.app, envelope([update(a)], { source: { shards: [0], instance: 'host:1' } }));
+    await ingest(h.app, envelope([snapshot(1, [b]), update(b)], { source: { shards: [1], instance: 'host:2' } }));
+
+    const rows = await h.db.query('SELECT guild_id::text AS id, baseline FROM guilds');
+    expect(rows.rows).toHaveLength(2);
+    expect(rows.rows).toEqual(
+      expect.arrayContaining([
+        { id: a, baseline: true },
+        { id: b, baseline: true },
+      ]),
+    );
+    const week = { from: new Date(Date.now() - 7 * 86_400_000).toISOString(), to: new Date().toISOString() };
+    const growth = (await query(h.app, { kind: 'growth', range: week })).json();
+    expect(growth.sizeAtInstall).toEqual([]);
+  });
+
   it('waits for every shard of a new layout before diffing (resharding)', async () => {
     const before = await h.db.query('SELECT count(*)::int AS n FROM guild_events');
     const x = snowflakeOnShard(0, 3, 9);
@@ -500,6 +815,64 @@ describe('servers and snapshots', () => {
     expect(after.rows[0].n).toBe(before.rows[0].n);
     const pending = await h.db.query('SELECT count(*)::int AS n FROM snapshot_pending');
     expect(pending.rows[0].n).toBe(1);
+  });
+
+  it("finishes a new shard layout without undoing the joins and leaves since each shard's snapshot", async () => {
+    await h.db.query('DELETE FROM guilds');
+    await h.db.query('DELETE FROM guild_events');
+    await h.db.query('DELETE FROM snapshot_pending');
+    await h.db.query('UPDATE apps SET shard_count = 2, baseline_done = true');
+    const leaving = snowflakeOnShard(0, 4, 41);
+    const joining = snowflakeOnShard(0, 4, 42);
+    await h.db.query('INSERT INTO guilds (app_id, guild_id, joined_at) VALUES ($1, $2, now())', [APP_ID, leaving]);
+    const at = Date.now() - 60_000;
+    const snapshot = (shard: number, guilds: string[], ts: number) => ({
+      id: uuidv7(ts),
+      ts,
+      type: 'guild_snapshot',
+      shards: [shard],
+      shardCount: 4,
+      guilds,
+    });
+
+    // Shard 0 of the new layout reports first; then a server joins and another leaves before the last shard reports.
+    await ingest(h.app, envelope([snapshot(0, [leaving], at)]));
+    await ingest(
+      h.app,
+      envelope([
+        {
+          id: uuidv7(at + 10_000),
+          ts: at + 10_000,
+          type: 'guild_join',
+          info: guildInfo(joining),
+          detectedAtStartup: false,
+        },
+        { id: uuidv7(at + 20_000), ts: at + 20_000, type: 'guild_leave', guild: leaving, detectedAtStartup: false },
+      ]),
+    );
+    await ingest(h.app, envelope([1, 2, 3].map((shard) => snapshot(shard, [], at + 30_000))));
+
+    const rows = await h.db.query('SELECT guild_id::text AS id, left_at IS NULL AS active FROM guilds');
+    expect(rows.rows).toHaveLength(2);
+    expect(rows.rows).toEqual(
+      expect.arrayContaining([
+        { id: leaving, active: false },
+        { id: joining, active: true },
+      ]),
+    );
+    const detected = await h.db.query('SELECT count(*)::int AS n FROM guild_events WHERE detected_at_startup');
+    expect(detected.rows[0].n).toBe(0);
+  });
+
+  it('ignores a snapshot of a shard outside the layout instead of counting it toward a new one', async () => {
+    await h.db.query('DELETE FROM snapshot_pending');
+    const res = await ingest(
+      h.app,
+      envelope([{ id: uuidv7(), ts: Date.now(), type: 'guild_snapshot', shards: [7], shardCount: 4, guilds: [] }]),
+    );
+    expect(res.json()).toMatchObject({ accepted: 1 });
+    const pending = await h.db.query('SELECT count(*)::int AS n FROM snapshot_pending');
+    expect(pending.rows[0].n).toBe(0);
   });
 
   it('records joins with a full profile and keeps Discord text as data', async () => {
@@ -520,6 +893,51 @@ describe('servers and snapshots', () => {
     expect(res.json(), res.body).toMatchObject({ accepted: 1 });
     const detail = await query(h.app, { kind: 'server', guild: id });
     expect(detail.json().profile).toMatchObject({ name, memberCount: 250, sizeAtJoin: 250 });
+  });
+});
+
+describe('database server settings', () => {
+  it('buckets days in UTC whatever time zone the database server uses', async () => {
+    const name = (await h.db.query<{ name: string }>('SELECT current_database() AS name')).rows[0]?.name;
+    await h.db.query(`ALTER DATABASE "${name}" SET timezone TO 'Pacific/Kiritimati'`);
+    const db = createPool(h.config.databaseUrl, 1);
+    try {
+      // 23:30 UTC is already the next day in Kiritimati (UTC+14).
+      const day = new Date(Date.now() - 2 * 86_400_000).toISOString().slice(0, 10);
+      const ts = new Date(`${day}T23:30:00Z`);
+      await db.query(
+        `INSERT INTO interactions (id, ts, app_id, env, kind, command, locale, user_hash, salt_period, premium, outcome)
+         VALUES ($1, $2, $3, 'production', 1, 'tz_probe', 'en-GB', $4, '2026-01', false, 0)`,
+        [uuidv7(ts.getTime()), ts, APP_ID, Buffer.alloc(16)],
+      );
+      await backfillRollups(db, new Date(`${day}T00:00:00Z`), new Date(ts.getTime() + 60_000));
+      const buckets = await db.query<{ bucket: Date }>(
+        "SELECT bucket FROM rollup_1d WHERE metric = 'interactions' AND dims->>'command' = 'tz_probe'",
+      );
+      expect(buckets.rows.map((r) => r.bucket.toISOString())).toEqual([`${day}T00:00:00.000Z`]);
+    } finally {
+      await h.db.query(`ALTER DATABASE "${name}" RESET timezone`);
+      await db.end();
+    }
+  });
+
+  it('creates the unique-user partition in every database the process uses', async () => {
+    await activeSalts(h.db, APP_ID, 'month');
+    await h.db.query('CREATE DATABASE shardlens_second');
+    const url = new URL(h.config.databaseUrl);
+    url.pathname = '/shardlens_second';
+    await migrate(url.toString());
+    const db = createPool(url.toString(), 1);
+    try {
+      await db.query('INSERT INTO apps (app_id) VALUES ($1)', [APP_ID]);
+      const [salt] = await activeSalts(db, APP_ID, 'month');
+      const partition = await db.query<{ t: string | null }>('SELECT to_regclass($1) AS t', [
+        `uniques_${periodIdent(salt?.period ?? '')}`,
+      ]);
+      expect(partition.rows[0]?.t).not.toBeNull();
+    } finally {
+      await db.end();
+    }
   });
 });
 
@@ -570,6 +988,33 @@ describe('retention', () => {
     );
     expect(left.rows.map((r) => r.instance)).toEqual(['alive:2']);
   });
+
+  it("reads raw rows for as long as the app's raw retention keeps them, no longer and no shorter", async () => {
+    const DAY = 86_400_000;
+    const old = Date.now() - 50 * DAY;
+    const day = new Date(old).toISOString().slice(0, 10);
+    await h.db.query("SELECT shardlens_ensure_daily_partitions(ARRAY['interactions'], $1::date, $1::date)", [day]);
+    // Ingest accepts 35 days back at most, but rows collected live stay for the whole retention.
+    await h.db.query(
+      `INSERT INTO interactions (id, ts, app_id, env, kind, command, locale, user_hash, salt_period, premium, outcome)
+       VALUES ($1, $2, $3, 'production', 1, 'archive', 'en-GB', $4, $5, false, 0)`,
+      [uuidv7(old), new Date(old), APP_ID, Buffer.alloc(16, 7), day.slice(0, 7)],
+    );
+    const range = { from: new Date(Date.now() - 60 * DAY).toISOString(), to: new Date().toISOString() };
+    const detail = async () => (await query(h.app, { kind: 'command', name: 'archive', range })).json();
+    try {
+      await h.db.query('UPDATE apps SET raw_retention_days = 90 WHERE app_id = $1', [APP_ID]);
+      const kept = await detail();
+      expect(kept.totals.runs).toBe(1);
+      expect(kept.from).toBe(range.from);
+      await h.db.query('UPDATE apps SET raw_retention_days = 7 WHERE app_id = $1', [APP_ID]);
+      const cut = await detail();
+      expect(Date.parse(cut.from)).toBeGreaterThan(Date.now() - 7 * DAY - 60_000);
+    } finally {
+      await h.db.query('UPDATE apps SET raw_retention_days = 35 WHERE app_id = $1', [APP_ID]);
+      await h.db.query(`DROP TABLE IF EXISTS "interactions_${day.replace(/-/g, '')}"`);
+    }
+  });
 });
 
 describe('dashboard login', () => {
@@ -601,6 +1046,85 @@ describe('dashboard login', () => {
       payload: { kind: 'overview' },
     });
     expect(q.statusCode).toBe(200);
+  });
+
+  it('signs in with Discord: state checked, PKCE sent, the secret to Discord only, no token kept', async () => {
+    const admin = '334455667788990022';
+    const app = await buildServer({
+      db: h.db,
+      live: h.live,
+      keys: new KeyStore(h.db),
+      config: { ...h.config, discord: { clientId: APP_ID, clientSecret: 'shh-client-secret' }, extraAdmins: [admin] },
+    });
+    const calls: { url: string; init: RequestInit | undefined }[] = [];
+    let tokenAnswer = () => Response.json({ access_token: 'discord-access-token', token_type: 'Bearer' });
+    const discord = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (url === 'https://discord.com/api/oauth2/token') return tokenAnswer();
+      if (url === 'https://discord.com/api/v10/users/@me') return Response.json({ id: admin, username: 'someone' });
+      throw new Error(`unexpected request to ${url}`);
+    });
+    try {
+      const start = await app.inject({ method: 'GET', url: '/auth/discord' });
+      expect(start.statusCode).toBe(302);
+      const authorize = new URL(String(start.headers.location));
+      expect(authorize.origin + authorize.pathname).toBe('https://discord.com/oauth2/authorize');
+      const asked = Object.fromEntries(authorize.searchParams);
+      expect(asked).toMatchObject({
+        response_type: 'code',
+        client_id: APP_ID,
+        redirect_uri: 'https://stats.example.com/auth/discord/callback',
+        scope: 'identify',
+        code_challenge_method: 'S256',
+      });
+      expect(asked.state).toMatch(/^[\w-]{43}$/);
+      const cookies = Object.fromEntries(start.cookies.map((c) => [c.name, c.value]));
+      const callback = (state: string) =>
+        app.inject({ method: 'GET', url: `/auth/discord/callback?code=the-code&state=${state}`, cookies });
+
+      // A callback with a state this browser was never given goes nowhere near Discord.
+      const forged = await callback('a'.repeat(43));
+      expect(forged.headers.location).toBe('/login?error=invalid_state');
+      expect(calls).toEqual([]);
+
+      const done = await callback(asked.state as string);
+      expect(done.statusCode).toBe(302);
+      expect(done.headers.location).toBe('/');
+      const exchange = calls.find((c) => c.url === 'https://discord.com/api/oauth2/token');
+      const sent = new URLSearchParams(exchange?.init?.body as URLSearchParams);
+      expect(Object.fromEntries(sent)).toMatchObject({
+        grant_type: 'authorization_code',
+        code: 'the-code',
+        redirect_uri: 'https://stats.example.com/auth/discord/callback',
+      });
+      // PKCE: the verifier sent now hashes to the challenge sent at the start.
+      const verifier = sent.get('code_verifier') as string;
+      expect(createHash('sha256').update(verifier).digest('base64url')).toBe(asked.code_challenge);
+      const headers = new Headers(exchange?.init?.headers);
+      expect(headers.get('authorization')).toBe(
+        `Basic ${Buffer.from(`${APP_ID}:shh-client-secret`).toString('base64')}`,
+      );
+      expect(exchange?.init?.redirect).toBe('error');
+      const profile = calls.find((c) => c.url.endsWith('/users/@me'));
+      expect(new Headers(profile?.init?.headers).get('authorization')).toBe('Bearer discord-access-token');
+
+      const session = done.cookies.find((c) => c.name === 'shardlens_session');
+      expect(session).toMatchObject({ httpOnly: true, secure: true, sameSite: 'Lax' });
+      const me = await app.inject({ method: 'GET', url: '/auth/me', cookies: { shardlens_session: session!.value } });
+      expect(me.json()).toMatchObject({ authenticated: true, method: 'discord' });
+      const stored = await h.db.query('SELECT * FROM sessions');
+      expect(JSON.stringify(stored.rows)).not.toContain('discord-access-token');
+
+      // Discord refuses the code (used twice, or expired): no session, and only the error's name is known.
+      tokenAnswer = () => Response.json({ error: 'invalid_grant' }, { status: 400 });
+      const refused = await callback(asked.state as string);
+      expect(refused.headers.location).toBe('/login?error=discord_error');
+      expect(refused.cookies.find((c) => c.name === 'shardlens_session')).toBeUndefined();
+    } finally {
+      discord.mockRestore();
+      await app.close();
+    }
   });
 
   it('sends a strict Content-Security-Policy', async () => {
@@ -638,6 +1162,31 @@ describe('abuse limits', () => {
     expect(limited.headers['retry-after']).toBeDefined();
     expect((await get('/v1/meta', noisy)).statusCode).toBe(429);
     expect((await get('/healthz', '203.0.113.8')).statusCode).toBe(200);
+  });
+
+  it('counts a visitor behind one proxy by the address the proxy saw, not one the visitor wrote', async () => {
+    const behindProxy = await buildServer({
+      db: h.db,
+      live: h.live,
+      keys: new KeyStore(h.db),
+      config: { ...h.config, trustProxy: 1 },
+    });
+    try {
+      // A proxy that adds to X-Forwarded-For: the left-most entries are whatever the visitor sent.
+      const attempt = (i: number) =>
+        behindProxy.inject({
+          method: 'POST',
+          url: '/auth/read-key',
+          remoteAddress: '10.0.0.2',
+          headers: { 'x-forwarded-for': `198.51.100.${i}, 192.0.2.44`, 'x-shardlens-csrf': '1' },
+          payload: { key: `slk_read_${'Z'.repeat(43)}` },
+        });
+      const statuses: number[] = [];
+      for (let i = 0; i < 25; i++) statuses.push((await attempt(i)).statusCode);
+      expect(statuses).toContain(429);
+    } finally {
+      await behindProxy.close();
+    }
   });
 
   it('keeps URLs, and so anything pasted into one, out of the logs unless it runs at debug level', async () => {
@@ -755,6 +1304,9 @@ describe('dashboard files', () => {
   it('serves the dashboard for its pages, and 404 for a file that does not exist', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'shardlens-dashboard-'));
     writeFileSync(join(dir, 'index.html'), '<!doctype html><title>Shardlens</title>');
+    mkdirSync(join(dir, 'assets'));
+    writeFileSync(join(dir, 'assets', 'index-abc123.js'), 'console.log(1)');
+    writeFileSync(join(dir, 'favicon.svg'), '<svg/>');
     const app = await buildServer({
       db: h.db,
       live: h.live,
@@ -765,6 +1317,21 @@ describe('dashboard files', () => {
       const page = await app.inject({ method: 'GET', url: '/commands/ticket' });
       expect(page.statusCode).toBe(200);
       expect(page.headers['content-type']).toContain('text/html');
+      // A command named with a dot is a page, not a file, when the link is opened or the page reloaded.
+      for (const url of ['/commands/say.hello', '/commands/Info%20v2.0', '/commands/stats.json']) {
+        const res = await app.inject({ method: 'GET', url });
+        expect(res.statusCode, url).toBe(200);
+        expect(res.headers['content-type'], url).toContain('text/html');
+      }
+      // After an upgrade the page must not come from a cache: it names this build's scripts.
+      for (const url of ['/', '/commands/ticket', '/index.html']) {
+        expect((await app.inject({ method: 'GET', url })).headers['cache-control'], url).toBe('no-cache');
+      }
+      const asset = await app.inject({ method: 'GET', url: '/assets/index-abc123.js' });
+      expect(asset.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+      expect((await app.inject({ method: 'GET', url: '/favicon.svg' })).headers['cache-control']).toBe(
+        'public, max-age=3600',
+      );
       // A script from a previous build must not be answered with HTML.
       for (const url of ['/assets/index-old.js', '/favicon.ico', '/v1/no-such-route']) {
         const res = await app.inject({ method: 'GET', url });

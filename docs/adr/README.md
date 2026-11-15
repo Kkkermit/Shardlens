@@ -23,6 +23,8 @@ one rather than editing history.
 | [0015](0015-reports-and-identified-users.md)        | Reports in Discord, and what identified mode may collect          | Accepted |
 | [0016](0016-corrections-from-simulated-installs.md) | Corrections from simulated installs                               | Accepted |
 | [0017](0017-version-1.md)                           | Version 1.0 and what it promises                                  | Accepted |
+| [0018](0018-message-commands.md)                    | Record message (prefix) commands the bot reports                  | Accepted |
+| [0019](0019-event-sinks.md)                         | Copy events into the owner's own database through sinks           | Accepted |
 
 Early records mention "the spec" and milestones M0 to M4: the private build specification Shardlens was first written
 from. It is not part of this repository; these records and the docs site are the public account.

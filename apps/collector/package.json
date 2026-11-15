@@ -29,9 +29,15 @@
     },
     "./package.json": "./package.json"
   },
+  "typesVersions": {
+    "*": {
+      "embedded": [
+        "./dist/embedded.d.ts"
+      ]
+    }
+  },
   "files": [
     "dist",
-    "!dist/**/*.map",
     "migrations",
     "public"
   ],
@@ -57,8 +63,9 @@
     "@fastify/static": "^10.1.11",
     "@shardlens/core": "workspace:*",
     "@shardlens/schema": "workspace:*",
-    "arctic": "^3.7.0",
     "fastify": "^5.12.8",
+    "mongodb": "^7.9.0",
+    "mysql2": "^3.24.6",
     "pg": "^8.23.1",
     "zod": "catalog:"
   },
@@ -74,6 +81,9 @@
     "@electric-sql/pglite": "^0.5.16",
     "@shardlens/dashboard": "workspace:*",
     "@testcontainers/clickhouse": "^12.2.1",
+    "@testcontainers/mariadb": "^12.2.1",
+    "@testcontainers/mongodb": "^12.2.1",
+    "@testcontainers/mysql": "^12.2.1",
     "@testcontainers/postgresql": "^12.2.1",
     "@types/node": "catalog:",
     "@types/pg": "^8.23.1",

@@ -2,7 +2,7 @@ import { Snowflake } from '@shardlens/schema';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { Db } from '../db.js';
-import { parseUserHash } from '../ingest/codes.js';
+import { KIND_NAME, OUTCOME_NAME, parseUserHash } from '../ingest/codes.js';
 import { bearerToken } from '../security/auth.js';
 import { auditCipher } from '../security/crypto.js';
 import { csvRow } from '../security/csv.js';
@@ -26,14 +26,26 @@ export const AuditLogFilters = z
   .object({
     from: z.iso.datetime({ offset: true }).optional(),
     to: z.iso.datetime({ offset: true }).optional(),
-    /** Paging: `nextBefore` from the previous page. */
-    before: z.iso.datetime({ offset: true }).optional(),
+    /** Paging: `nextBefore` from the previous page (a time, then `~` and the last row's ID), or a time. */
+    before: z
+      .union([z.iso.datetime({ offset: true }), z.string().regex(/^[\dT:.+-]{20,35}Z?~[0-9a-f-]{36}$/i)])
+      .optional(),
     command: z.string().max(32).optional(),
     guild: Snowflake.optional(),
     user: Snowflake.optional(),
     limit: z.coerce.number().int().min(1).max(200).default(50),
   })
   .strict();
+
+/** `null` for a value this key can't read (written under another audit key). */
+function decryptOrNull(cipher: ReturnType<typeof auditCipher> | undefined, blob: Buffer | null): string | null {
+  if (!blob || !cipher) return null;
+  try {
+    return cipher.decrypt(blob);
+  } catch {
+    return null;
+  }
+}
 
 async function appMode(db: Db, appId: string): Promise<string | undefined> {
   const res = await db.query<{ mode: string }>('SELECT mode FROM apps WHERE app_id = $1', [appId]);
@@ -85,8 +97,10 @@ async function eraseUser(
       ]);
       erased += res.rowCount ?? 0;
     }
-    // The ClickHouse copy too. If it fails the request fails, so the caller retries (deletes are idempotent).
+    // The ClickHouse and sink copies too. If one fails the request fails, so the caller retries (deletes are
+    // idempotent). Copies aren't added to `erased`, which counts the collector's own rows.
     await deps.analytics?.erase(appId, hashes);
+    await deps.sink?.erase(appId, hashes);
   }
   if (input.userId && deps.config.auditKey) {
     const cipher = auditCipher(deps.config.auditKey);
@@ -100,13 +114,7 @@ async function eraseUser(
       [appId],
     );
     for (const w of installers.rows) {
-      let actor: string | undefined;
-      try {
-        actor = cipher.decrypt(w.actor_enc);
-      } catch {
-        actor = undefined;
-      }
-      if (actor === input.userId) {
+      if (decryptOrNull(cipher, w.actor_enc) === input.userId) {
         await db.query('UPDATE webhook_events SET actor_enc = NULL WHERE id = $1 AND ts = $2', [w.id, w.ts]);
         erased++;
       }
@@ -115,21 +123,9 @@ async function eraseUser(
   return erased;
 }
 
-const KINDS = [
-  '',
-  'chat_input',
-  'user_context',
-  'message_context',
-  'primary_entry_point',
-  'button',
-  'select',
-  'modal_submit',
-  'autocomplete',
-];
-const OUTCOMES = ['ok', 'error', 'timeout', 'no_response'];
-
 export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<void> {
   const cipher = deps.config.auditKey ? auditCipher(deps.config.auditKey) : undefined;
+  const decrypt = (blob: Buffer | null) => decryptOrNull(cipher, blob);
 
   app.post('/v1/privacy/erase', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (req, reply) => {
     const body = EraseBody.parse(req.body ?? {});
@@ -159,7 +155,6 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
     return { erased };
   });
 
-  // Audit mode: who ran what
   const requireAudit = async (req: FastifyRequest, reply: FastifyReply) => {
     const admin = await requireAdmin(deps, req, reply);
     if (!admin) return undefined;
@@ -179,7 +174,14 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
     };
     if (f.from) add('a.ts >= ?', f.from);
     if (f.to) add('a.ts < ?', f.to);
-    if (f.before) add('a.ts < ?', f.before);
+    if (f.before) {
+      // The row ID breaks ties, so rows sharing the last time on a page aren't skipped.
+      const [at, id] = f.before.split('~');
+      if (id) {
+        params.push(at, id);
+        where.push(`(a.ts, a.interaction_id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`);
+      } else add('a.ts < ?', at);
+    }
     if (f.command) add('a.command = ?', f.command);
     if (f.guild) add('a.guild_id = ?', f.guild);
     if (f.user && cipher) add('a.actor_lookup = ?', cipher.lookupHash(f.user));
@@ -202,34 +204,24 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
               a.outcome, a.ack_ms, a.actor_enc, a.names_enc
          FROM audit_log a LEFT JOIN guilds g ON g.app_id = a.app_id AND g.guild_id = a.guild_id
         WHERE ${where.join(' AND ')}
-        ORDER BY a.ts DESC LIMIT $${params.length}`,
+        ORDER BY a.ts DESC, a.interaction_id DESC LIMIT $${params.length}`,
       params,
     );
     return res.rows.map((r) => {
-      let profile: { username?: string; avatar?: string } = {};
-      try {
-        if (r.names_enc && cipher) profile = JSON.parse(cipher.decrypt(r.names_enc)) as typeof profile;
-      } catch {
-        profile = {};
-      }
-      let userId: string | null = null;
-      try {
-        userId = cipher ? cipher.decrypt(r.actor_enc) : null;
-      } catch {
-        userId = null;
-      }
+      const names = decrypt(r.names_enc);
+      const profile = (names ? JSON.parse(names) : {}) as { username?: string; avatar?: string };
       return {
         interactionId: r.interaction_id,
         ts: r.ts,
         guildId: r.guild_id,
         guildName: r.guild_name,
-        kind: KINDS[r.kind] ?? String(r.kind),
+        kind: KIND_NAME[r.kind] ?? String(r.kind),
         command: r.command,
         sub: r.sub,
         customId: r.custom_id,
-        outcome: OUTCOMES[r.outcome] ?? String(r.outcome),
+        outcome: OUTCOME_NAME[r.outcome] ?? String(r.outcome),
         ackMs: r.ack_ms,
-        userId,
+        userId: decrypt(r.actor_enc),
         username: profile.username ?? null,
         avatar: profile.avatar ?? null,
       };
@@ -248,7 +240,8 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
       user: f.user && cipher ? cipher.lookupHash(f.user).toString('hex') : null,
       rows: rows.length,
     });
-    return { rows, nextBefore: rows.length === f.limit ? rows.at(-1)?.ts : null };
+    const last = rows.length === f.limit ? rows.at(-1) : undefined;
+    return { rows, nextBefore: last ? `${last.ts.toISOString()}~${last.interactionId}` : null };
   });
 
   app.get('/v1/audit/top-users', async (req, reply) => {
@@ -264,15 +257,7 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
     await logAccess(deps.db, admin.appId, admin.userId, 'top_users', { window });
     return {
       window,
-      rows: res.rows.map((r) => {
-        let userId: string | null = null;
-        try {
-          userId = cipher?.decrypt(r.actor_enc) ?? null;
-        } catch {
-          userId = null;
-        }
-        return { userId, runs: r.runs };
-      }),
+      rows: res.rows.map((r) => ({ userId: decrypt(r.actor_enc), runs: r.runs })),
     };
   });
 

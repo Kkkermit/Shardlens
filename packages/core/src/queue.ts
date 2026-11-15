@@ -37,18 +37,15 @@ export class BoundedQueue<T> {
     return this.#lanes[priority]!.length;
   }
 
-  /** Lowest non-empty lane whose priority is at or below `max` (or strictly below, when `strict`). */
-  #evictable(max: Priority, strict: boolean): number {
-    for (let p = 0; p < PRIORITIES; p++) {
-      if (strict ? p >= max : p > max) return -1;
-      if (this.#lanes[p]!.length > 0) return p;
-    }
+  /** Lowest non-empty lane whose priority is at or below `max`. */
+  #evictable(max: Priority): number {
+    for (let p = 0; p <= max; p++) if (this.#lanes[p]!.length > 0) return p;
     return -1;
   }
 
   push(item: T, priority: Priority): void {
     if (this.#size >= this.capacity) {
-      const lane = this.#evictable(priority, false);
+      const lane = this.#evictable(priority);
       if (lane === -1) {
         this.dropped[priority]!++;
         return;
@@ -73,22 +70,44 @@ export class BoundedQueue<T> {
     return out;
   }
 
-  /** Puts a failed batch back at the front of its lanes. If the queue filled up meanwhile, the eviction rule applies. */
+  /**
+   * Puts a failed batch back at the front of its lanes. If the queue filled up meanwhile, the eviction rule applies:
+   * lower lanes give way, and within a lane the batch's oldest items are dropped first. One splice per lane, so a large
+   * queue doesn't pay for every item on every retry.
+   */
   requeue(items: readonly QueuedItem<T>[]): void {
-    for (let i = items.length - 1; i >= 0; i--) {
-      const { item, priority } = items[i]!;
-      if (this.#size >= this.capacity) {
-        const lane = this.#evictable(priority, true);
-        if (lane === -1) {
-          this.dropped[priority]!++;
-          continue;
-        }
-        this.#lanes[lane]!.shift();
-        this.dropped[lane]!++;
-        this.#size--;
+    const byLane: T[][] = [[], [], [], []];
+    for (const { item, priority } of items) byLane[priority]!.push(item);
+    for (let p = PRIORITIES - 1; p >= 0; p--) {
+      const group = byLane[p]!;
+      if (group.length === 0) continue;
+      let room = this.capacity - this.#size;
+      for (let lower = 0; lower < p && room < group.length; lower++) {
+        const lane = this.#lanes[lower]!;
+        const evicted = Math.min(lane.length, group.length - room);
+        if (evicted === 0) continue;
+        lane.splice(0, evicted);
+        this.dropped[lower]! += evicted;
+        this.#size -= evicted;
+        room += evicted;
       }
-      this.#lanes[priority]!.unshift(item);
-      this.#size++;
+      const kept = room >= group.length ? group : group.slice(group.length - Math.max(0, room));
+      this.dropped[p]! += group.length - kept.length;
+      this.#lanes[p] = kept.concat(this.#lanes[p]!);
+      this.#size += kept.length;
     }
+  }
+
+  /** Removes every queued item `match` accepts (a user's events, when they ask for erasure). Returns how many. */
+  removeWhere(match: (item: T) => boolean): number {
+    let removed = 0;
+    for (let p = 0; p < PRIORITIES; p++) {
+      const lane = this.#lanes[p]!;
+      const keep = lane.filter((item) => !match(item));
+      removed += lane.length - keep.length;
+      this.#lanes[p] = keep;
+    }
+    this.#size -= removed;
+    return removed;
   }
 }

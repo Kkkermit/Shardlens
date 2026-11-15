@@ -2,6 +2,10 @@ name = "shardlens-worker-example"
 main = "src/index.ts"
 compatibility_date = "2026-10-01"
 
-# Set secrets with: npx wrangler secret put DISCORD_PUBLIC_KEY (and SHARDLENS_INGEST_KEY)
 [vars]
 SHARDLENS_URL = "https://stats.example.com"
+
+# Secrets are not kept here. Set them with:
+#   npx wrangler secret put DISCORD_PUBLIC_KEY
+#   npx wrangler secret put SHARDLENS_INGEST_KEY
+# For `npx wrangler dev`, put the same two names in a .dev.vars file (see .dev.vars.example).

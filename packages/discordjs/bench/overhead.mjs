@@ -156,7 +156,6 @@ const cpuPerInteraction = samples[Math.floor(ROUNDS / 2)];
 await lens.shutdown({ timeoutMs: 10 });
 client.removeAllListeners();
 
-// Memory at a full 10,000-event buffer
 globalThis.gc?.();
 const heapBefore = process.memoryUsage().heapUsed;
 const mem = setup(QUEUE, downFetch);

@@ -29,6 +29,10 @@ finished or a purchase flow started, call `track()`.
 Without the `declare module` block, `track()` accepts any valid name and any properties. Once you register events,
 TypeScript checks every call: unknown names and wrong property types are compile errors.
 
+Declare them on `@shardlens/discordjs`, the package your bot depends on. Declaring them on `@shardlens/core`, where the
+interface lives, works too, but only where your package manager lets your code import a dependency of a dependency:
+pnpm doesn't, and TypeScript then reports that the module can't be found.
+
 ## The Events page
 
 The dashboard's **Events** page lists every custom event with its count and the number of people, breaks each event

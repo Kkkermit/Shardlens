@@ -1,0 +1,11 @@
+{
+  "name": "@shardlens/sim",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Pre-release test: the published packages, packed and npm-installed into four bots, run against a fake Discord.",
+  "license": "MIT",
+  "type": "module",
+  "devDependencies": {
+    "ws": "^8.22.2"
+  }
+}

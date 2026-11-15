@@ -1,20 +1,21 @@
 import {
   ApplicationCommandOptionType,
   ApplicationCommandType,
-  ApplicationIntegrationType,
   type ChatInputCommandInteraction,
-  InteractionContextType,
   MessageFlags,
   type RESTPostAPIChatInputApplicationCommandsJSONBody,
 } from 'discord.js';
 import type { Shardlens } from './index.js';
 
+/** Options for {@link createPrivacyCommand}. */
 export interface PrivacyCommandOptions {
+  /** The command's name. Default `privacy`. */
   name?: string | undefined;
   /** Link to your bot's privacy policy, shown in `/privacy info`. */
   policyUrl?: string | undefined;
 }
 
+/** What {@link createPrivacyCommand} returns. */
 export interface PrivacyCommand {
   /** Command definition to register with Discord (`rest.put(Routes.applicationCommands(id), { body: [data] })`). */
   data: RESTPostAPIChatInputApplicationCommandsJSONBody;
@@ -24,12 +25,12 @@ export interface PrivacyCommand {
 
 /**
  * A ready-made `/privacy` command: `info` explains what is collected, `optout` and `optin` stop and resume collection
- * for the user, `erase` deletes what was stored about them and opts them out. Replies are ephemeral. Opt-outs live in
+ * for the user, `erase` deletes what `forgetUser()` can reach of them and opts them out. Replies are ephemeral. Opt-outs live in
  * memory: persist them with `onOptOutChange` and pass them back with `optedOut`.
  */
 export function createPrivacyCommand(lens: Shardlens, options: PrivacyCommandOptions = {}): PrivacyCommand {
   const name = options.name ?? 'privacy';
-  // Plain command JSON rather than a builder: discord.js 15 no longer re-exports the builders.
+  // Plain command JSON rather than a builder: discord.js 15 doesn't re-export the builders.
   const sub = (subName: string, description: string) => ({
     type: ApplicationCommandOptionType.Subcommand as const,
     name: subName,
@@ -39,8 +40,10 @@ export function createPrivacyCommand(lens: Shardlens, options: PrivacyCommandOpt
     type: ApplicationCommandType.ChatInput,
     name,
     description: 'How this bot handles your data',
-    contexts: [InteractionContextType.Guild, InteractionContextType.BotDM, InteractionContextType.PrivateChannel],
-    integration_types: [ApplicationIntegrationType.GuildInstall, ApplicationIntegrationType.UserInstall],
+    // Numbers, not `InteractionContextType` and `ApplicationIntegrationType`: some discord.js 14 releases don't export
+    // those enums, and importing a missing name stops an ES module from loading.
+    contexts: [0, 1, 2], // server, DM with the bot, other private channel
+    integration_types: [0, 1], // server install, user install
     options: [
       sub('info', 'What this bot records about you'),
       sub('optout', 'Stop recording your usage of this bot'),
@@ -59,23 +62,25 @@ export function createPrivacyCommand(lens: Shardlens, options: PrivacyCommandOpt
     async handle(i) {
       if (i.commandName !== name) return false;
       try {
-        const sub = i.options.getSubcommand(false);
+        const subcommand = i.options.getSubcommand(false);
         const userId = i.user.id;
-        if (sub === 'optout') {
+        if (subcommand === 'optout') {
           lens.optOut(userId);
           await reply(i, `Done. Your use of this bot is no longer recorded. Use \`/${name} optin\` to change this.`);
-        } else if (sub === 'optin') {
+        } else if (subcommand === 'optin') {
           lens.optIn(userId);
           await reply(i, 'Thanks. Usage recording is back on for you.');
-        } else if (sub === 'erase') {
+        } else if (subcommand === 'erase') {
           // Opt out first, so this command itself is not recorded after the erasure it asks for.
           lens.optOut(userId);
           await i.deferReply({ flags: MessageFlags.Ephemeral });
           const result = await lens.forgetUser(userId);
+          // Not "everything was deleted": with a daily salt, the days before yesterday are beyond the hashes the bot
+          // can compute, and stay until they expire.
           await reply(
             i,
             result
-              ? 'Your recorded usage has been deleted, and you are opted out of further recording.'
+              ? 'The recorded usage this bot can link to you has been deleted, and you are opted out of further recording. Anything older can no longer be linked to you by this bot and expires on its own.'
               : 'You are opted out of further recording. Deleting past records failed; please try again later or contact the bot owner.',
           );
         } else {

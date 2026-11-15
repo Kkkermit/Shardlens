@@ -16,31 +16,104 @@ use an exporter **instead of** a collector (leave out `endpoint` and `apiKey`) o
 
 <Tabs syncKey="exporter">
   <TabItem label="Prometheus">
-    <Tabs syncKey="pkg">
-      <TabItem label="pnpm">`pnpm add @shardlens/discordjs @shardlens/exporter-prometheus prom-client`</TabItem>
-      <TabItem label="npm">`npm install @shardlens/discordjs @shardlens/exporter-prometheus prom-client`</TabItem>
-    </Tabs>
-    <Code code={prometheus} lang="ts" title="bot.ts" />
-    Then add `127.0.0.1:9464` as a scrape target. If your bot already serves `/metrics`, register Shardlens's
-    metrics on your own registry instead:
-    <Code code={registry} lang="ts" title="metrics.ts" />
+
+<Tabs syncKey="pkg">
+  <TabItem label="pnpm">`pnpm add @shardlens/discordjs @shardlens/exporter-prometheus prom-client`</TabItem>
+  <TabItem label="npm">`npm install @shardlens/discordjs @shardlens/exporter-prometheus prom-client`</TabItem>
+</Tabs>
+
+<Code code={prometheus} lang="ts" title="bot.ts" />
+
+Then add the bot as a scrape target:
+
+```yaml title="prometheus.yml"
+scrape_configs:
+  - job_name: discord-bot
+    static_configs:
+      - targets: ['127.0.0.1:9464']
+```
+
+- `serve()` listens on `127.0.0.1`. When Prometheus runs in another container or on another machine, pass
+  `host: '0.0.0.0'` and keep the port off the public internet (a firewall, or a private Docker network).
+- `serve()` never throws into your bot. If the port is taken, it logs a warning and tries again every 10 seconds, so
+  a restart that overlaps with the old process still ends up serving.
+- Each process has its own metrics. With discord.js's `ShardingManager` the snippet gives each shard process its own
+  port (9464, 9465…); with discord-hybrid-sharding use `9464 + ClusterClient.getInfo().CLUSTER`. Scrape every port:
+  the dashboard adds them up.
+
+If your bot already serves `/metrics`, register Shardlens's metrics on your own registry instead:
+
+<Code code={registry} lang="ts" title="metrics.ts" />
+
+<Aside type="note" title="prom-client or @prometheus-io/client">
+  `prom-client` is deprecated in favour of `@prometheus-io/client`, its successor from the Prometheus project. The
+  exporter works with `prom-client` 15 and `@prometheus-io/client` 0.16. To use the new one, install it under the name
+  the exporter imports: `npm install prom-client@npm:@prometheus-io/client`.
+</Aside>
+
   </TabItem>
   <TabItem label="OpenTelemetry">
-    <Tabs syncKey="pkg">
-      <TabItem label="pnpm">`pnpm add @shardlens/discordjs @shardlens/exporter-otel @opentelemetry/api`</TabItem>
-      <TabItem label="npm">`npm install @shardlens/discordjs @shardlens/exporter-otel @opentelemetry/api`</TabItem>
-    </Tabs>
-    <Code code={otel} lang="ts" title="bot.ts" />
-    The exporter only uses the OpenTelemetry API. Set up the SDK (a `MeterProvider` and a metric reader) the way
-    you already do; pass `meter` to use a specific meter instead of the global one.
+
+<Tabs syncKey="pkg">
+  <TabItem label="pnpm">`pnpm add @shardlens/discordjs @shardlens/exporter-otel @opentelemetry/api`</TabItem>
+  <TabItem label="npm">`npm install @shardlens/discordjs @shardlens/exporter-otel @opentelemetry/api`</TabItem>
+</Tabs>
+
+<Code code={otel} lang="ts" title="bot.ts" />
+
+The exporter only uses the OpenTelemetry API. It records through the global `MeterProvider` (also one your SDK
+registers after the exporter was created), or through the `meter` you pass. If you don't have an SDK set up yet,
+this sends the metrics over OTLP to the address in `OTEL_EXPORTER_OTLP_ENDPOINT` (default `http://localhost:4318`):
+
+```sh
+npm install @opentelemetry/sdk-metrics @opentelemetry/exporter-metrics-otlp-http
+```
+
+```ts title="telemetry.ts"
+import { metrics } from '@opentelemetry/api';
+import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http';
+import { MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
+
+const reader = new PeriodicExportingMetricReader({ exporter: new OTLPMetricExporter(), exportIntervalMillis: 15_000 });
+metrics.setGlobalMeterProvider(new MeterProvider({ readers: [reader] }));
+```
+
+An OpenTelemetry Collector that receives it and exposes it to Prometheus:
+
+```yaml title="otel-collector.yaml"
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      exporters: [prometheus]
+```
+
+Prometheus then scrapes the collector on port 8889. Prometheus 3 can also receive OTLP itself: start it with
+`--web.enable-otlp-receiver` and set `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` to
+`http://prometheus:9090/api/v1/otlp/v1/metrics`; the `job` label is then your service name. Either way the names are
+the ones in the table below, so the [Grafana dashboard](../../guides/grafana/) works with either exporter.
+
   </TabItem>
 </Tabs>
 
 ## What is exported
 
-Both exporters register the same instruments, from one shared definition in `@shardlens/core`:
+Both exporters register the same instruments, from one shared definition in `@shardlens/core`. OpenTelemetry
+instruments have UCUM units (`s`, `By`, and `{interaction}`, `{server}` and so on for counts), which Prometheus
+translators turn into the Prometheus names.
 
 <ExporterMetricsTable />
+
+Gauges appear once they have a value: process gauges after 30 seconds, ping once a shard has had a heartbeat, the
+identify budget on the process that runs shard 0.
 
 ## Privacy and cardinality
 
@@ -48,7 +121,11 @@ Both exporters register the same instruments, from one shared definition in `@sh
   identities removed, and no metric is labelled by user or server ID. That keeps your metrics anonymous and their
   cardinality bounded.
 - Labels are command names, bucketed REST routes (`/channels/:id/messages`), statuses, shard numbers and the custom
-  event names you chose.
+  event names you chose. Custom IDs of buttons, menus and modals are never a label: components count under the command
+  that sent their message.
+- A label that would take more than 1,000 values in one metric, such as custom event names built from IDs, counts the
+  rest as `(other)` in the Prometheus exporter. OpenTelemetry SDKs have their own limit (2,000 attribute sets per
+  metric by default).
 - Counts are exact: exporters see every event before any `sampleRate` sampling.
 
 ## What you don't get without a collector

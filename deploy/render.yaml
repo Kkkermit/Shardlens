@@ -20,7 +20,7 @@ services:
       - key: SHARDLENS_SETTINGS_KEY
         generateValue: true
       - key: SHARDLENS_TRUST_PROXY
-        value: 'true'
+        value: '1'
       - key: SHARDLENS_PUBLIC_URL
         sync: false
       - key: SHARDLENS_APP_ID

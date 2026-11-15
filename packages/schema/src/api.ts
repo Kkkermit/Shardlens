@@ -1,14 +1,21 @@
 /**
- * Collector replies the SDK depends on. The collector builds them with these schemas; the SDK (which has no zod at
- * runtime) checks their shape by hand, so keep them small and stable.
+ * Collector replies the SDK depends on. The collector's OpenAPI document is generated from these schemas; the SDK
+ * (which has no zod at runtime) checks their shape by hand, so keep them small and stable.
  */
 import { z } from 'zod';
-import { Mode, Snowflake } from './wire.js';
+import { MAX_EVENT_WEIGHT, Mode, Snowflake } from './wire.js';
 
+/** How long one salt lives, and so how long a user hash stays the same. */
 export const SaltPeriod = z.enum(['day', 'week', 'month']);
 
 /** 32 random bytes, base64url without padding. */
 export const SaltB64 = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
+
+/** A sample rate from 1 / `MAX_EVENT_WEIGHT` to 1: kept events at any lower rate would carry a weight the wire refuses. */
+const SampleRate = z
+  .number()
+  .min(1 / MAX_EVENT_WEIGHT)
+  .max(1);
 
 /** `GET /v1/config` (ingest key): salts for the current and previous period, sampling and mode. */
 export const ConfigResponse = z.object({
@@ -18,8 +25,8 @@ export const ConfigResponse = z.object({
   saltPeriod: SaltPeriod,
   /** Current period first. Destroyed salts are never served. */
   salts: z.array(z.object({ period: z.string().max(16), salt: SaltB64 })).max(2),
-  /** Per event type sample rate in (0, 1]. Missing types are kept at 1. */
-  sampling: z.record(z.string().max(32), z.number().gt(0).max(1)).default({}),
+  /** Per event type sample rate. Missing types are kept at 1. */
+  sampling: z.record(z.string().max(32), SampleRate).default({}),
   serverTime: z.iso.datetime(),
 });
 
@@ -30,6 +37,7 @@ export const IngestAccepted = z.object({
   rejected: z.array(z.object({ index: z.number().int().nonnegative(), reason: z.string().max(64) })).default([]),
 });
 
+/** The error reply of every collector route: a short code, an optional message and, on ingest, the refused events. */
 export const ErrorResponse = z.object({
   error: z.string().max(64),
   message: z.string().max(500).optional(),

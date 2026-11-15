@@ -35,11 +35,12 @@ A small VPS (1 vCPU, 1 GB RAM) is enough for most bots.
      - docker-compose.yml
      - Caddyfile
      - .env secrets and keys, generated; never commit it
+     - bot.env the bot's two settings, to copy to where the bot runs
    </FileTree>
 
-   `init` refuses to overwrite an existing `.env` unless you pass `--force`. You can also copy `deploy/` from the
-   repository and fill in `.env.example` yourself; every variable is described in the
-   [environment reference](../../reference/environment/).
+   `init` refuses to overwrite any of these files unless you pass `--force`, which replaces the others and updates an
+   existing `.env` in place, keeping its secrets. You can also copy `deploy/` from the repository and fill in
+   `.env.example` yourself; every variable is described in the [environment reference](../../reference/environment/).
 
 3. **Start it**
 
@@ -50,7 +51,20 @@ A small VPS (1 vCPU, 1 GB RAM) is enough for most bots.
 
    The collector applies its database migrations, then starts listening. Open `https://stats.example.com`.
 
+4. **Check it**
+
+   ```sh
+   docker compose ps                              # collector "healthy" after up to a minute
+   curl https://stats.example.com/readyz          # {"ok":true} once the database is migrated
+   ```
+
+   Then start your bot with the two settings from `bot.env`. The live tiles on the Overview count its first events
+   within seconds; the chart and checklist follow within a minute or two, without reloading.
+
 </Steps>
+
+Behind another proxy or a CDN in front of Caddy (Cloudflare, say), set `SHARDLENS_TRUST_PROXY=2` in `.env`, so rate
+limits see each visitor's own address. Caddy alone counts as one, which is the default.
 
 ## Discord sign-in
 
@@ -74,16 +88,21 @@ To turn on Discord sign-in:
 
 ## Hardening that is already done
 
-- The collector container runs as a non-root user with a read-only root filesystem, no Linux capabilities and
-  `no-new-privileges`.
+- The collector container runs as a non-root user that can't change the collector's own files, with a read-only root
+  filesystem, no Linux capabilities and `no-new-privileges`.
 - PostgreSQL has no published port; only the collector can reach it.
 - The dashboard is served with a strict Content Security Policy.
 - API keys are stored as SHA-256 hashes, and the settings that hold secrets (alert webhooks) are encrypted with
   `SHARDLENS_SETTINGS_KEY`.
 
+## Updating
+
+`docker compose pull && docker compose up -d`. Read [Upgrading](../upgrading/) first: it says what to back up and
+what changes between versions.
+
 ## Backups
 
-Back up the `pgdata` volume with `pg_dump`. See [Backups](../../operations/backups/).
+Back up the database with `pg_dump`. See [Backups](../../operations/backups/).
 
 <Aside type="caution">
   Keep a copy of `.env` somewhere safe. Without `SHARDLENS_SETTINGS_KEY` the encrypted settings in a backup can't be

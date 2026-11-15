@@ -1,9 +1,11 @@
-import { useMemo } from 'react';
+import { type ReactNode, useMemo } from 'react';
 import { useLive, useMeta, useSpec } from '../api';
+import { dayX } from '../chart-data';
 import { TimeChart } from '../components/charts';
 import { DataTable } from '../components/DataTable';
-import { ErrorNote, Loading, PageHead, Panel, Tile } from '../components/ui';
-import { ago, ms, num, pct } from '../format';
+import { Name, PageHead, Panel, QueryBody, Tile } from '../components/ui';
+import { ago, day, ms, num, pct } from '../format';
+import { overviewRefreshMs } from '../freshness';
 
 interface Overview {
   servers: number;
@@ -35,11 +37,11 @@ interface Overview {
 export function OverviewPage() {
   const meta = useMeta();
   const { tiles, stale } = useLive();
-  const overview = useSpec<Overview>({ kind: 'overview' });
+  const overview = useSpec<Overview>({ kind: 'overview' }, { refreshMs: overviewRefreshMs });
   const runs = overview.data?.runs30d ?? [];
   const chart = useMemo(
     () => ({
-      x: runs.map((r) => Date.parse(`${r.day}T00:00:00Z`) / 1000),
+      x: runs.map((r) => dayX(r.day)),
       series: [
         { name: 'Runs', values: runs.map((r) => r.runs) },
         { name: 'Failed', values: runs.map((r) => r.failures ?? 0) },
@@ -55,7 +57,13 @@ export function OverviewPage() {
     <>
       <PageHead
         title="Overview"
-        description={o?.lastEventAt ? `Last event ${ago(o.lastEventAt)}` : 'Waiting for the first events from your bot'}
+        description={
+          !o
+            ? undefined
+            : o.lastEventAt
+              ? `Last event ${ago(o.lastEventAt)}`
+              : 'Waiting for the first events from your bot'
+        }
       />
       <div className="stack">
         <div className="grid tiles">
@@ -77,68 +85,73 @@ export function OverviewPage() {
           <Tile
             label="Unique users"
             value={num(o?.uniqueUsersThisPeriod)}
-            sub={o ? `Since ${o.periodStart}` : undefined}
+            sub={o ? `Since ${day(o.periodStart)}` : undefined}
           />
         </div>
 
         <Panel
           title="Runs, last 30 days"
-          subtitle={`${num(total30)} runs · ${pct(total30 > 0 ? failed30 / total30 : null)} failed · UTC days`}
+          subtitle={
+            o ? `${num(total30)} runs · ${pct(total30 > 0 ? failed30 / total30 : null)} failed · UTC days` : undefined
+          }
         >
-          {overview.isLoading ? (
-            <Loading />
-          ) : overview.error ? (
-            <ErrorNote error={overview.error} />
-          ) : (
+          <QueryBody query={overview}>
             <TimeChart
               label="Command runs and failures per day for the last 30 days"
               x={chart.x}
               series={chart.series}
             />
-          )}
+          </QueryBody>
         </Panel>
 
         <div className="grid two">
           <Panel title="Setup checklist">
-            <ul className="checklist">
-              <Check ok={o?.checklist.receivingEvents} text="Receiving events from your bot" />
-              <Check ok={o?.checklist.appInfoReceived} text="Application info received (dashboard team list)" />
-              <Check
-                ok={o?.checklist.webhookEventsEnabled}
-                text={
-                  <>
-                    Webhook events enabled for user-install tracking: Developer Portal → Webhooks →{' '}
-                    <code>{`${window.location.origin}/v1/discord/events`}</code>
-                  </>
-                }
-              />
-              <Check ok={o?.checklist.requiredPermissionsSet} text="Required permissions set (permission health)" />
-              <Check ok={meta.data?.mode === 'privacy' || meta.data?.auditKeyConfigured} text="Data mode configured" />
-            </ul>
+            <QueryBody query={overview}>
+              <ul className="checklist">
+                <Check ok={o?.checklist.receivingEvents} text="Receiving events from your bot" />
+                <Check ok={o?.checklist.appInfoReceived} text="Application info received (dashboard team list)" />
+                <Check
+                  ok={o?.checklist.webhookEventsEnabled}
+                  text={
+                    <>
+                      Webhook events enabled for user-install tracking: Developer Portal → Webhooks →{' '}
+                      <code>{`${window.location.origin}/v1/discord/events`}</code>
+                    </>
+                  }
+                />
+                <Check ok={o?.checklist.requiredPermissionsSet} text="Required permissions set (permission health)" />
+                <Check
+                  ok={meta.data?.mode === 'privacy' || meta.data?.auditKeyConfigured}
+                  text="Data mode configured"
+                />
+              </ul>
+            </QueryBody>
           </Panel>
           <Panel title="Bot processes" subtitle="SDK health reported with each batch">
-            {o && o.sdkInstances.length > 0 ? (
-              <DataTable
-                caption="SDK instances"
-                rowKey={(r) => r.instance}
-                rows={o.sdkInstances}
-                columns={[
-                  { key: 'instance', header: 'Instance', render: (r) => r.instance },
-                  { key: 'shards', header: 'Shards', render: (r) => r.shards.join(', ') || '—' },
-                  { key: 'seen', header: 'Last seen', render: (r) => ago(r.ts), sort: (r) => r.ts },
-                  { key: 'queue', header: 'Queued', numeric: true, render: (r) => num(r.queueDepth) },
-                  {
-                    key: 'dropped',
-                    header: 'Dropped',
-                    numeric: true,
-                    render: (r) => num(Object.values(r.dropped).reduce((a, b) => a + b, 0)),
-                  },
-                  { key: 'failed', header: 'Failed sends', numeric: true, render: (r) => num(r.failedFlushes) },
-                ]}
-              />
-            ) : (
-              <p className="muted">No SDK has reported yet.</p>
-            )}
+            <QueryBody query={overview}>
+              {o && o.sdkInstances.length > 0 ? (
+                <DataTable
+                  caption="SDK instances"
+                  rowKey={(r) => r.instance}
+                  rows={o.sdkInstances}
+                  columns={[
+                    { key: 'instance', header: 'Instance', render: (r) => <Name>{r.instance}</Name> },
+                    { key: 'shards', header: 'Shards', render: (r) => r.shards.join(', ') || '—' },
+                    { key: 'seen', header: 'Last seen', render: (r) => ago(r.ts), sort: (r) => r.ts },
+                    { key: 'queue', header: 'Queued', numeric: true, render: (r) => num(r.queueDepth) },
+                    {
+                      key: 'dropped',
+                      header: 'Dropped',
+                      numeric: true,
+                      render: (r) => num(Object.values(r.dropped).reduce((a, b) => a + b, 0)),
+                    },
+                    { key: 'failed', header: 'Failed sends', numeric: true, render: (r) => num(r.failedFlushes) },
+                  ]}
+                />
+              ) : (
+                <p className="muted">No SDK has reported yet.</p>
+              )}
+            </QueryBody>
           </Panel>
         </div>
       </div>
@@ -146,7 +159,7 @@ export function OverviewPage() {
   );
 }
 
-function Check(props: { ok: boolean | undefined; text: React.ReactNode }) {
+function Check(props: { ok: boolean | undefined; text: ReactNode }) {
   return (
     <li>
       <span className={`badge ${props.ok ? 'good' : ''}`} aria-hidden="true">

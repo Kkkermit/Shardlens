@@ -25,6 +25,23 @@ export function interaction(overrides: Partial<Extract<EventInput, { type: 'inte
   };
 }
 
+export function messageCommand(overrides: Partial<Extract<EventInput, { type: 'message_command' }>> = {}): EventInput {
+  return {
+    id: '0193f2b4-7c1a-7d4e-9a51-3c2f1e0b9a79',
+    type: 'message_command',
+    ts: 1763052121000,
+    command: 'ban',
+    options: ['user', 'reason'],
+    guild: '112233445566778899',
+    channelType: 0,
+    memberTier: 'manager',
+    user: USER_HASH,
+    outcome: 'ok',
+    handlerMs: 120,
+    ...overrides,
+  };
+}
+
 export function guildInfo(overrides: Record<string, unknown> = {}) {
   return {
     guild: '112233445566778899',

@@ -1,14 +1,13 @@
-import { redactSecrets, uuidv7 } from '@shardlens/core';
+import { cutText, redactSecrets, uuidv7 } from '@shardlens/core';
 import type { EventInput, GuildInfo } from '@shardlens/schema';
 import type { Client, Guild } from 'discord.js';
-import { shardForGuild } from './util.js';
+import { totalShards } from './gateway.js';
+import { clampedInt, shardForGuild } from './util.js';
 
 /** The guild's shard; falls back to `(id >> 22) % shardCount` when discord.js has none. */
 export function shardOf(g: Guild): number {
   if (typeof g.shardId === 'number' && g.shardId >= 0) return g.shardId;
-  const count =
-    g.client.shard?.count ?? (typeof g.client.options.shardCount === 'number' ? g.client.options.shardCount : 1);
-  return shardForGuild(g.id, count) ?? 0;
+  return shardForGuild(g.id, totalShards(g.client)) ?? 0;
 }
 
 /** The bot's permission bitfield in a server, or `0` when unknown (getters can throw before login). */
@@ -30,14 +29,15 @@ function guildInfo(g: Guild): GuildInfo {
   const premiumTier = Math.min(3, Math.max(0, Number(g.premiumTier) || 0));
   return {
     guild: g.id,
-    name: redactSecrets(String(g.name ?? '')).slice(0, 100),
+    name: cutText(redactSecrets(String(g.name ?? '')), 100),
     icon: g.icon ? g.icon.slice(0, 64) : null,
-    memberCount: Math.max(0, g.memberCount ?? 0),
+    memberCount: clampedInt(g.memberCount) ?? 0,
     large: Boolean(g.large),
     preferredLocale: String(g.preferredLocale ?? 'en-US').slice(0, 10),
     features: [...(g.features ?? [])].map((f) => String(f).slice(0, 64)).slice(0, 64),
     premiumTier,
-    boosts: g.premiumSubscriptionCount ?? null,
+    // discord.js can report -1 boosts from `premium_subscription_count`.
+    boosts: clampedInt(g.premiumSubscriptionCount) ?? null,
     verificationLevel: Number(g.verificationLevel) || 0,
     nsfwLevel: Number(g.nsfwLevel) || 0,
     mfaLevel: Number(g.mfaLevel) || 0,
@@ -72,15 +72,20 @@ export function guildAvailability(g: Guild, available: boolean): EventInput {
 export function guildSnapshots(guilds: Iterable<Guild>, shards: readonly number[], shardCount: number): EventInput[] {
   const byShard = new Map<number, string[]>(shards.map((s) => [s, []]));
   for (const g of guilds) byShard.get(shardOf(g))?.push(g.id);
+  return [...byShard].map(([shard, ids]) => shardSnapshot(shard, ids, shardCount));
+}
+
+/** The servers one shard holds, such as the IDs in its READY payload. */
+export function shardSnapshot(shard: number, guildIds: readonly string[], shardCount: number): EventInput {
   const now = Date.now();
-  return [...byShard].map(([shard, ids]) => ({
+  return {
     id: uuidv7(now),
     ts: now,
     type: 'guild_snapshot',
     shards: [shard],
     shardCount: Math.max(1, shardCount),
-    guilds: ids.slice(0, 2500 * 16),
-  }));
+    guilds: guildIds.slice(0, 2500 * 16),
+  };
 }
 
 /**
@@ -98,8 +103,8 @@ export class CountRefresher {
       if (!guild?.available) continue;
       const fresh = await guild.fetch();
       const event = guildUpdate(fresh);
-      const approx = fresh.approximateMemberCount;
-      if (event.type === 'guild_update' && typeof approx === 'number') event.info.memberCount = Math.max(0, approx);
+      const approx = clampedInt(fresh.approximateMemberCount);
+      if (event.type === 'guild_update' && approx !== undefined) event.info.memberCount = approx;
       return event;
     }
     return undefined;
@@ -115,10 +120,6 @@ export class ProfilePacer {
 
   reset(guildIds: Iterable<string>): void {
     this.#pending = [...guildIds];
-  }
-
-  get remaining(): number {
-    return this.#pending.length;
   }
 
   tick(budget: number, emit: (guildId: string) => void): void {

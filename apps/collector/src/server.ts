@@ -8,7 +8,7 @@ import fastifyStatic from '@fastify/static';
 import { containsNul } from '@shardlens/schema';
 import Fastify, { type FastifyInstance, type FastifyRequest, LogController } from 'fastify';
 import { ZodError } from 'zod';
-import type { Db } from './db.js';
+import { type Db, isRefusedInput } from './db.js';
 import type { Config } from './env.js';
 import type { LiveHub } from './live.js';
 import { QueryError } from './query/run.js';
@@ -21,6 +21,7 @@ import { privacyRoutes } from './routes/privacy.js';
 import { reportRoutes } from './routes/reports.js';
 import type { KeyStore } from './security/auth.js';
 import type { ClickHouseStore } from './storage/clickhouse.js';
+import type { SinkMirror } from './storage/sink.js';
 
 export interface Deps {
   config: Config;
@@ -29,6 +30,8 @@ export interface Deps {
   live: LiveHub;
   /** Optional ClickHouse analytics store (preview). */
   analytics?: ClickHouseStore | undefined;
+  /** Optional copy of accepted events in the owner's own database. */
+  sink?: SinkMirror | undefined;
   /** Where log lines go. Default: standard output. */
   logStream?: { write(line: string): void } | undefined;
 }
@@ -65,14 +68,11 @@ const DEFAULT_RATE_LIMIT = 1_200;
 /** How long a client may take to send a whole request. Without a limit, a slow trickle holds a connection open forever. */
 const REQUEST_TIMEOUT_MS = 30_000;
 const API_PATHS = /^\/(v1|auth)\/|^\/(healthz|readyz|openapi\.json)$/;
-/** A path that names a file. A missing one is a 404: a script URL answered with the dashboard's HTML fails oddly. */
-const FILE_PATH = /^\/assets\/|\.[a-z0-9]{1,8}$/i;
-
-/** A PostgreSQL "data exception" (SQLSTATE class 22): the statement was fine, a value in it was not. */
-function isDataException(error: unknown): error is { code: string } {
-  const e = error as { code?: unknown; severity?: unknown } | null;
-  return typeof e?.code === 'string' && /^22[0-9A-Z]{3}$/.test(e.code) && typeof e.severity === 'string';
-}
+/**
+ * A path that names a file: a built asset, or one at the top level (`/favicon.svg`). A missing one is a 404, since a
+ * script URL answered with the dashboard's HTML fails oddly. Deeper paths are pages, even with a dot (`/commands/say.hi`).
+ */
+const FILE_PATH = /^\/assets\/|^\/[^/]+\.[a-z0-9]{1,8}$/i;
 
 /** The reply failed only because the client closed the connection (a page navigating away mid-request). */
 function isClientGone(error: unknown, req: FastifyRequest): boolean {
@@ -98,6 +98,11 @@ function dashboardDir(config: Config): string | undefined {
   return candidates.find((dir) => dir !== undefined && existsSync(`${dir}/index.html`));
 }
 
+/** A hop count trusts that many proxies from the right of `X-Forwarded-For`, the same rule Fastify applies to a number. */
+function proxyTrust(trust: boolean | number): boolean | ((address: string, hop: number) => boolean) {
+  return typeof trust === 'number' ? (_address, hop) => hop < trust : trust;
+}
+
 export async function buildServer(deps: Deps): Promise<FastifyInstance> {
   // Request logs record URLs (the OAuth callback's one-time code, a key pasted into a query string), so they are
   // written only when the collector runs at debug or trace.
@@ -109,7 +114,7 @@ export async function buildServer(deps: Deps): Promise<FastifyInstance> {
       ...(deps.logStream ? { stream: deps.logStream } : {}),
     },
     logController: new LogController({ disableRequestLogging: !verbose }),
-    trustProxy: deps.config.trustProxy,
+    trustProxy: proxyTrust(deps.config.trustProxy),
     bodyLimit: 256 * 1024,
     requestTimeout: REQUEST_TIMEOUT_MS,
   });
@@ -131,8 +136,14 @@ export async function buildServer(deps: Deps): Promise<FastifyInstance> {
     route.decompress ??= false;
   });
   await app.register(compress, { global: true, encodings: ['gzip', 'br'] });
+  // API answers hold analytics, keys and, in audit mode, decrypted user IDs: no browser or proxy cache may keep one,
+  // unless its route says otherwise (public badges).
+  app.addHook('onSend', async (req, reply, payload) => {
+    if (!reply.hasHeader('cache-control') && /^\/(v1|auth)\//.test(req.url)) reply.header('cache-control', 'no-store');
+    return payload;
+  });
 
-  // Ingest reads its body as a buffer and checks each event itself; everything else is refused here.
+  // PostgreSQL text can't hold NUL. Ingest reads its body as a buffer and checks each event itself.
   app.addHook('preValidation', async (req, reply) => {
     const body = Buffer.isBuffer(req.body) ? undefined : req.body;
     if (containsNul(body) || containsNul(req.query) || containsNul(req.params)) {
@@ -145,7 +156,7 @@ export async function buildServer(deps: Deps): Promise<FastifyInstance> {
       return reply.code(400).send({ error: 'invalid_request', issues: error.issues.slice(0, 20) });
     }
     if (error instanceof QueryError) return reply.code(400).send({ error: 'invalid_query', message: error.message });
-    if (isDataException(error)) {
+    if (isRefusedInput(error)) {
       // Input the database refused (a number out of range, text it can't store). Not a fault of the collector, and
       // answering 500 would make an SDK retry the same batch forever.
       req.log.warn({ code: error.code, route: req.routeOptions.url }, 'input refused by the database');
@@ -177,17 +188,31 @@ export async function buildServer(deps: Deps): Promise<FastifyInstance> {
 
   const dir = dashboardDir(deps.config);
   if (dir) {
-    await app.register(fastifyStatic, { root: dir, wildcard: false, index: ['index.html'], maxAge: '1h' });
+    await app.register(fastifyStatic, {
+      root: dir,
+      wildcard: false,
+      index: ['index.html'],
+      // The page must be revalidated, or after an upgrade a cached copy asks for scripts that no longer exist. Built
+      // assets have content-hashed names, so they never change.
+      cacheControl: false,
+      setHeaders: (res, file) => {
+        const policy = file.endsWith('index.html')
+          ? 'no-cache'
+          : /[\\/]assets[\\/]/.test(file)
+            ? 'public, max-age=31536000, immutable'
+            : 'public, max-age=3600';
+        res.header('cache-control', policy);
+      },
+    });
   } else {
     app.get('/', async () => ({ name: 'shardlens-collector', dashboard: 'not built' }));
   }
-  // Single-page app: unknown GETs for a page (not the API, not a file) return the dashboard shell, uncached.
+  // Single-page app: unknown GETs for a page (not the API, not a file) return the dashboard shell.
   app.setNotFoundHandler({ preHandler: app.rateLimit() }, (req, reply) => {
     const path = req.url.split('?')[0] ?? '';
     if (!dir || req.method !== 'GET' || API_PATHS.test(path) || FILE_PATH.test(path)) {
       return reply.code(404).send({ error: 'not_found' });
     }
-    reply.header('cache-control', 'no-store');
     return reply.sendFile('index.html');
   });
 

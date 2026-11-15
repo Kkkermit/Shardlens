@@ -6,11 +6,12 @@
 
 /**
  * `used`: collected in v1. `indirect`: not collected, but keeps cache-based counts current.
- * `plugin`: optional plugin only (needs extra intents). `not_used`: delivered with Guilds but ignored.
+ * `plugin`: left to an optional plugin, as it needs another intent; v1 ships none. `not_used`: delivered but ignored.
  * `never`: never collected, by policy. `ignored`: little or no public documentation.
  */
 export type GatewayEventUse = 'used' | 'indirect' | 'plugin' | 'not_used' | 'never' | 'ignored';
 
+/** How Shardlens treats one Gateway dispatch event. */
 export interface GatewayEventCoverage {
   readonly event: string;
   /** Gateway intent that delivers the event, or `null` when no intent is needed. */
@@ -101,7 +102,8 @@ const ROWS: readonly Row[] = [
   // GUILD_PRESENCES (1 << 8, privileged)
   ['PRESENCE_UPDATE', 'GUILD_PRESENCES', 'never'],
 
-  // GUILD_MESSAGES (1 << 9) / DIRECT_MESSAGES (1 << 12); content needs MESSAGE_CONTENT (privileged)
+  // GUILD_MESSAGES (1 << 9) / DIRECT_MESSAGES (1 << 12); content needs MESSAGE_CONTENT (privileged). Message commands
+  // are reported by the bot's own handler (ADR 0018): the SDK never listens to MESSAGE_CREATE.
   ['MESSAGE_CREATE', 'GUILD_MESSAGES', 'plugin'],
   ['MESSAGE_UPDATE', 'GUILD_MESSAGES', 'not_used'],
   ['MESSAGE_DELETE', 'GUILD_MESSAGES', 'not_used'],
@@ -134,6 +136,7 @@ const ROWS: readonly Row[] = [
   ['MESSAGE_POLL_VOTE_REMOVE', 'GUILD_MESSAGE_POLLS', 'not_used'],
 ];
 
+/** Every Gateway dispatch event, with the intent that delivers it and what Shardlens does with it. */
 export const GATEWAY_EVENT_COVERAGE: readonly GatewayEventCoverage[] = ROWS.map(([event, intent, use]) => ({
   event,
   intent,

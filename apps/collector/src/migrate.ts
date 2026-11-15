@@ -8,7 +8,7 @@ const MIGRATIONS_DIR = fileURLToPath(new URL('../migrations', import.meta.url));
 const ADVISORY_LOCK = 7_241_865_325;
 
 /** One dedicated connection. A `pg.Client` (see `migrate` in `db.ts`) and a PGlite instance both fit. */
-export interface MigrationConnection {
+interface MigrationConnection {
   /** Runs one or more statements that take no parameters. */
   exec(sql: string): Promise<unknown>;
   query(sql: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;

@@ -1,6 +1,6 @@
 ---
 title: Grafana
-description: A ready-made Grafana dashboard for the Prometheus exporter.
+description: A ready-made Grafana dashboard for the Prometheus and OpenTelemetry exporters.
 sidebar:
   order: 10
 ---
@@ -9,34 +9,52 @@ import { Aside, Steps } from '@astrojs/starlight/components';
 
 The repository has a Grafana dashboard for [`@shardlens/exporter-prometheus`](../../self-hosting/exporter-only/):
 [`deploy/grafana/shardlens-dashboard.json`](https://github.com/Kkkermit/Shardlens/blob/main/deploy/grafana/shardlens-dashboard.json).
+It works the same with `@shardlens/exporter-otel` when the metrics reach Prometheus through an OpenTelemetry Collector,
+which gives them the same names.
 
 <Steps>
 
 1. Add the exporter to your bot and point Prometheus at it, as in [Exporter only](../../self-hosting/exporter-only/).
-2. In Grafana, open **Dashboards → New → Import**, upload `shardlens-dashboard.json` and pick your Prometheus data
-   source.
+2. In Grafana, open **Dashboards → New → Import** and upload `shardlens-dashboard.json`.
+3. At the top of the dashboard, pick your Prometheus data source (it starts on the default one) and, if Prometheus
+   scrapes more than one bot, the **Job** of the bot to show. **All** adds up every job.
 
 </Steps>
 
+To provision it instead, put the file in a folder Grafana reads dashboards from:
+
+```yaml title="grafana/provisioning/dashboards/shardlens.yaml"
+apiVersion: 1
+providers:
+  - name: shardlens
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards # holds shardlens-dashboard.json
+```
+
 ## What's on it
 
-- **Headline stats**: interactions per second, the share that failed or got no response, p95 response time against
-  the 3-second deadline, and how much of the invalid-request budget the last 10 minutes used.
-- **Interactions**: by command and by outcome, response-time percentiles, and handler errors by class.
-- **REST**: requests by status, the busiest routes, rate limits by scope, and invalid requests by status.
+- **Headline stats**: interactions per second, the share that failed, missed the deadline or got no response, p95
+  response time against the 3-second deadline, and how much of the invalid-request budget the last 10 minutes used.
+- **Interactions**: by command and by outcome, response-time percentiles, handler errors by class, and the slowest
+  handlers by command.
+- **REST**: requests by status, the busiest routes, rate-limit waits by scope, and invalid requests by status.
 - **Gateway**: ping per shard, servers per shard and in total, shard state changes, servers joined and left, and the
   identify budget.
-- **Process**: event loop delay, memory, and your custom events.
+- **Process**: event loop delay, memory, discord.js cache sizes, and your custom events.
+
+Components and modals with no command behind them are shown as `(none)`.
 
 ## Alerts worth setting
 
-| Alert                       | PromQL                                                                                                       |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Missed deadlines above 1%   | `1 - sum(rate(shardlens_interaction_response_seconds_bucket{le="3"}[10m])) / sum(rate(shardlens_interaction_response_seconds_count[10m])) > 0.01` |
-| Invalid-request budget > 50% | `sum(increase(shardlens_rest_invalid_requests_total[10m])) > 5000`                                          |
-| A shard stopped reporting   | `absent_over_time(shardlens_shard_ping_seconds[5m])`                                                        |
+| Alert                                  | PromQL                                                                                                                                        |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Missed or unanswered interactions > 1% | `sum(rate(shardlens_interactions_total{outcome=~"timeout\|no_response"}[10m])) / sum(rate(shardlens_interactions_total[10m])) > 0.01` |
+| Invalid-request budget > 50%           | `sum(increase(shardlens_rest_invalid_requests_total[10m])) > 5000`                                                                            |
+| Shards reconnecting                    | `sum by (shard) (increase(shardlens_shard_events_total{state=~"reconnecting\|invalidated"}[15m])) > 3`                                       |
+| The bot stopped answering scrapes      | `up{job="discord-bot"} == 0`                                                                                                                  |
 
 <Aside type="note">
-  A test checks that every query in the dashboard uses a metric the exporter really produces, so the dashboard
-  can't drift from the code.
+  A test checks that every query in the dashboard uses a metric and labels the exporter really produces, so the
+  dashboard can't drift from the code.
 </Aside>

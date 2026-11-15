@@ -19,12 +19,13 @@ const globals = `${out}globals.d.ts`;
 writeFileSync(
   globals,
   `import type { Shardlens } from '@shardlens/discordjs';
-import type { ChatInputCommandInteraction, Client } from 'discord.js';
+import type { ChatInputCommandInteraction, Client, Message } from 'discord.js';
 declare global {
   const client: Client;
   const lens: Shardlens;
   const interaction: ChatInputCommandInteraction;
   const commands: Map<string, { execute(interaction: ChatInputCommandInteraction): Promise<void> }>;
+  const prefixCommands: Map<string, { name: string; execute(message: Message, args: string[]): Promise<void> }>;
 }
 `,
 );

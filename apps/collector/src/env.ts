@@ -1,5 +1,6 @@
 import { Snowflake } from '@shardlens/schema';
 import { z } from 'zod';
+import { DEFAULT_SINK_TABLE, SINK_TABLE, SINK_URL, type SinkSettings } from './storage/sink.js';
 
 const snowflake = Snowflake.describe('a Discord snowflake');
 const key32 = z
@@ -28,9 +29,25 @@ const EnvSchema = z.object({
     .regex(/^slk_read_[\w-]{43}$/, 'must be an slk_read_ key')
     .optional(),
   SHARDLENS_EXTRA_ADMINS: z.string().optional(),
-  SHARDLENS_TRUST_PROXY: z.enum(['true', 'false']).default('false'),
+  SHARDLENS_TRUST_PROXY: z
+    .string()
+    .regex(/^(true|false|[1-9])$/, 'must be false, a number of proxies in front (1 for one), or true')
+    .default('false'),
   SHARDLENS_DEMO: z.enum(['true', 'false']).default('false'),
   CLICKHOUSE_URL: z.url().optional(),
+  SHARDLENS_SINK_URL: z
+    .string()
+    .regex(SINK_URL, 'must start with mongodb:, mongodb+srv:, mysql:, mariadb:, postgres: or sqlite:')
+    .optional(),
+  SHARDLENS_SINK_TABLE: z
+    .string()
+    .regex(SINK_TABLE, 'must be letters, digits and underscores')
+    .default(DEFAULT_SINK_TABLE),
+  SHARDLENS_SINK_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(35),
+  SHARDLENS_SINK_EVENTS: z
+    .string()
+    .regex(/^[a-z_]+(\s*,\s*[a-z_]+)*$/, 'must be a comma-separated list of event types')
+    .optional(),
   SHARDLENS_DASHBOARD_DIR: z.string().optional(),
   PORT: z.coerce.number().int().min(1).max(65535).default(8080),
   HOST: z.string().default('0.0.0.0'),
@@ -52,11 +69,17 @@ export interface Config {
   ingestKey: string | undefined;
   readKey: string | undefined;
   extraAdmins: string[];
-  trustProxy: boolean;
+  /**
+   * Proxies in front whose `X-Forwarded-For` entries are believed: a count trusts that many hops from the right, `true`
+   * trusts the whole header (safe only behind a proxy that replaces it).
+   */
+  trustProxy: boolean | number;
   /** Public demo: anyone may view the dashboard read-only. Never for real data. */
   demo: boolean;
   /** Optional ClickHouse analytics store (preview). Never logged: it may contain credentials. */
   clickhouseUrl?: string | undefined;
+  /** Optional copy of every accepted event in the owner's own database. Never logged: the URL may hold a password. */
+  sink?: SinkSettings | undefined;
   dashboardDir: string | undefined;
   port: number;
   host: string;
@@ -103,9 +126,22 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     ingestKey: e.SHARDLENS_INGEST_KEY,
     readKey: e.SHARDLENS_READ_KEY,
     extraAdmins,
-    trustProxy: e.SHARDLENS_TRUST_PROXY === 'true',
+    trustProxy:
+      e.SHARDLENS_TRUST_PROXY === 'true'
+        ? true
+        : e.SHARDLENS_TRUST_PROXY === 'false'
+          ? false
+          : Number(e.SHARDLENS_TRUST_PROXY),
     demo: e.SHARDLENS_DEMO === 'true',
     clickhouseUrl: e.CLICKHOUSE_URL,
+    sink: e.SHARDLENS_SINK_URL
+      ? {
+          to: e.SHARDLENS_SINK_URL,
+          table: e.SHARDLENS_SINK_TABLE,
+          retentionDays: e.SHARDLENS_SINK_RETENTION_DAYS,
+          events: e.SHARDLENS_SINK_EVENTS?.split(',').map((t) => t.trim()),
+        }
+      : undefined,
     dashboardDir: e.SHARDLENS_DASHBOARD_DIR,
     port: e.PORT,
     host: e.HOST,

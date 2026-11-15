@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRootRoute, createRoute, createRouter, RouterProvider } from '@tanstack/react-router';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { ApiError } from './api';
+import { ApiError, onUnauthorized } from './api';
 import { ActivityPage } from './routes/activity';
 import { AlertsPage } from './routes/alerts';
 import { AudiencePage } from './routes/audience';
@@ -17,23 +17,25 @@ import { ServerPage, ServersPage } from './routes/servers';
 import { SettingsPage } from './routes/settings';
 import { NotFound, Root } from './routes/shell';
 import { TimePage } from './routes/time-patterns';
+import { parseServerListSearch } from './server-list';
+import { applyTheme, storedTheme } from './theme';
 import './styles/tokens.css';
 import './styles/app.css';
 
-// Apply a stored theme before first paint (no inline script: the CSP forbids it).
-try {
-  const theme = localStorage.getItem('shardlens:theme');
-  if (theme === 'light' || theme === 'dark') document.documentElement.setAttribute('data-theme', theme);
-} catch {
-  // storage unavailable
-}
+// Before first paint, and not from an inline script: the CSP forbids one.
+applyTheme(storedTheme());
 
 const rootRoute = createRootRoute({ component: Root, notFoundComponent: NotFound });
 const routes = [
   createRoute({ getParentRoute: () => rootRoute, path: '/', component: OverviewPage }),
   createRoute({ getParentRoute: () => rootRoute, path: '/commands', component: CommandsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: '/commands/$name', component: CommandPage }),
-  createRoute({ getParentRoute: () => rootRoute, path: '/servers', component: ServersPage }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/servers',
+    component: ServersPage,
+    validateSearch: parseServerListSearch,
+  }),
   createRoute({ getParentRoute: () => rootRoute, path: '/servers/$id', component: ServerPage }),
   createRoute({ getParentRoute: () => rootRoute, path: '/growth', component: GrowthPage }),
   createRoute({ getParentRoute: () => rootRoute, path: '/audience', component: AudiencePage }),
@@ -63,6 +65,9 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+// A session that expired or was ended in another tab: ask again who is signed in, so Root shows the sign-in page.
+onUnauthorized(() => void queryClient.invalidateQueries({ queryKey: ['me'] }));
 
 const container = document.getElementById('root');
 if (container) {

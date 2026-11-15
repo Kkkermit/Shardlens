@@ -11,16 +11,27 @@ import DataCollectedTable from '../../../components/DataCollectedTable.astro';
 This page is **generated from the wire format** in `@shardlens/schema`. A test fails the build if a field can be sent
 without being listed here, so the list is complete for the version these docs were built from.
 
+<Aside type="tip">
+  Shardlens never collects message content, presence, member lists or anything that needs a privileged intent. User
+  IDs are hashed inside your bot before they are sent, and option values are sent only for the options you allow-list.
+</Aside>
+
+## Reading the tables
+
+Each table is one object on the wire. `envelope` is the batch around every request, `event` holds the fields every
+event has, and the other tables are event types (such as `interaction` or `guild_join`) or objects inside them
+(`actor`, `guild_info`).
+
 - **Mode**: "Both" fields are collected in privacy mode and audit mode. "Audit only" fields are sent only when both the
   SDK and the collector are in [audit mode](../../guides/audit-mode/).
 - **Personal data**: "Pseudonymous" means a salted hash that can't be reversed once its salt is destroyed. It is still
-  personal data under UK and EU GDPR while the salt exists.
-- **Kept**: how long the collector stores it. Raw retention is configurable from 7 to 90 days; aggregate counts are
-  kept after raw rows expire.
+  personal data under UK and EU GDPR while the salt exists. "Yes" means the field identifies a person.
+- **Kept**: how long the collector's database stores it. Fields marked "Not stored" are read while the batch is
+  processed and then dropped. Raw retention is 35 days by default and configurable from 7 to 90; after raw rows expire,
+  aggregate counts stay: minute counts for 14 days, hourly counts for 13 months and daily counts for good.
 
-<Aside type="tip">
-  Shardlens never collects message content, presence, member lists or anything that needs a privileged intent.
-</Aside>
+[Erasure](../../guides/privacy-command/) deletes every row that holds a person's hash, and in audit mode their
+encrypted records, whatever the tables say about how long those would otherwise be kept.
 
 ## Privacy mode
 
@@ -29,3 +40,14 @@ without being listed here, so the list is complete for the version these docs we
 ## Audit mode only
 
 <DataCollectedTable mode="audit" />
+
+## Copies outside the collector's database
+
+- **Your own database.** With an [event sink](../../self-hosting/your-own-database/), the collector copies every event
+  it accepts, without the fields marked "Yes" under personal data, and deletes the copies after the sink's own retention
+  (35 days by default).
+- **ClickHouse (preview).** With the [ClickHouse store](../../self-hosting/scaling/#clickhouse-preview), interactions,
+  message commands and custom events are copied there for 35 days, whatever the raw retention setting, and their
+  minute counts for 400 days.
+- **Exporters.** The [Prometheus and OpenTelemetry exporters](../../self-hosting/exporter-only/) run inside your bot.
+  They see events before users are hashed, with the user left out, and keep only counts and timings.

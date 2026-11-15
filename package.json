@@ -19,6 +19,7 @@
     "lint": "biome check .",
     "format": "biome check --write . && prettier --write .",
     "size": "size-limit",
+    "sim": "node tests/sim/run.mjs",
     "api": "turbo run api-report:update",
     "check": "prettier --check . && biome check . && turbo run typecheck build lint:package api-report && turbo run test && knip && size-limit",
     "changeset": "changeset",

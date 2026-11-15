@@ -6,6 +6,7 @@ export default defineConfig({
   dts: true,
   target: 'node22',
   platform: 'neutral',
-  sourcemap: true,
+  // Off: a published file pointing at a map the tarball doesn't hold makes consumers' bundlers warn.
+  sourcemap: false,
   clean: true,
 });

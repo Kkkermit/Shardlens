@@ -1,7 +1,7 @@
 import { parseBatch } from '@shardlens/schema';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { transaction } from '../db.js';
-import { type Indexed, writeEvents } from '../ingest/write.js';
+import { isRefusedInput, transaction } from '../db.js';
+import { type Indexed, writeEachEvent, writeEvents } from '../ingest/write.js';
 import { bearerToken, type KeyAuth } from '../security/auth.js';
 import { auditCipher } from '../security/crypto.js';
 import { gunzipBounded } from '../security/gzip.js';
@@ -16,6 +16,17 @@ const MAX_IN_FLIGHT = 16;
 export async function ingestRoutes(app: FastifyInstance, deps: Deps): Promise<void> {
   const parseJson = app.getDefaultJsonParser('error', 'error');
   let inFlight = 0;
+  // The clock correction last applied to each sending process. Duplicates are found by event ID and time, so a retried
+  // batch must get exactly the same correction, not one a few milliseconds of network delay apart.
+  const corrections = new Map<string, number>();
+  const correction = (sender: string, skew: number) => {
+    const last = corrections.get(sender);
+    if (last !== undefined && Math.abs(last - skew) < 60_000) return last;
+    if (corrections.size >= 10_000) corrections.clear();
+    const shift = Math.round(skew / 60_000) * 60_000;
+    corrections.set(sender, shift);
+    return shift;
+  };
 
   // This route reads the raw (usually gzipped) body itself, so the default JSON parser is replaced here only.
   app.removeContentTypeParser('application/json');
@@ -85,7 +96,7 @@ export async function ingestRoutes(app: FastifyInstance, deps: Deps): Promise<vo
 
         const now = Date.now();
         const skew = now - Date.parse(envelope.sentAt);
-        const shift = Math.abs(skew) > MAX_SKEW_MS ? skew : 0;
+        const shift = Math.abs(skew) > MAX_SKEW_MS ? correction(`${auth.appId}:${envelope.source.instance}`, skew) : 0;
         if (shift !== 0) req.log.warn({ skewMs: skew }, 'clock skew corrected for batch');
 
         const rejected = parsed.errors.map((e) => ({ index: e.index, reason: e.reason }));
@@ -123,29 +134,43 @@ export async function ingestRoutes(app: FastifyInstance, deps: Deps): Promise<vo
           // Audit rows only within audit retention (older partitions don't exist).
           audit = { cipher: auditCipher(deps.config.auditKey), oldestMs: now - (auditDays - 1) * 86_400_000 };
         }
-        const result = await transaction(deps.db, (tx) =>
-          writeEvents(
-            tx,
-            {
-              appId: auth.appId,
-              env: envelope.app.env,
-              release: envelope.app.release,
-              instance: envelope.source.instance,
-              shards: envelope.source.shards,
-              sdkVersion: `${envelope.sdk.name}@${envelope.sdk.version}`.slice(0, 96),
-              livePeriods: periods,
-              audit,
-              now: new Date(now),
-              mirror: deps.analytics !== undefined,
-            },
-            items,
-          ),
-        );
-        // After the PostgreSQL commit: queue accepted rows for ClickHouse (never blocks or fails ingest).
+        const context = {
+          appId: auth.appId,
+          env: envelope.app.env,
+          release: envelope.app.release,
+          instance: envelope.source.instance,
+          shards: envelope.source.shards,
+          sdkVersion: `${envelope.sdk.name}@${envelope.sdk.version}`.slice(0, 96),
+          livePeriods: periods,
+          audit,
+          now: new Date(now),
+          mirror: deps.analytics !== undefined,
+        };
+        let result: Awaited<ReturnType<typeof writeEvents>>;
+        try {
+          result = await transaction(deps.db, (tx) => writeEvents(tx, context, items));
+        } catch (error) {
+          if (!isRefusedInput(error)) throw error;
+          req.log.warn(
+            { code: error.code },
+            'a value in the batch was refused by the database; writing it event by event',
+          );
+          result = await transaction(deps.db, (tx) => writeEachEvent(tx, context, items));
+        }
+        // After the PostgreSQL commit: queue accepted rows for ClickHouse and the sink (never blocks or fails ingest).
         if (result.mirror) deps.analytics?.mirror(result.mirror);
-        // Live tiles count by when things happened, so replayed or backfilled batches never look live.
+        if (deps.sink) {
+          const refused = new Set(result.rejected.map((r) => r.index));
+          deps.sink.push(
+            { appId: auth.appId, env: envelope.app.env, release: envelope.app.release },
+            items.filter((i) => !refused.has(i.index)).map((i) => i.event),
+          );
+        }
+        // Live tiles count by when things happened, so backfilled batches never look live, and only what this batch
+        // stored, so a retried one is not counted twice.
         for (const { event } of items) {
-          if (event.type !== 'interaction' || event.ts < now - 15 * 60_000) continue;
+          if (event.type !== 'interaction' && event.type !== 'message_command') continue;
+          if (event.ts < now - 15 * 60_000 || !result.stored.has(event.id.toLowerCase())) continue;
           deps.live.bump(auth.appId, event.ts, event.weight, event.outcome === 'ok' ? 0 : event.weight);
         }
         const allRejected = [...rejected, ...result.rejected].sort((a, b) => a.index - b.index);

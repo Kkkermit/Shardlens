@@ -22,7 +22,8 @@ export const HASH_VERSION = 'h1';
 
 export const HASH_BYTES = 16;
 
-const MAX_KEYS = 2;
+/** The previous period, the current one and, in its last minutes, the next, which the SDK fetches before it starts. */
+const MAX_KEYS = 3;
 
 /** Recently computed hashes kept in memory. Active users repeat, so most interactions skip the HMAC. */
 const CACHE_SIZE = 20_000;
@@ -36,7 +37,7 @@ export class UserHasher {
   /** `label\0userId` → hash. Cleared whenever the set of salts changes, so no hash outlives its salt. */
   #cache = new Map<string, string>();
 
-  /** Installs a period's salt (32 bytes). Only the two most recently added periods are kept. */
+  /** Installs a period's salt (32 bytes). Only the three most recently added periods are kept. */
   async setSalt(label: string, salt: Uint8Array): Promise<void> {
     const key = await crypto.subtle.importKey(
       'raw',
@@ -49,6 +50,11 @@ export class UserHasher {
     this.#keys.set(label, key);
     while (this.#keys.size > MAX_KEYS) this.#keys.delete(this.#keys.keys().next().value!);
     this.#cache.clear();
+  }
+
+  /** Removes a period's salt, such as one the collector has destroyed, and every hash computed with it. */
+  deleteSalt(label: string): void {
+    if (this.#keys.delete(label)) this.#cache.clear();
   }
 
   labels(): string[] {

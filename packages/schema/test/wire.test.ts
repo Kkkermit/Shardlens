@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   Batch,
   containsNul,
+  GuildInfo,
   HISTOGRAM_BUCKETS,
   InteractionEvent,
   MAX_BATCH_EVENTS,
@@ -9,7 +10,7 @@ import {
   Snowflake,
   UserHash,
 } from '../src/index.js';
-import { batch, guildInfo, interaction, USER_HASH } from './fixtures.js';
+import { batch, guildInfo, interaction, messageCommand, USER_HASH } from './fixtures.js';
 
 describe('Batch', () => {
   it('accepts a valid privacy-mode batch and applies defaults', () => {
@@ -53,6 +54,31 @@ describe('Batch', () => {
     );
     expect(result.success).toBe(true);
     expect(JSON.stringify(result.data)).not.toContain('223344556677889900');
+  });
+
+  it('accepts a message command, which has no locale, response or deadline', () => {
+    const result = Batch.safeParse(batch([messageCommand({ options: undefined })]));
+    expect(result.success).toBe(true);
+    const event = result.data?.events[0];
+    expect(event?.type === 'message_command' && event.options).toEqual([]);
+  });
+
+  it('refuses message commands without a name, with a raw user ID, or with a deadline outcome', () => {
+    for (const bad of [
+      messageCommand({ command: '' }),
+      messageCommand({ command: 'x'.repeat(33) }),
+      messageCommand({ user: '112233445566778899' }),
+      { ...messageCommand(), outcome: 'timeout' },
+    ]) {
+      expect(Batch.safeParse(batch([bad])).success, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it('applies the privacy-mode actor rule to message commands too', () => {
+    const actor = { userId: '112233445566778899' };
+    const privacy = Batch.safeParse(batch([messageCommand({ actor })]));
+    expect(privacy.error?.issues[0]?.message).toBe('actor_in_privacy_mode');
+    expect(Batch.safeParse(batch([messageCommand({ actor })], { mode: 'audit' })).success).toBe(true);
   });
 
   it('rejects a non-v7 event ID', () => {
@@ -138,10 +164,41 @@ describe('input the database could not store', () => {
   it('finds NUL characters at any depth without recursing', () => {
     expect(containsNul({ a: ['x', { b: 'ok' }], c: 1, d: null })).toBe(false);
     expect(containsNul({ a: ['x', { b: 'bad\u0000' }] })).toBe(true);
-    expect(containsNul({ ['key\u0000']: 1 })).toBe(true);
+    expect(containsNul({ 'key\u0000': 1 })).toBe(true);
     let deep: unknown = 'leaf';
     for (let i = 0; i < 200_000; i++) deep = [deep];
     expect(containsNul(deep)).toBe(false);
+  });
+
+  it('accepts permission bitfields up to 64 bits, leading zeros included', () => {
+    const bits = (botPermissions: string) => GuildInfo.safeParse(guildInfo({ botPermissions })).success;
+    for (const ok of ['0', '8', '2147483648', '18446744073709551615', '18446744073709551609', '09999999999999999999']) {
+      expect(bits(ok), ok).toBe(true);
+    }
+    for (const bad of [
+      '18446744073709551616',
+      '18446744073709552000',
+      '99999999999999999999',
+      '000000000000000000001',
+    ]) {
+      expect(bits(bad), bad).toBe(false);
+    }
+  });
+
+  it('refuses a permission bitfield that is not a number instead of throwing', () => {
+    // Regression: a numeric check ran on any string and threw, so one bad event failed the request with a 500.
+    const join = (botPermissions: string) => ({
+      id: '0193f2b4-7c1a-7d4e-9a51-3c2f1e0b9a78',
+      ts: 1763052121000,
+      type: 'guild_join',
+      info: guildInfo({ botPermissions }),
+      detectedAtStartup: false,
+    });
+    for (const botPermissions of ['x', '1e5', '0x10', '-1', '']) {
+      const result = parseBatch(batch([interaction(), join(botPermissions)]));
+      expect(result.ok && result.events.map((e) => e.type), botPermissions).toEqual(['interaction']);
+      expect(result.ok && result.errors.map((e) => e.index)).toEqual([1]);
+    }
   });
 
   it('drops only the event that carries a NUL character, and the whole batch when the envelope does', () => {

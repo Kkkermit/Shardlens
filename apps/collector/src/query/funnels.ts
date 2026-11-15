@@ -1,4 +1,5 @@
 import type { Db } from '../db.js';
+import { COMMAND_KINDS_SQL } from '../ingest/codes.js';
 import type { QuerySpec } from './spec.js';
 
 type Spec<K extends QuerySpec['kind']> = Extract<QuerySpec, { kind: K }>;
@@ -25,10 +26,8 @@ function stepSource(step: Step | 'any', params: unknown[], from: string, to: str
              WHERE app_id = $1 AND name = ${name} AND user_hash IS NOT NULL AND ts >= ${from} AND ts < ${to}`;
   }
   return `SELECT user_hash AS u, ts FROM interactions
-           WHERE app_id = $1 AND command = ${name} AND kind BETWEEN 1 AND 4 AND ts >= ${from} AND ts < ${to}`;
+           WHERE app_id = $1 AND command = ${name} AND kind IN ${COMMAND_KINDS_SQL} AND ts >= ${from} AND ts < ${to}`;
 }
-
-const label = (step: Step) => (step.type === 'command' ? `/${step.name}` : step.name);
 
 /**
  * Conversion through 2–5 steps (custom events or commands), each within `windowHours` of entering the funnel, in
@@ -84,7 +83,8 @@ export async function funnel(db: Db, appId: string, spec: Spec<'funnel'>) {
     windowHours: spec.windowHours,
     timezone: spec.timezone,
     steps: spec.steps.map((step, i) => ({
-      label: label(step),
+      // The bare name: a command may be a prefix command, which the dashboard writes without a slash.
+      label: step.name,
       type: step.type,
       name: step.name,
       users: Number(total?.[`s${i + 1}`] ?? 0),
@@ -139,7 +139,7 @@ export async function retention(db: Db, appId: string, spec: Spec<'retention'>) 
     interval: spec.interval,
     timezone: spec.timezone,
     start: spec.start.type === 'command' ? `/${spec.start.name}` : spec.start.name,
-    return: spec.return === 'any' ? 'any activity' : label(spec.return),
+    return: spec.return === 'any' ? 'any activity' : spec.return.name,
     periods,
     cohorts: [...cohorts.values()].filter((c) => c.size > 0),
   };

@@ -15,6 +15,19 @@ describe('errorClass', () => {
     expect(errorClass(undefined)).toBe('undefined');
   });
 
+  it('never throws for an error whose class name was overwritten', () => {
+    const odd = new Error('x');
+    Object.defineProperty(odd, 'constructor', { value: { name: 42 } });
+    expect(errorClass(odd)).toBe('Error');
+    const hostile = new TypeError('x');
+    Object.defineProperty(hostile, 'constructor', {
+      get() {
+        throw new Error('getter');
+      },
+    });
+    expect(errorClass(hostile)).toBe('Error');
+  });
+
   it('caps very long class names', () => {
     const Long = { [`E${'x'.repeat(200)}`]: class extends Error {} };
     expect(errorClass(new (Object.values(Long)[0] as ErrorConstructor)())).toHaveLength(64);

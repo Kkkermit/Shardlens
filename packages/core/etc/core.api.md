@@ -26,6 +26,7 @@ export class BoundedQueue<T> {
     laneSize(priority: Priority): number;
     // (undocumented)
     push(item: T, priority: Priority): void;
+    removeWhere(match: (item: T) => boolean): number;
     requeue(items: readonly QueuedItem<T>[]): void;
     // (undocumented)
     get size(): number;
@@ -108,6 +109,9 @@ export type CustomProps = Record<string, CustomPropValue>;
 // @public (undocumented)
 export type CustomPropValue = string | number | boolean | null;
 
+// @public
+export function cutText(text: string, max: number): string;
+
 // @public (undocumented)
 export type DataMode = 'privacy' | 'audit';
 
@@ -124,6 +128,7 @@ export function errorCode(error: unknown): number | undefined;
 export interface EventSpool {
     // (undocumented)
     ack(id: string): Promise<void>;
+    drop?(match: (event: WireEvent) => boolean): Promise<number>;
     next(): Promise<{
         id: string;
         events: WireEvent[];
@@ -135,7 +140,7 @@ export interface EventSpool {
 export const EXPORTER_METRICS: {
     readonly interactions: {
         readonly kind: "counter";
-        readonly description: "Interactions handled (commands, context menus, components, modals, autocomplete), by outcome.";
+        readonly description: "Interactions handled (commands, context menus, components, modals, autocomplete) and message (prefix) commands, by outcome.";
         readonly unit: "1";
         readonly labels: readonly ["kind", "command", "outcome"];
     };
@@ -147,7 +152,7 @@ export const EXPORTER_METRICS: {
     };
     readonly interaction_handler: {
         readonly kind: "histogram";
-        readonly description: "Time spent in a handler wrapped with lens.wrap().";
+        readonly description: "Time spent in a handler wrapped with lens.wrap(), or reported for a message command.";
         readonly unit: "seconds";
         readonly labels: readonly ["kind", "command"];
     };
@@ -171,7 +176,7 @@ export const EXPORTER_METRICS: {
     };
     readonly ratelimits: {
         readonly kind: "counter";
-        readonly description: "Rate limits hit, by scope (user, global or shared).";
+        readonly description: "Requests held back for a rate limit, by scope (user, global or shared).";
         readonly unit: "1";
         readonly labels: readonly ["scope"];
     };
@@ -339,6 +344,9 @@ export interface QueuedItem<T> {
 }
 
 // @public
+export function recordedOptionValue(value: unknown, type?: number): string | number | boolean | undefined;
+
+// @public
 export function redactSecrets(text: string): string;
 
 // @public
@@ -363,7 +371,7 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
     // Warning: (ae-forgotten-export) The symbol "ErrorListener" needs to be exported by the entry point index.d.ts
     on(event: 'error', listener: ErrorListener): () => void;
     get ready(): boolean;
-    shutdown(input?: FlushOptions): Promise<void>;
+    shutdown(options?: FlushOptions): Promise<void>;
     // (undocumented)
     stats(): ClientStats;
 }
@@ -392,6 +400,7 @@ export function translateEvent(event: WireEvent, sink: MetricSink): void;
 
 // @public
 export class UserHasher {
+    deleteSalt(label: string): void;
     hash(userId: string, label: string): Promise<string | undefined>;
     // (undocumented)
     hasSalt(label: string): boolean;

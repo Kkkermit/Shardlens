@@ -1,7 +1,7 @@
 {
   "name": "@shardlens/core",
   "version": "1.0.0",
-  "description": "Library-agnostic core of the Shardlens SDK: queue, batching, transport, hashing and redaction. Zero runtime dependencies.",
+  "description": "Library-agnostic core of the Shardlens SDK for Discord bots: batching, retries, in-process user hashing and secret redaction. Zero dependencies, Web-standard APIs only.",
   "license": "MIT",
   "type": "module",
   "repository": {
@@ -9,15 +9,18 @@
     "url": "git+https://github.com/Kkkermit/Shardlens.git",
     "directory": "packages/core"
   },
-  "homepage": "https://github.com/Kkkermit/Shardlens#readme",
+  "homepage": "https://kkkermit.github.io/Shardlens/concepts/architecture/",
   "bugs": "https://github.com/Kkkermit/Shardlens/issues",
   "keywords": [
     "shardlens",
     "discord",
+    "discord-bot",
     "analytics",
     "sdk",
     "privacy",
-    "telemetry"
+    "telemetry",
+    "metrics",
+    "cloudflare-workers"
   ],
   "sideEffects": false,
   "engines": {
@@ -40,8 +43,7 @@
   "module": "./dist/index.js",
   "types": "./dist/index.d.cts",
   "files": [
-    "dist",
-    "!dist/**/*.map"
+    "dist"
   ],
   "publishConfig": {
     "access": "public",

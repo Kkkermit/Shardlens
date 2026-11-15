@@ -17,7 +17,7 @@ Alerts post to a Discord channel through a webhook when a metric crosses a thres
 1. In Discord, open the channel's settings → **Integrations → Webhooks → New Webhook**, and copy its URL.
 2. In the dashboard, open **Alerts** (Discord sign-in required) and fill in **New alert**: a name, the metric, a
    comparison, a threshold and a window between 1 minute and 24 hours.
-3. Save, then use **Test** to send a test message.
+3. Press **Create**, then use **Test** on the rule's row to send a test message.
 
 </Steps>
 
@@ -25,12 +25,12 @@ Alerts post to a Discord channel through a webhook when a metric crosses a thres
 
 | Metric                 | Meaning                                                              |
 | ---------------------- | -------------------------------------------------------------------- |
-| `missed_deadline_rate` | Share of interactions with no response within 3 seconds, in percent  |
-| `error_rate`           | Share of interactions that failed, in percent                        |
+| `missed_deadline_rate` | Share of interactions with no response within 3 seconds, in percent (prefix commands have no deadline and don't count) |
+| `error_rate`           | Share of interactions and prefix commands that failed, in percent    |
 | `p95_ms`               | 95th-percentile time to first response, in milliseconds              |
 | `invalid_requests_pct` | Share of the invalid-request limit (10,000 per 10 minutes) used      |
 | `stale_shards`         | Shards that haven't reported within the window                       |
-| `interactions_per_min` | Interactions per minute (alert on a drop with `<`)                   |
+| `interactions_per_min` | Interactions (commands, buttons, menus, modals, autocomplete) and prefix commands per minute; alert on a drop with `<` |
 | `identify_remaining`   | Gateway sessions left in Discord's daily budget                      |
 
 ## How alerts behave
@@ -38,7 +38,9 @@ Alerts post to a Discord channel through a webhook when a metric crosses a thres
 - Rules are checked every minute, over the window you chose. The invalid-request budget always looks at the last 10
   minutes, because that is the window Discord's limit uses.
 - An alert that fired won't fire again for 30 minutes, so a long incident doesn't flood the channel. Every firing is
-  kept in the alert history.
+  kept in the alert history, with the reason when Discord didn't take the message (see
+  [Troubleshooting](../../operations/troubleshooting/#alerts-or-reports-dont-arrive)).
+- With no data in the window (no interactions yet, say), the rate and latency metrics have no value and don't fire.
 - Messages use Discord's Components V2 layout with a link back to the dashboard, falling back to a plain message if
   needed.
 

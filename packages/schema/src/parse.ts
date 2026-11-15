@@ -8,9 +8,12 @@ export interface EventError {
   issues?: { path: (string | number)[]; message: string }[];
 }
 
+/** What `parseBatch()` returns: the envelope and the events kept, with why others were refused, or why the batch was. */
 export type ParseBatchResult =
   | { ok: true; envelope: Omit<BatchEnvelope, 'events'>; events: Event[]; errors: EventError[] }
   | { ok: false; issues: { path: (string | number)[]; message: string }[] };
+
+const nulIssues = () => [{ path: [], message: 'NUL characters are not allowed' }];
 
 function flattenIssues(error: z.ZodError): { path: (string | number)[]; message: string }[] {
   return error.issues.map((issue) => ({
@@ -41,6 +44,28 @@ export function containsNul(value: unknown): boolean {
   return false;
 }
 
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+/**
+ * Replaces lone UTF-16 surrogates (half an emoji, left by a cut that split a pair) with U+FFFD, in place: PostgreSQL's
+ * JSON columns refuse them, and one would fail the batch it came in. Validated events are shallow, so recursion is safe.
+ */
+function repairSurrogates(value: unknown): unknown {
+  if (typeof value === 'string') return value.replace(LONE_SURROGATE, '\uFFFD');
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) value[i] = repairSurrogates(value[i]);
+  } else if (typeof value === 'object' && value !== null) {
+    const record = value as Record<string, unknown>;
+    for (const key of Object.keys(record)) {
+      const repaired = repairSurrogates(key) as string;
+      const inner = repairSurrogates(record[key]);
+      if (repaired !== key) delete record[key];
+      record[repaired] = inner;
+    }
+  }
+  return value;
+}
+
 /**
  * Validates a batch the way the collector's ingest route does: an invalid envelope rejects the whole batch,
  * while an invalid event (or one breaking the privacy rule) drops only that event.
@@ -48,34 +73,29 @@ export function containsNul(value: unknown): boolean {
 export function parseBatch(input: unknown): ParseBatchResult {
   const envelope = BatchEnvelope.safeParse(input);
   if (!envelope.success) return { ok: false, issues: flattenIssues(envelope.error) };
-  const { events: _, ...header } = envelope.data;
-  if (containsNul(header)) return { ok: false, issues: [{ path: [], message: 'NUL characters are not allowed' }] };
+  const { events: raw, ...header } = envelope.data;
+  if (containsNul(header)) return { ok: false, issues: nulIssues() };
 
-  const { events: raw, ...rest } = envelope.data;
   const events: Event[] = [];
   const errors: EventError[] = [];
   raw.forEach((candidate, index) => {
     const parsed = Event.safeParse(candidate);
-    if (parsed.success && containsNul(parsed.data)) {
-      errors.push({
-        index,
-        reason: 'invalid_event',
-        issues: [{ path: [], message: 'NUL characters are not allowed' }],
-      });
-      return;
-    }
     if (!parsed.success) {
       errors.push({ index, reason: 'invalid_event', issues: flattenIssues(parsed.error) });
       return;
     }
-    const violation = privacyViolation(parsed.data, rest.mode);
+    if (containsNul(parsed.data)) {
+      errors.push({ index, reason: 'invalid_event', issues: nulIssues() });
+      return;
+    }
+    const violation = privacyViolation(parsed.data, header.mode);
     if (violation) {
       errors.push({ index, reason: violation });
       return;
     }
-    events.push(parsed.data);
+    events.push(repairSurrogates(parsed.data) as Event);
   });
-  return { ok: true, envelope: rest, events, errors };
+  return { ok: true, envelope: repairSurrogates(header) as typeof header, events, errors };
 }
 
 /** Major wire versions the current collector accepts (current and previous). */

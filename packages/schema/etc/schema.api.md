@@ -146,6 +146,39 @@ export const Batch: z.ZodObject<{
         id: z.ZodUUID;
         ts: z.ZodNumber;
         weight: z.ZodDefault<z.ZodNumber>;
+        type: z.ZodLiteral<"message_command">;
+        command: z.ZodString;
+        group: z.ZodOptional<z.ZodString>;
+        sub: z.ZodOptional<z.ZodString>;
+        options: z.ZodDefault<z.ZodArray<z.ZodString>>;
+        optionValues: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnion<readonly [z.ZodString, z.ZodNumber, z.ZodBoolean]>>>;
+        guild: z.ZodOptional<z.ZodString>;
+        channelType: z.ZodOptional<z.ZodNumber>;
+        guildLocale: z.ZodOptional<z.ZodString>;
+        memberTier: z.ZodOptional<z.ZodEnum<{
+            admin: "admin";
+            manager: "manager";
+            member: "member";
+            dm: "dm";
+        }>>;
+        user: z.ZodString;
+        actor: z.ZodOptional<z.ZodObject<{
+            userId: z.ZodString;
+            username: z.ZodOptional<z.ZodString>;
+            avatar: z.ZodOptional<z.ZodString>;
+        }, z.core.$strip>>;
+        outcome: z.ZodEnum<{
+            error: "error";
+            ok: "ok";
+        }>;
+        errorClass: z.ZodOptional<z.ZodString>;
+        errorCode: z.ZodOptional<z.ZodNumber>;
+        handlerMs: z.ZodOptional<z.ZodNumber>;
+        shard: z.ZodOptional<z.ZodNumber>;
+    }, z.core.$strip>, z.ZodObject<{
+        id: z.ZodUUID;
+        ts: z.ZodNumber;
+        weight: z.ZodDefault<z.ZodNumber>;
         type: z.ZodLiteral<"command_permissions">;
         guild: z.ZodString;
         command: z.ZodString;
@@ -420,10 +453,13 @@ export type BatchEnvelope = z.output<typeof BatchEnvelope>;
 // @public
 export type BatchInput = z.input<typeof Batch>;
 
-// @public (undocumented)
+// @public
+export function batchJsonSchema(): Record<string, unknown>;
+
+// @public
 export const COLLECTED_FIELDS: readonly CollectedField[];
 
-// @public (undocumented)
+// @public
 export interface CollectedField {
     // (undocumented)
     readonly description: string;
@@ -440,7 +476,7 @@ export interface CollectedField {
 }
 
 // @public
-export type CollectedObject = 'envelope' | 'event' | 'actor' | 'guild_info' | 'interaction' | 'guild_join' | 'guild_update' | 'guild_leave' | 'guild_availability' | 'guild_snapshot' | 'command_registry' | 'shard_state' | 'rest_window' | 'rate_limit' | 'invalid_request_warning' | 'gauge_window' | 'entitlement' | 'subscription' | 'custom' | 'app_info' | 'sdk_health' | 'interaction_error' | 'command_permissions';
+export type CollectedObject = 'envelope' | 'event' | 'actor' | 'guild_info' | 'interaction' | 'guild_join' | 'guild_update' | 'guild_leave' | 'guild_availability' | 'guild_snapshot' | 'command_registry' | 'shard_state' | 'rest_window' | 'rate_limit' | 'invalid_request_warning' | 'gauge_window' | 'entitlement' | 'subscription' | 'custom' | 'app_info' | 'sdk_health' | 'interaction_error' | 'message_command' | 'command_permissions';
 
 // @public
 export const CommandPermissions: z.ZodObject<{
@@ -456,7 +492,7 @@ export const CommandPermissions: z.ZodObject<{
 // @public (undocumented)
 export type CommandPermissions = z.output<typeof CommandPermissions>;
 
-// @public (undocumented)
+// @public
 export const CommandRegistry: z.ZodObject<{
     id: z.ZodUUID;
     ts: z.ZodNumber;
@@ -504,7 +540,7 @@ export function containsNul(value: unknown): boolean;
 // @public
 export const CUSTOM_EVENT_NAME: RegExp;
 
-// @public (undocumented)
+// @public
 export const CustomEvent: z.ZodObject<{
     id: z.ZodUUID;
     ts: z.ZodNumber;
@@ -519,7 +555,7 @@ export const CustomEvent: z.ZodObject<{
 // @public (undocumented)
 export type CustomEvent = z.output<typeof CustomEvent>;
 
-// @public (undocumented)
+// @public
 export const EntitlementEvent: z.ZodObject<{
     id: z.ZodUUID;
     ts: z.ZodNumber;
@@ -545,7 +581,7 @@ export const EntitlementEvent: z.ZodObject<{
 // @public (undocumented)
 export type EntitlementEvent = z.output<typeof EntitlementEvent>;
 
-// @public (undocumented)
+// @public
 export const ErrorResponse: z.ZodObject<{
     error: z.ZodString;
     message: z.ZodOptional<z.ZodString>;
@@ -558,7 +594,7 @@ export const ErrorResponse: z.ZodObject<{
 // @public (undocumented)
 export type ErrorResponse = z.output<typeof ErrorResponse>;
 
-// @public (undocumented)
+// @public
 export const Event: z.ZodDiscriminatedUnion<[z.ZodObject<{
     id: z.ZodUUID;
     ts: z.ZodNumber;
@@ -634,6 +670,39 @@ export const Event: z.ZodDiscriminatedUnion<[z.ZodObject<{
     errorClass: z.ZodString;
     errorCode: z.ZodOptional<z.ZodNumber>;
     handlerMs: z.ZodOptional<z.ZodNumber>;
+}, z.core.$strip>, z.ZodObject<{
+    id: z.ZodUUID;
+    ts: z.ZodNumber;
+    weight: z.ZodDefault<z.ZodNumber>;
+    type: z.ZodLiteral<"message_command">;
+    command: z.ZodString;
+    group: z.ZodOptional<z.ZodString>;
+    sub: z.ZodOptional<z.ZodString>;
+    options: z.ZodDefault<z.ZodArray<z.ZodString>>;
+    optionValues: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnion<readonly [z.ZodString, z.ZodNumber, z.ZodBoolean]>>>;
+    guild: z.ZodOptional<z.ZodString>;
+    channelType: z.ZodOptional<z.ZodNumber>;
+    guildLocale: z.ZodOptional<z.ZodString>;
+    memberTier: z.ZodOptional<z.ZodEnum<{
+        admin: "admin";
+        manager: "manager";
+        member: "member";
+        dm: "dm";
+    }>>;
+    user: z.ZodString;
+    actor: z.ZodOptional<z.ZodObject<{
+        userId: z.ZodString;
+        username: z.ZodOptional<z.ZodString>;
+        avatar: z.ZodOptional<z.ZodString>;
+    }, z.core.$strip>>;
+    outcome: z.ZodEnum<{
+        error: "error";
+        ok: "ok";
+    }>;
+    errorClass: z.ZodOptional<z.ZodString>;
+    errorCode: z.ZodOptional<z.ZodNumber>;
+    handlerMs: z.ZodOptional<z.ZodNumber>;
+    shard: z.ZodOptional<z.ZodNumber>;
 }, z.core.$strip>, z.ZodObject<{
     id: z.ZodUUID;
     ts: z.ZodNumber;
@@ -902,10 +971,10 @@ export type EventType = Event['type'];
 // @public
 export type FieldMode = 'privacy' | 'audit';
 
-// @public (undocumented)
+// @public
 export const GATEWAY_EVENT_COVERAGE: readonly GatewayEventCoverage[];
 
-// @public (undocumented)
+// @public
 export interface GatewayEventCoverage {
     // (undocumented)
     readonly event: string;
@@ -922,7 +991,7 @@ export type GatewayEventUse = 'used' | 'indirect' | 'plugin' | 'not_used' | 'nev
 // @public
 export const GAUGE_NAMES: readonly string[];
 
-// @public (undocumented)
+// @public
 export const GaugeWindow: z.ZodObject<{
     id: z.ZodUUID;
     ts: z.ZodNumber;
@@ -938,7 +1007,7 @@ export const GaugeWindow: z.ZodObject<{
 // @public (undocumented)
 export type GaugeWindow = z.output<typeof GaugeWindow>;
 
-// @public (undocumented)
+// @public
 export const GuildAvailability: z.ZodObject<{
     id: z.ZodUUID;
     ts: z.ZodNumber;
@@ -952,7 +1021,7 @@ export const GuildAvailability: z.ZodObject<{
 // @public (undocumented)
 export type GuildAvailability = z.output<typeof GuildAvailability>;
 
-// @public (undocumented)
+// @public
 export const GuildInfo: z.ZodObject<{
     guild: z.ZodString;
     name: z.ZodString;
@@ -979,7 +1048,7 @@ export const GuildInfo: z.ZodObject<{
 // @public (undocumented)
 export type GuildInfo = z.infer<typeof GuildInfo>;
 
-// @public (undocumented)
+// @public
 export const GuildJoin: z.ZodObject<{
     id: z.ZodUUID;
     ts: z.ZodNumber;
@@ -1013,7 +1082,7 @@ export const GuildJoin: z.ZodObject<{
 // @public (undocumented)
 export type GuildJoin = z.output<typeof GuildJoin>;
 
-// @public (undocumented)
+// @public
 export const GuildLeave: z.ZodObject<{
     id: z.ZodUUID;
     ts: z.ZodNumber;
@@ -1026,7 +1095,7 @@ export const GuildLeave: z.ZodObject<{
 // @public (undocumented)
 export type GuildLeave = z.output<typeof GuildLeave>;
 
-// @public (undocumented)
+// @public
 export const GuildSnapshot: z.ZodObject<{
     id: z.ZodUUID;
     ts: z.ZodNumber;
@@ -1040,7 +1109,7 @@ export const GuildSnapshot: z.ZodObject<{
 // @public (undocumented)
 export type GuildSnapshot = z.output<typeof GuildSnapshot>;
 
-// @public (undocumented)
+// @public
 export const GuildUpdate: z.ZodObject<{
     id: z.ZodUUID;
     ts: z.ZodNumber;
@@ -1073,7 +1142,7 @@ export const GuildUpdate: z.ZodObject<{
 // @public (undocumented)
 export type GuildUpdate = z.output<typeof GuildUpdate>;
 
-// @public (undocumented)
+// @public
 export const Histogram: z.ZodArray<z.ZodNumber>;
 
 // @public
@@ -1111,7 +1180,7 @@ export const InteractionError: z.ZodObject<{
 // @public (undocumented)
 export type InteractionError = z.output<typeof InteractionError>;
 
-// @public (undocumented)
+// @public
 export const InteractionEvent: z.ZodObject<{
     id: z.ZodUUID;
     ts: z.ZodNumber;
@@ -1182,7 +1251,7 @@ export const InteractionEvent: z.ZodObject<{
 // @public (undocumented)
 export type InteractionEvent = z.output<typeof InteractionEvent>;
 
-// @public (undocumented)
+// @public
 export const InteractionKind: z.ZodEnum<{
     chat_input: "chat_input";
     user_context: "user_context";
@@ -1197,7 +1266,7 @@ export const InteractionKind: z.ZodEnum<{
 // @public (undocumented)
 export type InteractionKind = z.infer<typeof InteractionKind>;
 
-// @public (undocumented)
+// @public
 export const InteractionOutcome: z.ZodEnum<{
     error: "error";
     ok: "ok";
@@ -1208,7 +1277,7 @@ export const InteractionOutcome: z.ZodEnum<{
 // @public (undocumented)
 export type InteractionOutcome = z.infer<typeof InteractionOutcome>;
 
-// @public (undocumented)
+// @public
 export const InvalidRequestWarning: z.ZodObject<{
     id: z.ZodUUID;
     ts: z.ZodNumber;
@@ -1224,13 +1293,55 @@ export type InvalidRequestWarning = z.output<typeof InvalidRequestWarning>;
 // @public
 export const MAX_BATCH_BYTES: number;
 
-// @public (undocumented)
+// @public
 export const MAX_BATCH_EVENTS = 500;
 
 // @public
 export const MAX_DECOMPRESSED_BYTES: number;
 
+// @public
+export const MAX_EVENT_WEIGHT = 10000;
+
+// @public
+export const MessageCommandEvent: z.ZodObject<{
+    id: z.ZodUUID;
+    ts: z.ZodNumber;
+    weight: z.ZodDefault<z.ZodNumber>;
+    type: z.ZodLiteral<"message_command">;
+    command: z.ZodString;
+    group: z.ZodOptional<z.ZodString>;
+    sub: z.ZodOptional<z.ZodString>;
+    options: z.ZodDefault<z.ZodArray<z.ZodString>>;
+    optionValues: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnion<readonly [z.ZodString, z.ZodNumber, z.ZodBoolean]>>>;
+    guild: z.ZodOptional<z.ZodString>;
+    channelType: z.ZodOptional<z.ZodNumber>;
+    guildLocale: z.ZodOptional<z.ZodString>;
+    memberTier: z.ZodOptional<z.ZodEnum<{
+        admin: "admin";
+        manager: "manager";
+        member: "member";
+        dm: "dm";
+    }>>;
+    user: z.ZodString;
+    actor: z.ZodOptional<z.ZodObject<{
+        userId: z.ZodString;
+        username: z.ZodOptional<z.ZodString>;
+        avatar: z.ZodOptional<z.ZodString>;
+    }, z.core.$strip>>;
+    outcome: z.ZodEnum<{
+        error: "error";
+        ok: "ok";
+    }>;
+    errorClass: z.ZodOptional<z.ZodString>;
+    errorCode: z.ZodOptional<z.ZodNumber>;
+    handlerMs: z.ZodOptional<z.ZodNumber>;
+    shard: z.ZodOptional<z.ZodNumber>;
+}, z.core.$strip>;
+
 // @public (undocumented)
+export type MessageCommandEvent = z.output<typeof MessageCommandEvent>;
+
+// @public
 export interface MetricDefinition {
     // (undocumented)
     readonly description: string;
@@ -1246,21 +1357,21 @@ export interface MetricDefinition {
 // @public
 export type MetricKind = 'counter' | 'gauge';
 
-// @public (undocumented)
+// @public
 export type MetricName = (typeof METRICS)[number]['name'];
 
-// @public (undocumented)
+// @public
 export const METRICS: readonly [{
     readonly name: "interactions";
     readonly kind: "counter";
     readonly unit: "count";
-    readonly source: readonly ["interaction"];
-    readonly description: "Commands, context menus and entry points run, with outcome and response-time histogram. Split by command, subcommand, outcome, context, install type, locale and member tier; never by server.";
+    readonly source: readonly ["interaction", "message_command"];
+    readonly description: "Commands, context menus, entry points and message (prefix) commands run, with outcome and response-time histogram. Split by command, subcommand, kind, outcome, context, install type, locale and member tier; never by server.";
 }, {
     readonly name: "interactions.by_guild";
     readonly kind: "counter";
     readonly unit: "count";
-    readonly source: readonly ["interaction"];
+    readonly source: readonly ["interaction", "message_command"];
     readonly description: "The same runs split by server, kind, command and outcome only, so the main rollup does not grow with commands × servers.";
 }, {
     readonly name: "interactions.autocomplete";
@@ -1285,7 +1396,7 @@ export const METRICS: readonly [{
     readonly kind: "counter";
     readonly unit: "count";
     readonly source: readonly ["command_permissions"];
-    readonly description: "Servers changing who may use commands (command lockdowns).";
+    readonly description: "Servers changing who may use commands (command lockdowns). Each change is stored, but not summed into rollups or shown in the dashboard.";
 }, {
     readonly name: "modals.shown";
     readonly kind: "counter";
@@ -1308,8 +1419,8 @@ export const METRICS: readonly [{
     readonly name: "rest.invalid";
     readonly kind: "counter";
     readonly unit: "count";
-    readonly source: readonly ["rest_window", "invalid_request_warning"];
-    readonly description: "401, 403 and non-shared 429 responses, counted against the 10,000 per 10 minutes ban threshold.";
+    readonly source: readonly ["rest_window"];
+    readonly description: "401, 403 and 429 responses by status, toward Discord's ban at 10,000 invalid requests in 10 minutes. Shared 429s, which don't count toward it, are counted apart.";
 }, {
     readonly name: "rest.ratelimits";
     readonly kind: "counter";
@@ -1339,19 +1450,19 @@ export const METRICS: readonly [{
     readonly kind: "counter";
     readonly unit: "count";
     readonly source: readonly ["shard_state"];
-    readonly description: "Shard lifecycle events: ready, resumed, reconnecting, disconnected, error, invalidated.";
+    readonly description: "Shard lifecycle events (ready, resumed, reconnecting, disconnected, error, invalidated), listed one by one on the Reliability page rather than summed into rollups.";
 }, {
     readonly name: "entitlements";
     readonly kind: "counter";
     readonly unit: "count";
-    readonly source: readonly ["entitlement"];
-    readonly description: "Entitlements created, updated and deleted, by SKU.";
+    readonly source: readonly ["entitlement", "webhook"];
+    readonly description: "Entitlements created, updated and deleted, by SKU, from the gateway and from Discord webhook events.";
 }, {
     readonly name: "subscriptions";
     readonly kind: "counter";
     readonly unit: "count";
     readonly source: readonly ["subscription"];
-    readonly description: "Subscriptions created, updated and deleted, by SKU and status.";
+    readonly description: "Subscriptions created, updated and deleted, by status.";
 }, {
     readonly name: "custom.<name>";
     readonly kind: "counter";
@@ -1409,6 +1520,12 @@ export const METRICS: readonly [{
     readonly source: readonly ["gauge_window"];
     readonly description: "Size of the discord.js channel cache.";
 }, {
+    readonly name: "rest.invalid_warning_count";
+    readonly kind: "gauge";
+    readonly unit: "count";
+    readonly source: readonly ["invalid_request_warning"];
+    readonly description: "Invalid requests discord.js has counted in its current 10-minute window, from its warning event. Sent only when the bot sets discord.js's `invalidRequestWarningInterval`.";
+}, {
     readonly name: "identify.remaining";
     readonly kind: "gauge";
     readonly unit: "sessions";
@@ -1431,7 +1548,7 @@ export const METRICS: readonly [{
 // @public (undocumented)
 export type MetricUnit = 'count' | 'ms' | 'bytes' | 'servers' | 'users' | 'sessions';
 
-// @public (undocumented)
+// @public
 export const Mode: z.ZodEnum<{
     privacy: "privacy";
     audit: "audit";
@@ -1443,7 +1560,7 @@ export type Mode = z.infer<typeof Mode>;
 // @public
 export function parseBatch(input: unknown): ParseBatchResult;
 
-// @public (undocumented)
+// @public
 export type ParseBatchResult = {
     ok: true;
     envelope: Omit<BatchEnvelope, 'events'>;
@@ -1463,7 +1580,7 @@ export type Personal = 'no' | 'pseudonymous' | 'yes';
 // @public
 export function privacyViolation(event: Event, mode: Mode): string | undefined;
 
-// @public (undocumented)
+// @public
 export const RateLimit: z.ZodObject<{
     id: z.ZodUUID;
     ts: z.ZodNumber;
@@ -1488,7 +1605,7 @@ export type RateLimit = z.output<typeof RateLimit>;
 // @public
 export const REQUIRED_INTENTS: readonly string[];
 
-// @public (undocumented)
+// @public
 export const RestWindow: z.ZodObject<{
     id: z.ZodUUID;
     ts: z.ZodNumber;
@@ -1514,16 +1631,17 @@ export const RestWindow: z.ZodObject<{
 // @public (undocumented)
 export type RestWindow = z.output<typeof RestWindow>;
 
-// @public (undocumented)
+// @public
 export const RETENTION: {
     readonly transient: "Not stored; used while processing the batch only";
     readonly raw: "Raw rows 35 days (configurable 7–90), then aggregate counts only";
     readonly audit: "Encrypted; 30 days by default, 90 days maximum";
-    readonly hash: "Until the salt for its period is destroyed (period end + 7 days); raw rows expire after 35 days";
+    readonly hash: "In unique-user counts until the salt for its period is destroyed (period end + 7 days); raw rows expire after 35 days (configurable 7–90)";
     readonly guild: "While the bot is installed, plus 90 days after it leaves";
     readonly registry: "While the command stays registered";
-    readonly gauge: "30 days at 30-second resolution, then hourly aggregates";
+    readonly gauge: "30 days as sent (every 30 seconds for process gauges), then deleted";
     readonly latest: "Latest value only";
+    readonly history: "No automatic expiry. A user hash in it can no longer be linked to anyone once its salt is destroyed";
 };
 
 // @public (undocumented)
@@ -1532,7 +1650,7 @@ export type RetentionKey = keyof typeof RETENTION;
 // @public
 export const SaltB64: z.ZodString;
 
-// @public (undocumented)
+// @public
 export const SaltPeriod: z.ZodEnum<{
     day: "day";
     week: "week";
@@ -1542,7 +1660,7 @@ export const SaltPeriod: z.ZodEnum<{
 // @public (undocumented)
 export type SaltPeriod = z.infer<typeof SaltPeriod>;
 
-// @public (undocumented)
+// @public
 export const SdkHealth: z.ZodObject<{
     id: z.ZodUUID;
     ts: z.ZodNumber;
@@ -1557,7 +1675,7 @@ export const SdkHealth: z.ZodObject<{
 // @public (undocumented)
 export type SdkHealth = z.output<typeof SdkHealth>;
 
-// @public (undocumented)
+// @public
 export const ShardState: z.ZodObject<{
     id: z.ZodUUID;
     ts: z.ZodNumber;
@@ -1583,7 +1701,7 @@ export type ShardState = z.output<typeof ShardState>;
 // @public
 export const Snowflake: z.ZodString;
 
-// @public (undocumented)
+// @public
 export const SubscriptionEvent: z.ZodObject<{
     id: z.ZodUUID;
     ts: z.ZodNumber;
@@ -1610,7 +1728,7 @@ export const Ts: z.ZodNumber;
 // @public
 export const UserHash: z.ZodString;
 
-// @public (undocumented)
+// @public
 export const WIRE_VERSION = 1;
 
 ```

@@ -6,6 +6,7 @@
 export * from './api.js';
 export * from './collected-fields.js';
 export * from './gateway-events.js';
+export * from './json-schema.js';
 export * from './metrics.js';
 export * from './parse.js';
 export * from './wire.js';

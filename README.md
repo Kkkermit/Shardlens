@@ -11,7 +11,7 @@ Three lines to install. No privileged intents. User IDs never leave your bot.
 
 [![CI](https://github.com/Kkkermit/Shardlens/actions/workflows/ci.yml/badge.svg)](https://github.com/Kkkermit/Shardlens/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@shardlens/discordjs?label=%40shardlens%2Fdiscordjs&color=2a78d6)](https://www.npmjs.com/package/@shardlens/discordjs)
-[![discord.js](https://img.shields.io/badge/discord.js-14%20%7C%2015-5865F2?logo=discord&logoColor=white)](https://discord.js.org)
+[![discord.js](https://img.shields.io/badge/discord.js-14.12%2B%20%7C%2015-5865F2?logo=discord&logoColor=white)](https://discord.js.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](tsconfig.base.json)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Kkkermit/Shardlens/badge)](https://scorecard.dev/viewer/?uri=github.com/Kkkermit/Shardlens)
 [![Licence: MIT](https://img.shields.io/badge/licence-MIT-green)](LICENSE)
@@ -38,15 +38,18 @@ Three lines to install. No privileged intents. User IDs never leave your bot.
 
 ## Quick start
 
-**1. Run the collector** on any server with Docker:
+**1. Run the collector** on any server with Docker and a domain pointing at it:
 
 ```sh
-git clone https://github.com/Kkkermit/Shardlens && cd Shardlens/deploy
-cp .env.example .env          # fill in your domain, application ID, secrets and two keys
-docker compose up -d --build  # Caddy (HTTPS) → collector and dashboard → PostgreSQL
+npx shardlens init --domain stats.example.com --app-id 123456789012345678
+cd shardlens && docker compose up -d  # Caddy (HTTPS) → collector and dashboard → PostgreSQL
 ```
 
-**2. Add three lines to your bot.** Only the `Guilds` intent is needed:
+`init` writes the Compose file, a `.env` with generated secrets and keys, and a `bot.env` with the two settings your
+bot needs. No server? [Embedded mode](https://kkkermit.github.io/Shardlens/self-hosting/embedded/) runs the collector
+inside your bot instead.
+
+**2. Add three lines to your bot** (`npm install @shardlens/discordjs`). Only the `Guilds` intent is needed:
 
 ```ts
 import { Client, GatewayIntentBits } from 'discord.js';
@@ -60,10 +63,11 @@ createShardlens(client, {
 await client.login(process.env.DISCORD_TOKEN);
 ```
 
-**3. Open the dashboard** at your domain and sign in with Discord (the app owner and team) or your read key.
+**3. Open the dashboard** at your domain and sign in with your read key (`SHARDLENS_READ_KEY` in `.env`), or with
+Discord (the app owner and team) once you have set that up. `npx shardlens doctor` checks the bot's side.
 
-That's it. Add `lens.wrap(handler)` to record handler time and errors, `lens.track('ticket_opened', { … })` for your
-own events, and `lens.shutdown()` to flush on exit.
+That's it. Add `lens.wrap(handler)` to record handler time and errors, `lens.wrapMessageCommand(name, handler)` for
+prefix commands, `lens.track('ticket_opened', { … })` for your own events, and `lens.shutdown()` to flush on exit.
 
 ### Or paste this to your agent
 
@@ -83,47 +87,51 @@ packages in CI. The docs are also published as plain text for agents
 
 ## What you get
 
-| Page            | What it tells you                                                                                                                                                      |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Overview**    | Live interactions per minute, p95 response time, failures and shard state, streamed as they happen                                                                     |
-| **Commands**    | Runs, trend, unique users, servers, failure rate, p95, options used, channel types, languages and peak hours for every command. Registered-but-unused ones are flagged |
-| **Servers**     | Every server with its profile, usage and install history. Joins and removals that happened while the bot was offline are found at the next startup                     |
-| **Growth**      | Servers added and removed, size at install, activation within 24 hours, weekly retention cohorts, drift from Discord's own count                                       |
-| **Audience**    | Daily, weekly and monthly unique users, new against returning, stickiness, languages, install types. Counts only                                                       |
-| **Reliability** | p50/p95/p99 against the 3-second deadline, errors by Discord code, REST latency by route, 429s, the invalid-request budget, shards and SDK health                      |
-| **Events**      | Your `track()` events with property breakdowns, funnels across events and commands, and a cohort builder                                                               |
-| **Premium**     | Entitlements and subscriptions by SKU, premium share and estimated revenue                                                                                             |
-| **Alerts**      | Rules such as "missed deadlines above 1% for 10 minutes", posted to a Discord channel                                                                                  |
-| **Reports**     | A daily or weekly summary posted to a Discord channel of your choice: commands, users, failures, response time, servers, top commands                                  |
+| Page            | What it tells you                                                                                                                                                                       |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Overview**    | Live interactions per minute, p95 response time, failures and shard state, streamed as they happen                                                                                      |
+| **Commands**    | Runs, trend, unique users, servers, failure rate, p95, options used, channel types, languages and peak hours for every command, slash or prefix. Registered-but-unused ones are flagged |
+| **Servers**     | Every server with its profile, usage and install history. Joins and removals that happened while the bot was offline are found at the next startup                                      |
+| **Growth**      | Servers added and removed, size at install, activation within 24 hours, weekly retention cohorts, drift from Discord's own count                                                        |
+| **Audience**    | Daily, weekly and monthly unique users, new against returning, stickiness, languages, install types. Counts only                                                                        |
+| **Reliability** | p50/p95/p99 against the 3-second deadline, errors by Discord code, REST latency by route, 429s, the invalid-request budget, shards and SDK health                                       |
+| **Events**      | Your `track()` events with property breakdowns, funnels across events and commands, and a cohort builder                                                                                |
+| **Premium**     | Entitlements and subscriptions by SKU, premium share and estimated revenue                                                                                                              |
+| **Alerts**      | Rules such as "missed deadlines above 1% for 10 minutes", posted to a Discord channel                                                                                                   |
+| **Reports**     | A daily or weekly summary posted to a Discord channel of your choice: commands, users, failures, response time, servers, top commands                                                   |
 
 ## Works with your setup
 
 - **Your own dashboard:** everything the built-in dashboard shows comes from one query endpoint, so you can
   [render it inside the dashboard you already have](https://kkkermit.github.io/Shardlens/guides/your-own-dashboard/).
-- **discord.js 14 and 15**, TypeScript or JavaScript, ESM or CommonJS, Node 22.12+.
+- **discord.js 14.12+ and 15**, TypeScript or JavaScript, ESM or CommonJS, Node 22.12+.
 - **Every sharding mode:** single process, `ShardingManager`, internal sharding and discord-hybrid-sharding.
 - **HTTP-interaction bots** on Cloudflare Workers, Deno and Bun with [`@shardlens/http`](packages/http).
 - **Your monitoring:** [Prometheus](packages/exporter-prometheus) and [OpenTelemetry](packages/exporter-otel)
   exporters with a ready-made Grafana dashboard, with or without a collector.
 - **Small bots:** [embedded mode](https://kkkermit.github.io/Shardlens/self-hosting/embedded/) runs the collector
   inside your bot's own process. No Docker, no database server.
+- **Your own database:** [copy every event](https://kkkermit.github.io/Shardlens/self-hosting/your-own-database/) into
+  the MongoDB, MySQL, MariaDB, PostgreSQL or SQLite your bot already uses.
 - **Platforms:** one-file templates for [Railway](https://kkkermit.github.io/Shardlens/self-hosting/railway/) and
   [Render](https://kkkermit.github.io/Shardlens/self-hosting/render/) in [`deploy/`](deploy).
 
 Runnable [`examples/`](examples) cover a minimal bot, both sharding managers, audit mode and a Cloudflare Worker.
+`pnpm sim` installs the packed packages into four differently built bots and runs them against a fake Discord, so
+every release is checked the way you would use it.
 
 ## How it compares
 
-|                                                    | Shardlens                          | [Discord Analytics](https://discordanalytics.xyz) | Discord's own counts (`GET /applications/@me`)              |
-| -------------------------------------------------- | ---------------------------------- | ------------------------------------------------- | ----------------------------------------------------------- |
-| Where your data lives                              | Your server only                   | Hosted, with a self-host option                   | Discord                                                     |
-| Command usage, servers and growth                  | Yes                                | Yes                                               | Approximate server and user-install counts only, no history |
-| Response time against the 3-second deadline        | Yes, per command                   | Not in its docs                                   | No                                                          |
-| REST health: latency, 429s, invalid-request budget | Yes                                | Not in its docs                                   | No                                                          |
-| Shard and gateway health                           | Yes                                | Not in its docs                                   | No                                                          |
-| User IDs                                           | Hashed inside your bot; never sent | See its privacy policy                            | Not applicable                                              |
-| Prometheus / OpenTelemetry export                  | Yes                                | Not in its docs                                   | No                                                          |
-| Libraries                                          | discord.js 14 and 15, HTTP bots    | discord.js, discord.py, Oceanic.js and more       | Any                                                         |
+|                                                    | Shardlens                           | [Discord Analytics](https://discordanalytics.xyz) | Discord's own counts (`GET /applications/@me`)              |
+| -------------------------------------------------- | ----------------------------------- | ------------------------------------------------- | ----------------------------------------------------------- |
+| Where your data lives                              | Your server only                    | Hosted, with a self-host option                   | Discord                                                     |
+| Command usage, servers and growth                  | Yes                                 | Yes                                               | Approximate server and user-install counts only, no history |
+| Response time against the 3-second deadline        | Yes, per command                    | Not in its docs                                   | No                                                          |
+| REST health: latency, 429s, invalid-request budget | Yes                                 | Not in its docs                                   | No                                                          |
+| Shard and gateway health                           | Yes                                 | Not in its docs                                   | No                                                          |
+| User IDs                                           | Hashed inside your bot; never sent  | See its privacy policy                            | Not applicable                                              |
+| Prometheus / OpenTelemetry export                  | Yes                                 | Not in its docs                                   | No                                                          |
+| Libraries                                          | discord.js 14.12+ and 15, HTTP bots | discord.js, discord.py, Oceanic.js and more       | Any                                                         |
 
 Based on each project's public documentation in November 2026. Spotted something out of date?
 [Open an issue](https://github.com/Kkkermit/Shardlens/issues).

@@ -11,8 +11,9 @@ import OptionsTable from '../../../components/OptionsTable.astro';
 import configuration from '../../../../snippets/configuration.ts?raw';
 import shutdown from '../../../../snippets/shutdown.ts?raw';
 
-`createShardlens(client, options)` attaches Shardlens to a discord.js client. Call it before `client.login()`. Only
-`endpoint` and `apiKey` are required.
+`createShardlens(client, options)` attaches Shardlens to a discord.js client. Call it before `client.login()`. Sending
+to a collector needs only `endpoint` and `apiKey`; with [exporters only](../../self-hosting/exporter-only/), leave both
+out.
 
 <Code code={configuration} lang="ts" title="bot.ts" />
 
@@ -36,8 +37,9 @@ Audit mode has to be switched on in the collector as well, and it changes what y
 <ConfigOption name="captureOptionValues" />
 
 By default Shardlens records which options were used, never what was typed. Allow-list options whose values are safe
-and useful (a language, a difficulty) and never free-text options. Values are passed through secret redaction before
-they are sent.
+and useful (a language, a difficulty) and never free-text options. User, channel, role, mentionable and attachment
+options are never recorded even when allow-listed, nor is any value holding a Discord ID, which a user can type. Values
+are passed through secret redaction and cut to 100 characters before they are sent.
 
 ### Custom IDs
 
@@ -72,6 +74,10 @@ are dropped first once that fills up. With `spool: { dir: './shardlens-spool' }`
 - When the collector answers again, spooled batches are sent first, oldest first, and deleted only once accepted.
   The collector ignores events it already has, so a replay never counts anything twice.
 - Spool files hold hashed events only. User IDs, and audit-mode identities, are never written to disk.
+- The shards of one bot can share the folder: `maxBytes` caps the folder, and any of them replays what is there.
+- At the cap, the oldest batches are deleted to make room. Those events are lost, and counted in
+  `lens.stats().dropped.spool_evicted`.
+- Erasing a user (`forgetUser`, `/privacy erase`) also removes their events from the spool.
 
 ### Member counts
 
@@ -85,6 +91,10 @@ This refresh keeps the counts current at a gentle, fixed pace.
 The SDK never installs signal handlers. Call `shutdown()` on your own shutdown path to send what is queued:
 
 <Code code={shutdown} lang="ts" />
+
+Calling `shutdown()` again, as the second of two signals does, waits for the same flush. With a `ShardingManager` or
+discord-hybrid-sharding, the manager must also pass signals on to its processes: see
+[Stopping a sharded bot](../../guides/sharding/#stopping-a-sharded-bot).
 
 <Aside type="tip">
   Use `dryRun: true` while developing to print events to the console instead of sending them.

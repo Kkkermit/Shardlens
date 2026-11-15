@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { readStored, store } from './storage';
 
 export const PRESETS = [
   { id: '24h', label: '24 hours', days: 1, interval: 'hour' },
@@ -10,32 +11,25 @@ export const PRESETS = [
 export type PresetId = (typeof PRESETS)[number]['id'];
 
 const KEY = 'shardlens:range';
+const DEFAULT = PRESETS[2];
 
-function initial(): PresetId {
-  try {
-    const stored = localStorage.getItem(KEY);
-    if (PRESETS.some((p) => p.id === stored)) return stored as PresetId;
-  } catch {
-    // storage may be unavailable
-  }
-  return '30d';
+/** The last `days` days up to the next whole minute, so queries asked within the same minute share a cache entry. */
+export function lastDays(days: number, now = Date.now()): { from: string; to: string } {
+  const to = Math.ceil(now / 60_000) * 60_000;
+  return { from: new Date(to - days * 86_400_000).toISOString(), to: new Date(to).toISOString() };
 }
 
 /** The page-wide time range (remembered per viewer), rounded to the minute so queries cache. */
 export function useRange() {
-  const [id, setIdState] = useState<PresetId>(initial);
+  const [id, setIdState] = useState<PresetId>(() => {
+    const stored = readStored(KEY);
+    return PRESETS.find((p) => p.id === stored)?.id ?? DEFAULT.id;
+  });
   const setId = (next: PresetId) => {
     setIdState(next);
-    try {
-      localStorage.setItem(KEY, next);
-    } catch {
-      // ignore
-    }
+    store(KEY, next);
   };
-  const preset = PRESETS.find((p) => p.id === id) ?? PRESETS[2];
-  const range = useMemo(() => {
-    const to = Math.ceil(Date.now() / 60_000) * 60_000;
-    return { from: new Date(to - preset.days * 86_400_000).toISOString(), to: new Date(to).toISOString() };
-  }, [preset.days]);
-  return { id, setId, preset, range, interval: preset.interval };
+  const preset = PRESETS.find((p) => p.id === id) ?? DEFAULT;
+  const range = useMemo(() => lastDays(preset.days), [preset.days]);
+  return { id, setId, range, interval: preset.interval };
 }

@@ -1,14 +1,16 @@
 import type { Db } from '../db.js';
-import { rollupSource } from './rollup-source.js';
+import { INTERACTIONS_ONLY_SQL } from '../ingest/codes.js';
+import { gaugeSamples } from './gauge-samples.js';
+import { rawFrom, rollupSource } from './rollup-source.js';
 
-const DAY = 86_400_000;
-const rawFrom = (from: Date, now: Date) => new Date(Math.max(from.getTime(), now.getTime() - 35 * DAY));
-
-/** Reliability page: deadlines, errors, REST, rate limits, budgets, shards, process and SDK health. */
+/**
+ * Reliability page: deadlines, errors, REST, rate limits, budgets, shards, process and SDK health. Interactions only:
+ * message commands have no response or deadline, and show on the Commands page.
+ */
 export async function reliability(db: Db, appId: string, range: { from: string; to: string }, now: Date) {
   const from = new Date(range.from);
   const to = new Date(range.to);
-  const rf = rawFrom(from, now);
+  const rf = await rawFrom(db, appId, from, now);
   const rollups = rollupSource(from, now);
   const [totals, codes, routes, limits, budget, info, shards, events, process, sdks] = await Promise.all([
     db.query(
@@ -20,12 +22,12 @@ export async function reliability(db: Db, appId: string, range: { from: string; 
               shardlens_hist_quantile(shardlens_hist_sum(shardlens_hist_one(ack_ms, weight)), 0.5)::float8 AS "p50Ms",
               shardlens_hist_quantile(shardlens_hist_sum(shardlens_hist_one(ack_ms, weight)), 0.95)::float8 AS "p95Ms",
               shardlens_hist_quantile(shardlens_hist_sum(shardlens_hist_one(ack_ms, weight)), 0.99)::float8 AS "p99Ms"
-         FROM interactions WHERE app_id = $1 AND ts >= $2 AND ts < $3`,
+         FROM interactions WHERE app_id = $1 AND ts >= $2 AND ts < $3 AND ${INTERACTIONS_ONLY_SQL}`,
       [appId, rf, to],
     ),
     db.query(
       `SELECT coalesce(error_code::text, error_class, 'unknown') AS key, sum(weight)::float8 AS value
-         FROM interactions WHERE app_id = $1 AND ts >= $2 AND ts < $3 AND outcome IN (1, 2)
+         FROM interactions WHERE app_id = $1 AND ts >= $2 AND ts < $3 AND outcome IN (1, 2) AND ${INTERACTIONS_ONLY_SQL}
         GROUP BY 1 ORDER BY 2 DESC LIMIT 10`,
       [appId, rf, to],
     ),
@@ -70,13 +72,14 @@ export async function reliability(db: Db, appId: string, range: { from: string; 
     // still reporting at the newest sample: added up, except event-loop delay, where the worst process is shown.
     db.query(
       `WITH recent AS (
-         SELECT name, instance, shard, value, ts, max(ts) OVER (PARTITION BY name) AS newest FROM gauges
-          WHERE app_id = $1 AND name IN ('eventloop.p99_ms', 'memory.rss_bytes', 'memory.heap_used_bytes', 'cache.users', 'cache.channels')
-            AND ts > now() - interval '1 day'
+         SELECT name, slot, value, ts, max(ts) OVER (PARTITION BY name) AS newest FROM (${gaugeSamples(
+           `g.app_id = $1 AND g.ts > now() - interval '1 day'
+            AND g.name IN ('eventloop.p99_ms', 'memory.rss_bytes', 'memory.heap_used_bytes', 'cache.users', 'cache.channels')`,
+         )}) samples
        ), latest AS (
-         SELECT DISTINCT ON (name, instance, shard) name, value FROM recent
+         SELECT DISTINCT ON (name, slot) name, value FROM recent
           WHERE ts > newest - interval '2 minutes'
-          ORDER BY name, instance, shard, ts DESC
+          ORDER BY name, slot, ts DESC
        )
        SELECT name, (CASE WHEN name = 'eventloop.p99_ms' THEN max(value) ELSE sum(value) END)::float8 AS value
          FROM latest GROUP BY name`,
@@ -109,6 +112,7 @@ export async function reliability(db: Db, appId: string, range: { from: string; 
 export async function premium(db: Db, appId: string, range: { from: string; to: string }, now: Date) {
   const from = new Date(range.from);
   const to = new Date(range.to);
+  const rawStart = await rawFrom(db, appId, from, now);
   const [skus, prices, changes, active, subs, share] = await Promise.all([
     db.query<{ skus: { id: string; name: string; type: number }[] }>('SELECT skus FROM app_info WHERE app_id = $1', [
       appId,
@@ -144,8 +148,8 @@ export async function premium(db: Db, appId: string, range: { from: string; to: 
     ),
     db.query<{ share: number | null }>(
       `SELECT (sum(weight) FILTER (WHERE premium) / nullif(sum(weight), 0))::float8 AS share
-         FROM interactions WHERE app_id = $1 AND ts >= $2 AND ts < $3`,
-      [appId, rawFrom(from, now), to],
+         FROM interactions WHERE app_id = $1 AND ts >= $2 AND ts < $3 AND ${INTERACTIONS_ONLY_SQL}`,
+      [appId, rawStart, to],
     ),
   ]);
   const names = new Map((skus.rows[0]?.skus ?? []).map((s) => [s.id, s.name]));

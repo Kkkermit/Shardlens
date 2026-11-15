@@ -14,7 +14,7 @@ collector keeps doing the collecting, storing and counting; you decide how it lo
 
 ## 1. Create a read key
 
-In the Shardlens dashboard, **Settings → API keys → Create**, scope **read**. It is shown once. A read key can run
+In the Shardlens dashboard, **Settings → API keys → New read key**. It is shown once. A read key can run
 queries and nothing else: it can't send events, change settings or see who ran a command.
 
 Put it in your dashboard's server environment as `SHARDLENS_READ_KEY`, next to `SHARDLENS_URL`.
@@ -38,8 +38,8 @@ Every query is a JSON object with a `kind`. Ranges are ISO timestamps, at most 4
 | `kind`                              | What comes back                                                                                          |
 | ----------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | `overview`                          | The app, runs and failures per day for the last 30 days, the server count, unique users this period, and the state of each bot process's SDK |
-| `commands`                          | Every command: runs, change on the previous period, failure rate, p95, servers, unique users             |
-| `command`                           | One command in depth: subcommands, options, channel types, member tiers, languages, top servers, latency |
+| `commands`                          | Every command: runs, change on the previous period, failure rate, p95, servers, unique users, and the kinds it ran as (`chat_input`, `message_command`, menus) |
+| `command`                           | One command in depth: runs per kind, subcommands, options, channel types, member tiers, languages, top servers, latency |
 | `series`                            | A metric over time (`interval`: minute, hour, day, week or month), optionally split with `groupBy`       |
 | `top`                               | The top values of one dimension: commands, servers, languages, outcomes                                  |
 | `heatmap`                           | Hour-by-weekday counts in your time zone                                                                 |
@@ -74,6 +74,10 @@ There is no `groupBy: 'user'` and no per-user query: that is by design, in every
 | `rest.calls`, `rest.invalid`, `rest.ratelimits` | `method`, `route`, `status`; `status`; `scope`, `route`             |
 | `guild.joins`, `guild.leaves`, `guild.unavailable` | `detected`                                                       |
 | `custom` (with `name`)                      | None: use `eventProps` for an event's properties                        |
+
+Rollups are kept in UTC: minutes for 14 days, hours for 13 months, then days. In a time zone that isn't a whole
+number of hours from UTC (India, Newfoundland, Nepal, parts of Australia), hourly points start at half past (10:30) and
+the heatmap's 10:00 column counts from 10:30 to 11:30. Days older than 13 months are UTC days.
 
 Per-server numbers are kept for fewer dimensions on purpose, so the store doesn't grow with commands × servers ×
 everything else.

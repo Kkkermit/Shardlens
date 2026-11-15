@@ -4,13 +4,15 @@
 
 ```ts
 
+import { BaseInteraction } from 'discord.js';
 import { ChatInputCommandInteraction } from 'discord.js';
 import { Client } from 'discord.js';
 import { ClientStats } from '@shardlens/core';
 import { CustomEventName } from '@shardlens/core';
 import { CustomEventProps } from '@shardlens/core';
-import { Interaction } from 'discord.js';
+import { CustomEvents } from '@shardlens/core';
 import { Logger } from '@shardlens/core';
+import { Message } from 'discord.js';
 import { RESTPostAPIChatInputApplicationCommandsJSONBody } from 'discord.js';
 import { SaltPeriod } from '@shardlens/core';
 import { ShardlensClient } from '@shardlens/core';
@@ -22,52 +24,74 @@ export function createPrivacyCommand(lens: Shardlens, options?: PrivacyCommandOp
 // @public
 export function createShardlens(client: Client, options: ShardlensOptions): Shardlens;
 
+export { CustomEvents }
+
+// @public
+export interface HandlerResult {
+    durationMs?: number | undefined;
+    error?: unknown;
+}
+
+// @public
+export interface MessageCommandInfo {
+    command: string;
+    group?: string | undefined;
+    options?: readonly string[] | undefined;
+    optionValues?: Readonly<Record<string, string | number | boolean>> | undefined;
+    sub?: string | undefined;
+}
+
+// @public
+export interface MessageCommandRun extends MessageCommandInfo {
+    durationMs?: number | undefined;
+    error?: unknown;
+    failed?: boolean | undefined;
+}
+
 // @public
 export type MetricGroup = 'interactions' | 'guilds' | 'rest' | 'gateway' | 'process' | 'premium' | 'app';
 
 // @public
 export function normaliseRoute(route: string): string;
 
-// @public (undocumented)
+// @public
 export interface PrivacyCommand {
     data: RESTPostAPIChatInputApplicationCommandsJSONBody;
     handle(interaction: ChatInputCommandInteraction): Promise<boolean>;
 }
 
-// @public (undocumented)
+// @public
 export interface PrivacyCommandOptions {
-    // (undocumented)
     name?: string | undefined;
     policyUrl?: string | undefined;
 }
 
-// @public (undocumented)
+// @public
 export interface Shardlens {
-    // (undocumented)
     readonly client: ShardlensClient;
-    // (undocumented)
     flush(): Promise<void>;
     forgetUser(userId: string): Promise<{
         erased: number;
     } | undefined>;
-    // (undocumented)
+    handlerFinished(interaction: BaseInteraction, result?: HandlerResult): void;
+    handlerStarted(interaction: BaseInteraction): void;
     isOptedOut(userId: string): boolean;
-    // (undocumented)
     on(event: 'error', listener: (name: string, error: unknown) => void): () => void;
     optIn(userId: string): void;
     optOut(userId: string): void;
     shutdown(options?: {
         timeoutMs?: number;
     }): Promise<void>;
-    // (undocumented)
     stats(): ShardlensStats;
     track<N extends CustomEventName>(name: N, props?: CustomEventProps<N>, context?: TrackContext): void;
-    wrap<A extends [Interaction, ...unknown[]], R>(handler: (...args: A) => R | Promise<R>): (...args: A) => Promise<Awaited<R>>;
+    trackMessageCommand(message: Message, run: MessageCommandRun): void;
+    wrap<A extends [BaseInteraction, ...unknown[]], R>(handler: (...args: A) => R | Promise<R>): (...args: A) => Promise<Awaited<R>>;
+    wrapMessageCommand<A extends [Message, ...unknown[]], R>(command: string | MessageCommandInfo, handler: (...args: A) => R | Promise<R>): (...args: A) => Promise<Awaited<R>>;
 }
 
 export { ShardlensExporter }
 
-// @public (undocumented)
+// @public
 export interface ShardlensOptions {
     apiKey?: string | undefined;
     auditIncludeProfile?: boolean | undefined;
@@ -85,9 +109,10 @@ export interface ShardlensOptions {
     mode?: 'privacy' | 'audit' | undefined;
     normaliseCustomId?: ((customId: string) => string) | undefined;
     onOptOutChange?: ((userId: string, optedOut: boolean) => void) | undefined;
-    optedOut?: Iterable<string> | undefined;
+    optedOut?: Iterable<string | bigint> | undefined;
     refreshGuildCounts?: boolean | undefined;
     release?: string | undefined;
+    // @deprecated
     saltPeriod?: SaltPeriod | undefined;
     sampleRate?: Readonly<Record<string, number>> | undefined;
     spool?: {
@@ -98,15 +123,12 @@ export interface ShardlensOptions {
 
 // @public
 export interface ShardlensStats extends ClientStats {
-    // (undocumented)
     pendingInteractions: number;
 }
 
 // @public
 export interface TrackContext {
-    // (undocumented)
     guildId?: string | null | undefined;
-    // (undocumented)
     userId?: string | undefined;
 }
 

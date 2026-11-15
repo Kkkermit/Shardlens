@@ -1,7 +1,7 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { bearerToken, readSession, type SessionAuth } from '../security/auth.js';
 import type { Deps } from '../server.js';
-import { hasCsrfHeader } from './auth.js';
+import { allowedUser, hasCsrfHeader } from './auth.js';
 
 /**
  * Who may read data: a dashboard session or a read-scoped key, or anyone on a public demo collector
@@ -35,6 +35,12 @@ export async function requireAdmin(
   }
   if (session.method !== 'discord' || !session.userId) {
     await reply.code(403).send({ error: 'discord_login_required' });
+    return undefined;
+  }
+  // Checked on every request, not only at sign-in: someone taken off the team (or off SHARDLENS_EXTRA_ADMINS) loses
+  // access as soon as the bot reports its new team, not when the session expires.
+  if ((await allowedUser(deps, session.appId, session.userId)) !== 'ok') {
+    await reply.code(403).send({ error: 'not_a_team_member' });
     return undefined;
   }
   if (opts.mutate && !hasCsrfHeader(req)) {

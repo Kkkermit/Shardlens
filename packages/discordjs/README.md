@@ -4,7 +4,7 @@ Self-hosted, privacy-first analytics and health monitoring for discord.js bots. 
 it sends events to a [Shardlens collector](https://kkkermit.github.io/Shardlens/getting-started/quick-start/) that you
 run yourself.
 
-- Works with discord.js 14 and 15, TypeScript or JavaScript, ESM or CommonJS, Node.js 22.12+.
+- Works with discord.js 14.12 or newer and 15, TypeScript or JavaScript, ESM or CommonJS, Node.js 22.12+.
 - Needs the `Guilds` intent only. User IDs are hashed inside your bot; message content is never collected.
 - Never throws into your bot: bounded memory, no I/O in listeners, every internal error caught and counted.
 
@@ -30,16 +30,27 @@ client.on(
   }),
 );
 
-process.once('SIGTERM', async () => {
-  await lens.shutdown();
-  process.exit(0);
-});
+// The SDK never handles signals: flush on your own shutdown path.
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.once(signal, async () => {
+    await lens.shutdown();
+    await client.destroy();
+    process.exit(0);
+  });
+}
 
 await client.login(process.env.DISCORD_TOKEN);
 ```
 
+Slash commands, context menus, buttons, select menus, modals and autocomplete are recorded on their own. Prefix
+commands are recorded where your parser matches one, with `lens.wrapMessageCommand()` or `lens.trackMessageCommand()`,
+and frameworks that run handlers themselves (Sapphire) report through `lens.handlerStarted()` and
+`lens.handlerFinished()`.
+
 Create one instance per process: in the shard file with `ShardingManager`, in the cluster file with
 discord-hybrid-sharding. See [configuration](https://kkkermit.github.io/Shardlens/getting-started/configuration/),
+[command handlers and frameworks](https://kkkermit.github.io/Shardlens/guides/command-handlers/),
+[prefix commands](https://kkkermit.github.io/Shardlens/guides/prefix-commands/),
 [sharding](https://kkkermit.github.io/Shardlens/guides/sharding/),
 [custom events](https://kkkermit.github.io/Shardlens/guides/custom-events/) and the
 [`/privacy` command](https://kkkermit.github.io/Shardlens/guides/privacy-command/).

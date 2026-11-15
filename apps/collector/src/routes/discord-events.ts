@@ -3,6 +3,7 @@ import { Snowflake } from '@shardlens/schema';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { insertRows } from '../db.js';
+import { ENTITLEMENT_COLUMNS } from '../ingest/write.js';
 import { auditCipher } from '../security/crypto.js';
 import { makeDiscordVerifier } from '../security/ed25519.js';
 import { hashUserId } from '../security/userhash.js';
@@ -131,38 +132,21 @@ export async function discordEventRoutes(app: FastifyInstance, deps: Deps): Prom
       const action =
         event.type === 'ENTITLEMENT_CREATE' ? 'create' : event.type === 'ENTITLEMENT_DELETE' ? 'delete' : 'update';
       const hash = e.data.user_id ? await hashUserId(deps.db, appId, e.data.user_id, at) : undefined;
-      await insertRows(
-        deps.db,
-        'entitlements',
+      await insertRows(deps.db, 'entitlements', ENTITLEMENT_COLUMNS, [
         [
-          'app_id',
-          'ts',
-          'action',
-          'sku_id',
-          'entitlement_type',
-          'owner',
-          'user_hash',
-          'guild_id',
-          'starts_at',
-          'ends_at',
-          'source',
+          appId,
+          at,
+          action,
+          e.data.sku_id,
+          e.data.type,
+          e.data.guild_id ? 'guild' : 'user',
+          hash?.bytes ?? null,
+          e.data.guild_id ?? null,
+          e.data.starts_at ? new Date(e.data.starts_at) : null,
+          e.data.ends_at ? new Date(e.data.ends_at) : null,
+          'webhook',
         ],
-        [
-          [
-            appId,
-            at,
-            action,
-            e.data.sku_id,
-            e.data.type,
-            e.data.guild_id ? 'guild' : 'user',
-            hash?.bytes ?? null,
-            e.data.guild_id ?? null,
-            e.data.starts_at ? new Date(e.data.starts_at) : null,
-            e.data.ends_at ? new Date(e.data.ends_at) : null,
-            'webhook',
-          ],
-        ],
-      );
+      ]);
       await recordDelivery(item, at, { userHash: hash?.bytes, guildId: e.data.guild_id });
     }
   };

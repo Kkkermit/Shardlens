@@ -1,6 +1,6 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { MAX_CUSTOM_ID_LENGTH, normaliseCustomId, redactSecrets } from '../src/index.js';
+import { cutText, MAX_CUSTOM_ID_LENGTH, normaliseCustomId, redactSecrets } from '../src/index.js';
 
 describe('normaliseCustomId', () => {
   it('strips snowflakes, UUIDs and numbers', () => {
@@ -8,6 +8,7 @@ describe('normaliseCustomId', () => {
     expect(normaliseCustomId('page_3')).toBe('page_*');
     expect(normaliseCustomId('vote:0193f2b4-7c1a-7d4e-9a51-3c2f1e0b9a77:yes')).toBe('vote:*:yes');
     expect(normaliseCustomId('confirm')).toBe('confirm');
+    expect(normaliseCustomId(`role:${'1'.repeat(25)}`)).toBe('role:*');
   });
 
   it('never outputs a digit, never grows past the wire limit (property)', () => {
@@ -77,6 +78,44 @@ describe('redactSecrets', () => {
         expect(out).not.toContain(hmac);
       }),
       { numRuns: 2_000 },
+    );
+  });
+});
+
+describe('redaction cost', () => {
+  it('stays linear on long runs of token characters', () => {
+    for (const input of ['a'.repeat(20_000), `${'a'.repeat(30)}.`.repeat(700), '-'.repeat(20_000)]) {
+      const started = performance.now();
+      redactSecrets(input);
+      // About a millisecond when linear, over half a second when quadratic: a wide limit holds on a busy machine.
+      expect(performance.now() - started).toBeLessThan(250);
+    }
+  });
+});
+
+describe('cutText', () => {
+  it('never ends halfway through a character and replaces lone surrogates', () => {
+    expect(cutText('ab😀', 3)).toBe('ab');
+    expect(cutText('ab😀', 4)).toBe('ab😀');
+    expect(cutText('a\ud800b', 10)).toBe('a\ufffdb');
+    expect(cutText('a\udc00', 10)).toBe('a\ufffd');
+  });
+
+  it('replaces NUL, which the collector refuses', () => {
+    expect(cutText('a\0b\0', 10)).toBe('a\ufffdb\ufffd');
+  });
+
+  it('always gives well-formed text without NUL, no longer than asked (property)', () => {
+    // Any UTF-16 code units, so NUL and lone and split surrogates come up.
+    const units = fc.array(fc.integer({ min: 0, max: 0xffff }), { maxLength: 300 });
+    const loneSurrogate = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+    fc.assert(
+      fc.property(units, fc.integer({ min: 0, max: 200 }), (codes, max) => {
+        const out = cutText(String.fromCharCode(...codes), max);
+        expect(out.length).toBeLessThanOrEqual(max);
+        expect(out).not.toMatch(loneSurrogate);
+        expect(out.includes('\0')).toBe(false);
+      }),
     );
   });
 });

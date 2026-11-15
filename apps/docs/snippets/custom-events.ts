@@ -2,7 +2,7 @@ import type { Shardlens } from '@shardlens/discordjs';
 import type { ButtonInteraction } from 'discord.js';
 
 // Register your events once for typed track() calls. Without this, any lower_snake_case name is accepted.
-declare module '@shardlens/core' {
+declare module '@shardlens/discordjs' {
   interface CustomEvents {
     ticket_opened: { category: 'billing' | 'support' | 'other'; priority: number };
     ticket_closed: { category: 'billing' | 'support' | 'other'; resolved: boolean };

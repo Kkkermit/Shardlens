@@ -1,0 +1,3 @@
+# Copy to .dev.vars (git-ignored) for `npx wrangler dev`. In production these are secrets: `npx wrangler secret put`.
+DISCORD_PUBLIC_KEY=
+SHARDLENS_INGEST_KEY=

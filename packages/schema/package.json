@@ -1,7 +1,7 @@
 {
   "name": "@shardlens/schema",
   "version": "1.0.0",
-  "description": "Shardlens wire format (zod schemas, JSON Schema and TypeScript types), metric registry and data-collected register.",
+  "description": "Shardlens wire format: zod schemas, a JSON Schema and TypeScript types for every event, with the metric registry and the register of collected data.",
   "license": "MIT",
   "type": "module",
   "repository": {
@@ -9,14 +9,16 @@
     "url": "git+https://github.com/Kkkermit/Shardlens.git",
     "directory": "packages/schema"
   },
-  "homepage": "https://github.com/Kkkermit/Shardlens#readme",
+  "homepage": "https://kkkermit.github.io/Shardlens/concepts/data-collected/",
   "bugs": "https://github.com/Kkkermit/Shardlens/issues",
   "keywords": [
     "shardlens",
     "discord",
     "discord.js",
     "analytics",
+    "privacy",
     "schema",
+    "json-schema",
     "zod"
   ],
   "sideEffects": false,
@@ -43,8 +45,7 @@
   "module": "./dist/index.js",
   "types": "./dist/index.d.cts",
   "files": [
-    "dist",
-    "!dist/**/*.map"
+    "dist"
   ],
   "publishConfig": {
     "access": "public",

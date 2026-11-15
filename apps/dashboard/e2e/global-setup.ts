@@ -54,6 +54,7 @@ export default async function globalSetup() {
     SHARDLENS_AUDIT_KEY: Buffer.alloc(32, 8).toString('base64'),
     SHARDLENS_INGEST_KEY: INGEST_KEY,
     SHARDLENS_READ_KEY: READ_KEY,
+    SHARDLENS_EXTRA_ADMINS: ADMIN_ID,
     SHARDLENS_DASHBOARD_DIR: dashboardDist,
     PORT: String(PORT),
     HOST: '127.0.0.1',

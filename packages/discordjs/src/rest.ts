@@ -2,7 +2,7 @@ import { newHistogram, observe, uuidv7 } from '@shardlens/core';
 import type { EventInput } from '@shardlens/schema';
 import { type Client, RESTEvents } from 'discord.js';
 import type { InteractionTracker } from './interactions.js';
-import { normaliseRoute } from './util.js';
+import { clamped, clampedInt, normaliseRoute } from './util.js';
 
 type RestWindowInput = Extract<EventInput, { type: 'rest_window' }>;
 type RestRow = RestWindowInput['rows'][number];
@@ -11,8 +11,13 @@ type RestRow = RestWindowInput['rows'][number];
 const CALLBACK_ROUTE = '/interactions/:id/:token/callback';
 /** Interaction callback type for "open a modal". */
 const MODAL = 9;
+/** The wire format's limit per `rest_window`: one row more and the collector rejects the whole window. */
 const MAX_ROWS = 2_000;
+/** Rows held back for `(other)`, so calls on routes past the limit still count under their method and status. */
+const OVERFLOW_ROWS = 100;
 const OVERFLOW_ROUTE = '(other)';
+/** The wire format's cap on a rate limit's waits: 30 days, in milliseconds. */
+const MAX_WAIT_MS = 2_592_000_000;
 
 type Rest = Client['rest'];
 type MakeRequest = Rest['options']['makeRequest'];
@@ -22,6 +27,12 @@ type ResponseListener = (...args: Parameters<Parameters<Rest['on']>[1]>) => void
 function isWebResponse(value: unknown): value is Response {
   return typeof Response !== 'undefined' && value instanceof Response;
 }
+
+/**
+ * Where each Shardlens `makeRequest` wrapper sends calls on to. Kept outside the wrapper so a wrapper that is no longer
+ * on top (a second Shardlens on the same client installed after it) can still be spliced out of the chain.
+ */
+const nextRequest = new WeakMap<MakeRequest, { next: MakeRequest }>();
 
 export interface RestHooks {
   /** Builds the `rest_window` event for the period since the last drain, or `undefined` if nothing happened. */
@@ -53,19 +64,19 @@ export function installRestHooks(
   let windowStart = Date.now();
 
   const record = (method: string, route: string, status: number, retries: number, ms: number | undefined) => {
-    let key = `${method} ${route} ${status}`;
-    if (!rows.has(key) && rows.size >= MAX_ROWS) key = `${method} ${OVERFLOW_ROUTE} ${status}`;
-    let row = rows.get(key);
+    let row = rows.get(`${method} ${route} ${status}`);
     if (!row) {
-      row = {
-        method,
-        route: rows.size >= MAX_ROWS ? OVERFLOW_ROUTE : route,
-        status,
-        count: 0,
-        retries: 0,
-        latency: newHistogram(),
-      };
-      rows.set(key, row);
+      const kept = rows.size < MAX_ROWS - OVERFLOW_ROWS ? route : OVERFLOW_ROUTE;
+      const key = `${method} ${kept} ${status}`;
+      row = rows.get(key);
+      if (!row) {
+        if (rows.size >= MAX_ROWS) {
+          opts.count('rest_rows_full');
+          return;
+        }
+        row = { method, route: kept, status, count: 0, retries: 0, latency: newHistogram() };
+        rows.set(key, row);
+      }
     }
     row.count++;
     row.retries += retries;
@@ -89,6 +100,8 @@ export function installRestHooks(
     }
 
     const webClone = isWebResponse(response) ? response : undefined;
+    // @discordjs/rest gives every `response` listener the same clone, so it is the bot's too when the bot listens.
+    const shared = rest.listenerCount(RESTEvents.Response) > 1;
     let bodyHandled = false;
 
     if (request.route === CALLBACK_ROUTE && opts.tracker) {
@@ -116,8 +129,17 @@ export function installRestHooks(
           let code: number | undefined;
           if (webClone) {
             bodyHandled = true;
-            const err = (await webClone.json().catch(() => undefined)) as { code?: unknown } | undefined;
-            code = typeof err?.code === 'number' ? err.code : undefined;
+            // Our own copy when others listen: reading the shared clone would leave them an unusable body.
+            let source: Response | undefined = webClone;
+            if (shared) {
+              try {
+                source = webClone.clone();
+              } catch {
+                source = undefined; // another listener already read it
+              }
+            }
+            const err = (await source?.json().catch(() => undefined)) as { code?: unknown } | undefined;
+            code = Number.isSafeInteger(err?.code) ? (err?.code as number) : undefined;
           }
           const timedOut = code === 10062 || (code === undefined && status === 404);
           opts.tracker.responded(id, {
@@ -129,8 +151,9 @@ export function installRestHooks(
       }
     }
 
-    // Free the tee'd copy of real clones so discord.js isn't holding every response twice.
-    if (webClone && !bodyHandled && !webClone.bodyUsed) await webClone.body?.cancel().catch(() => undefined);
+    // Free the tee'd copy of real clones so discord.js isn't holding every response twice, unless another listener
+    // may still read it.
+    if (webClone && !shared && !bodyHandled && !webClone.bodyUsed) await webClone.body?.cancel().catch(() => undefined);
   });
 
   const onRateLimited = opts.safe(
@@ -144,7 +167,9 @@ export function installRestHooks(
       retryAfter: number;
       sublimitTimeout?: number;
     }) => {
-      const scope = info.scope === 'global' || info.scope === 'shared' ? info.scope : 'user';
+      // @discordjs/rest emits this only when it holds a request back, and always with `scope: 'user'`: a global wait
+      // shows only in `global`. 429 responses are counted in the REST window instead.
+      const scope = info.global ? 'global' : info.scope === 'shared' ? 'shared' : 'user';
       opts.enqueue(
         {
           id: uuidv7(),
@@ -154,9 +179,9 @@ export function installRestHooks(
           global: Boolean(info.global),
           route: normaliseRoute(info.route),
           method: String(info.method).toUpperCase().slice(0, 8),
-          limit: Number.isFinite(info.limit) ? Math.trunc(info.limit) : 0,
-          retryAfter: Math.max(0, info.retryAfter ?? 0),
-          sublimitTimeout: Math.max(0, info.sublimitTimeout ?? 0),
+          limit: clampedInt(info.limit, Number.MAX_SAFE_INTEGER) ?? 0,
+          retryAfter: clamped(info.retryAfter, MAX_WAIT_MS) ?? 0,
+          sublimitTimeout: clamped(info.sublimitTimeout, MAX_WAIT_MS) ?? 0,
         },
         2,
       );
@@ -169,8 +194,8 @@ export function installRestHooks(
         id: uuidv7(),
         ts: Date.now(),
         type: 'invalid_request_warning',
-        count: Math.trunc(info.count),
-        remainingTime: info.remainingTime,
+        count: clampedInt(info.count, Number.MAX_SAFE_INTEGER) ?? 0,
+        remainingTime: clamped(info.remainingTime, MAX_WAIT_MS) ?? 0,
       },
       2,
     );
@@ -183,11 +208,11 @@ export function installRestHooks(
   // Time every HTTP call through the documented `makeRequest` option. The same `headers` object reaches the
   // `response` event, so it links timing to the bucketed route without reading any header.
   const restOptions = rest.options as { makeRequest: MakeRequest };
-  const original = restOptions.makeRequest;
+  const link = { next: restOptions.makeRequest };
   const wrapped: MakeRequest = async (url, init) => {
     const started = performance.now();
     try {
-      return await original(url, init);
+      return await link.next(url, init);
     } finally {
       try {
         const ref = init?.headers;
@@ -197,6 +222,7 @@ export function installRestHooks(
       }
     }
   };
+  nextRequest.set(wrapped, link);
   restOptions.makeRequest = wrapped;
 
   return {
@@ -224,7 +250,17 @@ export function installRestHooks(
       rest.off(RESTEvents.Response, onResponse);
       rest.off(RESTEvents.RateLimited, onRateLimited);
       rest.off(RESTEvents.InvalidRequestWarning, onInvalid);
-      if (restOptions.makeRequest === wrapped) restOptions.makeRequest = original;
+      if (restOptions.makeRequest === wrapped) {
+        restOptions.makeRequest = link.next;
+        return;
+      }
+      // Another Shardlens wrapped ours: take ours out of the middle of the chain.
+      for (let outer = nextRequest.get(restOptions.makeRequest); outer; outer = nextRequest.get(outer.next)) {
+        if (outer.next === wrapped) {
+          outer.next = link.next;
+          return;
+        }
+      }
     },
   };
 }

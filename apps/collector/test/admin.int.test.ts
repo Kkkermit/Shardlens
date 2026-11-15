@@ -1,9 +1,11 @@
 import { generateKeyPairSync, sign } from 'node:crypto';
+import { uuidv7 } from '@shardlens/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { evaluateMetric, runAlerts } from '../src/jobs/alerts.js';
 import { runReports } from '../src/jobs/reports.js';
 import { backfillRollups, runRollups, runUniques } from '../src/jobs/rollups.js';
 import { ALERT_METRICS } from '../src/routes/admin.js';
+import { auditCipher } from '../src/security/crypto.js';
 import {
   APP_ID,
   envelope,
@@ -22,6 +24,8 @@ const { publicKey, privateKey } = generateKeyPairSync('ed25519');
 const PUBLIC_KEY_HEX = Buffer.from(publicKey.export({ format: 'jwk' }).x!, 'base64url').toString('hex');
 const AUDIT_KEY = Buffer.alloc(32, 9).toString('base64');
 const ADMIN = '987654321098765432';
+/** Signed in once, but on no team list any more. */
+const FORMER_ADMIN = '876543210987654321';
 const USER = '555555555555555555';
 const WEBHOOK = 'https://discord.com/api/webhooks/112233445566778899/abcDEF_token';
 
@@ -52,7 +56,7 @@ function signed(body: object, ts = Math.floor(Date.now() / 1000)) {
 const settle = () => new Promise((r) => setTimeout(r, 150));
 
 beforeAll(async () => {
-  h = await startHarness({ discordPublicKey: PUBLIC_KEY_HEX, auditKey: AUDIT_KEY });
+  h = await startHarness({ discordPublicKey: PUBLIC_KEY_HEX, auditKey: AUDIT_KEY, extraAdmins: [ADMIN] });
   adminCookie = await testSession(h.db, 'discord', ADMIN);
   readCookie = await testSession(h.db, 'read_key', null);
 });
@@ -161,6 +165,24 @@ describe('admin access', () => {
     expect(noCsrf.statusCode).toBe(403);
   });
 
+  it('lets no cache keep an answer: settings, keys, alerts, queries, sign-in errors', async () => {
+    const admin = { cookies: { shardlens_session: adminCookie } };
+    const answers = {
+      settings: await h.app.inject({ method: 'GET', url: '/v1/settings', ...admin }),
+      keys: await h.app.inject({ method: 'GET', url: '/v1/keys', ...admin }),
+      alerts: await h.app.inject({ method: 'GET', url: '/v1/alerts', ...admin }),
+      meta: await h.app.inject({ method: 'GET', url: '/v1/meta', ...admin }),
+      refused: await h.app.inject({ method: 'GET', url: '/v1/settings' }),
+      signIn: await h.app.inject({
+        method: 'POST',
+        url: '/auth/read-key',
+        headers: { 'x-shardlens-csrf': '1' },
+        payload: {},
+      }),
+    };
+    for (const [name, res] of Object.entries(answers)) expect(res.headers['cache-control'], name).toBe('no-store');
+  });
+
   it('validates settings: audit retention over 90 days and unknown fields are rejected', async () => {
     const ok = await h.app.inject({
       method: 'PUT',
@@ -188,6 +210,53 @@ describe('admin access', () => {
     expect(audit.rows[0].n).toBeGreaterThan(0);
   });
 
+  it('accepts every spelling of a time zone the database knows, and nothing else', async () => {
+    const save = (timezone: string) =>
+      h.app.inject({ method: 'PUT', url: '/v1/settings', ...asAdmin(), payload: { timezone } });
+    for (const timezone of ['Asia/Kolkata', 'Asia/Calcutta', 'Europe/Kyiv', 'Etc/UTC']) {
+      expect((await save(timezone)).statusCode, timezone).toBe(200);
+    }
+    for (const timezone of ['Mars/Olympus', '../../etc/passwd', 'Asia/Kolkata; DROP TABLE apps']) {
+      expect((await save(timezone)).statusCode, timezone).toBe(400);
+    }
+    expect((await save('Europe/London')).statusCode).toBe(200);
+    // A save that leaves the zone out keeps it.
+    await h.app.inject({ method: 'PUT', url: '/v1/settings', ...asAdmin(), payload: { rawRetentionDays: 35 } });
+    const settings = await h.app.inject({
+      method: 'GET',
+      url: '/v1/settings',
+      cookies: { shardlens_session: adminCookie },
+    });
+    expect(settings.json()).toMatchObject({ timezone: 'Europe/London' });
+  });
+
+  it('refuses a sample rate whose events would carry a weight the wire refuses', async () => {
+    const save = (rate: number) =>
+      h.app.inject({ method: 'PUT', url: '/v1/settings', ...asAdmin(), payload: { sampling: { custom: rate } } });
+    expect((await save(0.00005)).statusCode).toBe(400);
+    expect((await save(0.0001)).statusCode).toBe(200);
+    expect((await save(1)).statusCode).toBe(200);
+  });
+
+  it('refuses required permission bits a bigint cannot hold, and filters servers with any bits', async () => {
+    const save = (requiredPermissions: string) =>
+      h.app.inject({ method: 'PUT', url: '/v1/settings', ...asAdmin(), payload: { requiredPermissions } });
+    expect((await save('9223372036854775808')).statusCode).toBe(400);
+    expect((await save('2048')).statusCode).toBe(200);
+    await h.db.query(
+      `INSERT INTO guilds (app_id, guild_id, joined_at, bot_permissions) VALUES ($1, 400000000000000001, now(), 18446744073709551615)
+       ON CONFLICT DO NOTHING`,
+      [APP_ID],
+    );
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/v1/query',
+      cookies: { shardlens_session: adminCookie },
+      payload: { kind: 'servers', missingPermissions: true },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+  });
+
   it('creates keys shown once, and revoked keys stop working immediately', async () => {
     const created = await h.app.inject({
       method: 'POST',
@@ -204,6 +273,35 @@ describe('admin access', () => {
     expect((await cfg()).statusCode).toBe(200);
     expect((await h.app.inject({ method: 'DELETE', url: `/v1/keys/${id}`, ...asAdmin() })).statusCode).toBe(200);
     expect((await cfg()).statusCode).toBe(401);
+  });
+
+  it('ends the dashboard sessions opened with a read key when that key is revoked', async () => {
+    const created = await h.app.inject({
+      method: 'POST',
+      url: '/v1/keys',
+      ...asAdmin(),
+      payload: { scope: 'read', label: 'shared with a friend' },
+    });
+    const { id, key } = created.json() as { id: string; key: string };
+    const signIn = await h.app.inject({
+      method: 'POST',
+      url: '/auth/read-key',
+      headers: { 'x-shardlens-csrf': '1' },
+      payload: { key },
+    });
+    expect(signIn.statusCode).toBe(200);
+    const session = signIn.cookies.find((c) => c.name === 'shardlens_session')?.value as string;
+    const meta = () => h.app.inject({ method: 'GET', url: '/v1/meta', cookies: { shardlens_session: session } });
+    expect((await meta()).statusCode).toBe(200);
+    expect((await h.app.inject({ method: 'DELETE', url: `/v1/keys/${id}`, ...asAdmin() })).statusCode).toBe(200);
+    expect((await meta()).statusCode).toBe(401);
+  });
+
+  it('takes admin access away from someone no longer on the team, without waiting for the session to end', async () => {
+    const former = await testSession(h.db, 'discord', FORMER_ADMIN);
+    const settings = await h.app.inject({ method: 'GET', url: '/v1/settings', cookies: { shardlens_session: former } });
+    expect(settings.statusCode).toBe(403);
+    expect(settings.json()).toEqual({ error: 'not_a_team_member' });
   });
 });
 
@@ -277,6 +375,23 @@ describe('alerts', () => {
     );
     expect(history.rows[0]).toMatchObject({ delivered: false });
     expect(history.rows[0]?.error).toMatch(/could not be decrypted/);
+  });
+
+  it('answers a test of an alert whose webhook can no longer be decrypted with the reason, not a 500', async () => {
+    const stale = auditCipher(Buffer.alloc(32, 9).toString('base64')).encrypt(WEBHOOK);
+    const rule = await h.db.query<{ id: string }>(
+      `INSERT INTO alert_rules (app_id, name, metric, comparator, threshold, window_s, webhook_enc)
+       VALUES ($1, 'stale key', 'error_rate', '>', 1, 300, $2) RETURNING id::text`,
+      [APP_ID, stale],
+    );
+    const id = rule.rows[0]?.id;
+    try {
+      const res = await h.app.inject({ method: 'POST', url: `/v1/alerts/${id}/test`, ...asAdmin() });
+      expect(res.statusCode).toBe(502);
+      expect(res.json()).toMatchObject({ error: 'webhook_failed', message: expect.stringMatching(/decrypted/) });
+    } finally {
+      await h.db.query('DELETE FROM alert_rules WHERE id = $1', [id]);
+    }
   });
 });
 
@@ -478,6 +593,67 @@ describe('audit mode', () => {
     expect(JSON.stringify(lookups.rows)).not.toContain(USER);
   });
 
+  it('records who ran a prefix command the same way', async () => {
+    const { hasher, period } = await sdkHasher(h.app);
+    const user = (await hasher.hash(USER, period))!;
+    const res = await ingest(
+      h.app,
+      envelope(
+        [
+          {
+            id: uuidv7(),
+            ts: Date.now(),
+            type: 'message_command',
+            command: 'warn',
+            user,
+            outcome: 'ok',
+            actor: { userId: USER, username: 'someone' },
+          },
+        ],
+        { mode: 'audit' },
+      ),
+    );
+    expect(res.json()).toMatchObject({ accepted: 1 });
+    const log = await h.app.inject({
+      method: 'GET',
+      url: `/v1/audit/log?user=${USER}`,
+      cookies: { shardlens_session: adminCookie },
+    });
+    expect(log.json().rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ userId: USER, kind: 'message_command', command: 'warn', outcome: 'ok' }),
+      ]),
+    );
+  });
+
+  it('pages through rows recorded in the same millisecond without skipping any', async () => {
+    const { hasher, period } = await sdkHasher(h.app);
+    const user = (await hasher.hash(USER, period))!;
+    const ts = Date.now() - 60_000;
+    const runs = [1, 2, 3].map(() => ({
+      id: uuidv7(ts),
+      ts,
+      type: 'message_command',
+      command: 'paged',
+      user,
+      outcome: 'ok',
+      actor: { userId: USER },
+    }));
+    expect((await ingest(h.app, envelope(runs, { mode: 'audit' }))).json()).toMatchObject({ accepted: 3 });
+    const page = (before?: string) =>
+      h.app.inject({
+        method: 'GET',
+        url: `/v1/audit/log?command=paged&limit=2${before ? `&before=${encodeURIComponent(before)}` : ''}`,
+        cookies: { shardlens_session: adminCookie },
+      });
+    const first = (await page()).json() as { rows: { interactionId: string }[]; nextBefore: string };
+    expect(first.rows).toHaveLength(2);
+    const second = (await page(first.nextBefore)).json() as { rows: { interactionId: string }[] };
+    expect(second.rows).toHaveLength(1);
+    const seen = [...first.rows, ...second.rows].map((r) => r.interactionId).sort();
+    expect(seen).toEqual(runs.map((r) => r.id.toLowerCase()).sort());
+  });
+
   it('refuses a filter it does not know, instead of ignoring it and showing every row', async () => {
     const misspelt = await h.app.inject({
       method: 'GET',
@@ -599,6 +775,7 @@ describe('reliability, premium and badge queries', () => {
     const res = await h.app.inject({ method: 'GET', url: '/v1/badge/servers.svg' });
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toContain('image/svg+xml');
+    expect(res.headers['cache-control']).toBe('public, max-age=600');
     expect(res.body).toContain('servers');
   });
 });
