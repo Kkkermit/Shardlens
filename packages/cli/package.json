@@ -1,6 +1,6 @@
 {
   "name": "shardlens",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Shardlens CLI: set up a self-hosted collector, generate keys, print a privacy-policy paragraph, check your setup.",
   "license": "MIT",
   "type": "module",

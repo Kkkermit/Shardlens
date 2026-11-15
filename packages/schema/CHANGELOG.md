@@ -1,5 +1,93 @@
 # @shardlens/schema
 
+## 1.1.0
+
+### Minor Changes
+
+- c220106: Record prefix (message) commands. `lens.wrapMessageCommand(name, handler)` and `lens.trackMessageCommand(message, run)`
+  record a command your bot's parser matched in a message, such as `!ban @someone`, with its outcome, handler time and
+  error class. The SDK reads the message's author, server, channel type and the author's permissions, and never its
+  content. Prefix commands are stored with interactions as the `message_command` kind ("Prefix command" on the
+  dashboard), so the Commands page, unique users, servers, funnels and the exporters count them. Deadline, response-time,
+  Reliability and premium figures still cover interactions only.
+
+  The wire format gains the additive `message_command` event; collectors older than this release drop it per event.
+  `lens.wrap()` now runs a handler untouched when its first argument isn't an interaction, so one function can serve both
+  slash and prefix commands.
+
+- c220106: `parseBatch()` no longer throws on a server profile whose `botPermissions` is not a number: it drops that event, as
+  it does any invalid one. Before, the collector answered the whole batch with a 500 and the SDK retried it forever.
+
+  The published JSON Schema (`batch.schema.json`) now states every rule `parseBatch()` applies: no `actor` in a
+  privacy-mode batch, no NUL characters, and permission bitfields of at most 64 bits. `batchJsonSchema()` returns it.
+
+  New `MAX_EVENT_WEIGHT` (10,000). `ConfigResponse` sample rates are at least 1 / `MAX_EVENT_WEIGHT`: below that, every
+  event kept by sampling carried a weight the collector refused.
+
+  The data-collected register now matches what the collector stores. Rate-limit `limit` and `sublimitTimeout`, the REST
+  window length, the invalid-request window's remaining time, a shard's unavailable servers at startup and the shard of
+  a server outage are marked as not stored. Shard events, command permission changes, server joins, removals and
+  outages, entitlements and subscriptions are kept with no automatic expiry, under the new `history` retention. Gauges
+  are kept 30 days with no hourly aggregates after that. The metric registry gains the `rest.invalid_warning_count`
+  gauge, and says that `shard.events` and `commands.permissions` are not summed into rollups.
+
+### Patch Changes
+
+- c220106: The data-collected register no longer says the cluster ID is stored: the collector receives it with each batch and
+  drops it.
+- c220106: Fixes from adversarial testing of ingest and queries:
+
+  - One event the database refuses (a number wider than its column) no longer costs the rest of its batch: the batch is
+    written event by event and only that event is rejected (`refused_by_database`). Text cut through an emoji is
+    repaired instead of refused.
+  - A batch retried by a bot whose clock is minutes off is stored once, not twice.
+  - A command list naming one command twice, and two people buying the same SKU in the same millisecond, are stored
+    correctly; retried entitlements, subscriptions, shard states and permission changes count as duplicates.
+  - Late server outages, entitlements and subscriptions reach the rollups.
+  - Finishing a new shard layout no longer undoes the joins and leaves recorded since each shard's snapshot, and a
+    snapshot of a shard outside the layout is ignored.
+  - Saving one Settings section no longer resets the time zone to UTC. Every IANA time-zone name is accepted
+    (`Asia/Kolkata` as well as `Asia/Calcutta`), and Settings checks PostgreSQL knows it.
+  - In a time zone half an hour off UTC, hourly charts show each hour at its real start (10:30) instead of under the
+    hour before; days older than 13 months keep their UTC date; the heatmap reads hourly data only.
+  - A command whose name has a dot opens on reload or from a link; required permission bits over 63 bits are refused,
+    and the Servers filter works with any server's bits. Histogram buckets and rate-limit waits are bounded.
+
+- c220106: Fixes from a simulated install on a discord.js 15 development build:
+
+  - npm installs the adapter next to discord.js 15 development builds: the peer range is `^14.0.0 || ^15.0.0-0`.
+  - A fatal gateway error on discord.js 15 (an invalid token on re-identify, say) crashes the bot as it does without
+    Shardlens. The adapter's `error` listener on `client.ws` used to swallow it and leave the bot running, disconnected.
+  - With `ShardingManager` on discord.js 15, whose `client.shard` has no `ids`, events are tagged with the process's
+    shards again, and the startup work (server snapshot, application info, command list) runs.
+  - After a fresh gateway session, the server snapshot comes from Discord's READY list instead of the cache, so servers
+    removed while the shard was away are found (the cache keeps them), and on discord.js 15 servers added meanwhile too.
+  - On discord.js 15, a shard's ready state no longer reports every server as unavailable.
+
+- c220106: Hardening from a security review:
+
+  - API and sign-in answers carry `Cache-Control: no-store` unless a route sets its own (public badges), so no browser
+    or proxy cache keeps analytics, keys or, in audit mode, the decrypted activity log.
+  - One visitor can hold at most 10 of the 100 live-update streams, so a single client (anyone, in demo mode) can't shut
+    everyone else out of the live tiles.
+  - The data-collected register says that team members' IDs are kept as they are, to check a Discord sign-in.
+
+- c220106: Fixes from a full review of the SDK packages:
+
+  - `shutdown()` sends events whose user hash was still being computed, instead of dropping them.
+  - Numeric options that aren't numbers (`Number(process.env.UNSET)`) fall back to their defaults instead of throwing
+    into the bot, stopping sends or running a 1 ms timer.
+  - A rejected API key is reported as a rejected key even when its reply can't be read, and the "connected" log line
+    follows a spool replay after an outage.
+  - Opt-outs work with `disable: ['interactions']`, and an opted-out user's entitlements and subscriptions are dropped
+    too, as the privacy docs say.
+  - A REST window stays within the wire format's 2,000-row limit, so the collector no longer rejects it whole.
+  - Bot processes sharing a spool folder can't replace each other's segments, and `spool.maxBytes` that isn't a number
+    keeps the default cap.
+  - `@shardlens/http`: unsubscribing an error listener added before the first event works.
+  - `shardlens privacy --retention abc` fails instead of printing the default, and `doctor` no longer contradicts its own
+    key check.
+
 ## 1.0.0
 
 ### Major Changes

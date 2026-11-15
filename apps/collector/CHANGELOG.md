@@ -1,5 +1,171 @@
 # @shardlens/collector
 
+## 1.1.0
+
+### Minor Changes
+
+- c220106: Fixes from simulated deployments (Docker Compose behind Caddy, Railway and Render templates, `ShardingManager` and
+  discord-hybrid-sharding bots):
+
+  - `SHARDLENS_TRUST_PROXY` (and `trustProxy` for the embedded collector) accepts the number of proxies in front, such
+    as `1`. With `true`, the client address is the left-most `X-Forwarded-For` entry, which a visitor can write when
+    the proxy appends to the header, and the sign-in rate limit could be dodged. The Compose file and the Render
+    template now use `1`.
+  - Servers a sharded bot reports before its last shard's first snapshot are existing installs, not joins: they no
+    longer show up in size at install, activation, cohorts and lifetimes.
+  - A restarted shard or cluster process is counted once in gauges (memory, cache sizes, server counts), not added to
+    the process it replaced for a minute (or, on the Reliability page, for two).
+  - The dashboard page is revalidated after an upgrade instead of being served from cache with the old script names;
+    hashed assets stay cached for a year.
+  - The `commands` query returns the kinds each command ran as (`chat_input`, `message_command`, menus), and `command`
+    its runs per kind. The dashboard writes `/` only in front of slash commands and marks prefix commands and menus.
+  - The image build installs dependencies once.
+
+- c220106: Copy every accepted event into your own database. Set `SHARDLENS_SINK_URL` to a `mongodb://`, `mongodb+srv://`,
+  `mysql://`, `mariadb://`, `postgres://` or `sqlite:` URL (or pass `sink` to `startEmbeddedCollector`, which also
+  accepts a sink you write), and each event is written there once, with hashed users only. Erasure and retention
+  (`SHARDLENS_SINK_RETENTION_DAYS`, default 35) reach the copy. The dashboard keeps using PostgreSQL or PGlite.
+- c220106: Record prefix (message) commands. `lens.wrapMessageCommand(name, handler)` and `lens.trackMessageCommand(message, run)`
+  record a command your bot's parser matched in a message, such as `!ban @someone`, with its outcome, handler time and
+  error class. The SDK reads the message's author, server, channel type and the author's permissions, and never its
+  content. Prefix commands are stored with interactions as the `message_command` kind ("Prefix command" on the
+  dashboard), so the Commands page, unique users, servers, funnels and the exporters count them. Deadline, response-time,
+  Reliability and premium figures still cover interactions only.
+
+  The wire format gains the additive `message_command` event; collectors older than this release drop it per event.
+  `lens.wrap()` now runs a handler untouched when its first argument isn't an interaction, so one function can serve both
+  slash and prefix commands.
+
+### Patch Changes
+
+- c220106: Fixes from simulated self-hosted deployments (Docker Compose behind Caddy, a database outage, two collectors on one
+  database, an upgrade from 1.0 on a PostgreSQL set to `Asia/Kolkata`, every event sink under load, embedded mode in a
+  bot process):
+
+  - Unique users, reports, partitions, salts and retention ran on schedule again: a job due every 5 minutes ran every 6
+    when the job leader was elected between two ticks.
+  - A privacy erase no longer hangs while your own database (the sink) has stopped answering: it fails after 20 seconds,
+    so it is retried. The MySQL, MariaDB and PostgreSQL sinks give up on a query after 30 seconds instead of waiting for
+    ever, and the PostgreSQL sink expires old copies in chunks.
+  - A sink of your own without `init` (as in the docs' example) no longer drops copies while its database is down.
+  - Command details, Reliability and premium share read raw rows for as long as Settings keeps them (7 to 90 days),
+    instead of 35 days whatever the setting, and say from when they counted.
+  - Sample rates below 1 in 10,000 are refused in Settings: their events would carry a weight the wire refuses.
+  - Alert history and report errors say why Discord couldn't be reached (`could not reach Discord (ENOTFOUND)`, or a
+    timeout) instead of `TypeError`.
+  - A sink whose database driver isn't installed says which package to install. The ClickHouse client loads only when
+    `CLICKHOUSE_URL` is set.
+  - The image no longer ships the dashboard's source maps, its files are owned by root (the collector's user can't
+    change them), and its health check allows two minutes for migrations. The package ships without source map
+    comments.
+  - `/openapi.json` describes the ingest body with the published batch schema, including the privacy-mode rule, and
+    carries the collector's version instead of `0.0.0`.
+  - Docker Compose reads `SHARDLENS_TRUST_PROXY` from `.env` (default `1`), and `.env.example` lists every variable.
+  - Discord sign-in no longer uses the `arctic` library, which its author has withdrawn: installing the collector prints
+    no "package no longer supported" warnings. The requests to Discord are the same.
+
+- c220106: Dashboard:
+
+  - A page that is loading or failed says so, with a retry, instead of looking like "no data"; errors are written in
+    words. An Overview left open notices the bot's first events by itself.
+  - Each page sets the tab title, moves keyboard focus to its heading and keeps table rows reachable by keyboard.
+    Signing out clears what was loaded.
+  - Chart axes, tooltips and tables use the browser's locale. An unknown command shows "Command not found".
+  - Server search no longer moves the caret or drops a leading space, the last page of a list keeps its controls, and a
+    page past the end shows the last page.
+  - Long names (the bot's, a server's) wrap instead of widening the page on a phone. Settings messages appear next to
+    what they concern, and every admin action confirms.
+
+- c220106: Fixes from adversarial testing of ingest and queries:
+
+  - One event the database refuses (a number wider than its column) no longer costs the rest of its batch: the batch is
+    written event by event and only that event is rejected (`refused_by_database`). Text cut through an emoji is
+    repaired instead of refused.
+  - A batch retried by a bot whose clock is minutes off is stored once, not twice.
+  - A command list naming one command twice, and two people buying the same SKU in the same millisecond, are stored
+    correctly; retried entitlements, subscriptions, shard states and permission changes count as duplicates.
+  - Late server outages, entitlements and subscriptions reach the rollups.
+  - Finishing a new shard layout no longer undoes the joins and leaves recorded since each shard's snapshot, and a
+    snapshot of a shard outside the layout is ignored.
+  - Saving one Settings section no longer resets the time zone to UTC. Every IANA time-zone name is accepted
+    (`Asia/Kolkata` as well as `Asia/Calcutta`), and Settings checks PostgreSQL knows it.
+  - In a time zone half an hour off UTC, hourly charts show each hour at its real start (10:30) instead of under the
+    hour before; days older than 13 months keep their UTC date; the heatmap reads hourly data only.
+  - A command whose name has a dot opens on reload or from a link; required permission bits over 63 bits are refused,
+    and the Servers filter works with any server's bits. Histogram buckets and rate-limit waits are bounded.
+
+- c220106: Background jobs:
+
+  - Rollups no longer miss events that arrive just under two minutes late, or late events committed while a run is
+    going on. A value that can't be summed skips only its own statement instead of stopping every rollup.
+  - Each job runs one at a time, so a slow rollup can't build up a queue.
+  - Dropping and creating partitions waits at most 2 seconds for a lock, so it can't stall ingest behind a long query.
+  - Collectors started together on an empty database no longer crash.
+  - Weekly unique users are counted only for weeks inside one salt period, and final counts are never rewritten.
+  - A privacy erase no longer waits for a slow copy of the events to empty its whole buffer.
+  - Live tiles shared between collectors come back after a database restart.
+  - The next salt is served in the last minutes of a period, for bots whose clocks run slightly ahead.
+  - Upgrading from 1.0 on a PostgreSQL that isn't set to UTC no longer counts the hours around the upgrade twice: the
+    old buckets are moved to UTC.
+
+  Dashboard:
+
+  - When the session ends, the dashboard goes back to the sign-in page. A failed request shows an error with retry,
+    never a false "nothing here".
+  - Activity pages through every row, and rows sharing a time are no longer skipped.
+  - Long, right-to-left or emoji names no longer break layouts or reverse the text next to them. Nothing scrolls
+    sideways at phone width, and tables can be scrolled with the keyboard.
+  - Settings sends only the fields you changed and always offers the stored time zone. It also gains SKU prices.
+  - The Servers list keeps its filters, sort and page in the address.
+  - Numbers follow the browser's locale consistently. Prefix commands are written without a slash in funnels and
+    filters. There are clearer messages for rate limits and refused fields, a skip link, and focus moves to each new
+    page's heading.
+
+- c220106: Hardening from a security review:
+
+  - API and sign-in answers carry `Cache-Control: no-store` unless a route sets its own (public badges), so no browser
+    or proxy cache keeps analytics, keys or, in audit mode, the decrypted activity log.
+  - One visitor can hold at most 10 of the 100 live-update streams, so a single client (anyone, in demo mode) can't shut
+    everyone else out of the live tiles.
+  - The data-collected register says that team members' IDs are kept as they are, to check a Discord sign-in.
+
+- c220106: Fixes from a full review of the collector and dashboard:
+
+  - Rollup days are UTC even when PostgreSQL runs in another time zone.
+  - A second embedded collector in one process gets its own unique-user partitions instead of failing batches.
+  - A collector that fails to start (port in use) stops the jobs and live updates it had started.
+  - Live tiles: a broken listening connection is released, large updates are split instead of dropped, retried
+    batches are counted once, and slow databases no longer pile up refreshes.
+  - The job scheduler keeps one lock connection and one error listener, and releases the lock it may win after stopping.
+  - Retried server-availability events and late, older `app_info` reports no longer change stored data.
+  - Testing an alert whose stored webhook can't be decrypted answers 502, not 500.
+  - ClickHouse: a failed custom-event insert no longer sends interactions twice, and warnings come once a minute with the
+    dropped count.
+  - Dashboard: the overview chart is no longer rebuilt every second, funnel rows with a repeated step render correctly,
+    button groups and status messages are announced properly, and dates follow the app's time zone.
+
+- c220106: Revoking a read key now also signs out the dashboards that signed in with it, and an admin taken off the bot's team
+  (or removed from `SHARDLENS_EXTRA_ADMINS`) loses access on their next request instead of when their 7-day session
+  ends. Read-key sessions opened before this upgrade end once, so those dashboards ask for the key again.
+- c220106: The collector warns at start-up when the bot has no ingest key or nobody could open the dashboard, and Discord sign-in
+  says when it is refused because the bot hasn't reported its owner and team yet, instead of "not a team member". The
+  docs no longer call both keys optional.
+- c220106: Dashboard: a chart whose data is all in one bucket (a new install) shows its point on a two-day axis instead of an
+  empty axis spanning about three years, and the Commands page says "this hour" for a command last used in the current
+  hour instead of the minutes since the hour began.
+- Updated dependencies [c220106]
+- Updated dependencies [c220106]
+- Updated dependencies [c220106]
+- Updated dependencies [c220106]
+- Updated dependencies [c220106]
+- Updated dependencies [c220106]
+- Updated dependencies [c220106]
+- Updated dependencies [c220106]
+- Updated dependencies [c220106]
+- Updated dependencies [c220106]
+  - @shardlens/schema@1.1.0
+  - @shardlens/core@1.1.0
+
 ## 1.0.0
 
 ### Major Changes

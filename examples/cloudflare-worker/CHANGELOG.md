@@ -1,5 +1,14 @@
 # cloudflare-worker-example
 
+## 0.0.2
+
+### Patch Changes
+
+- Updated dependencies [c220106]
+- Updated dependencies [c220106]
+- Updated dependencies [c220106]
+  - @shardlens/http@1.1.0
+
 ## 0.0.1
 
 ### Patch Changes
