@@ -75,8 +75,8 @@ How it works:
   kept for 400 days. With a raw retention shorter than 35 days, ClickHouse keeps hashed rows longer than PostgreSQL
   does: say so in your privacy policy, or shorten the table TTL yourself
   (`ALTER TABLE interactions MODIFY TTL toDateTime(ts) + INTERVAL 7 DAY`, and the same for `custom_events`).
-- **Privacy**: ClickHouse only ever sees salted hashes, never user IDs, and an erasure request deletes the person's
-  rows there too.
+- **Privacy**: ClickHouse only ever sees salted hashes, never user IDs, and an erasure request deletes the same
+  rows there as in PostgreSQL.
 
 <Aside type="caution">
   This is a preview: the data model may change before it is marked stable, in which case the ClickHouse database can

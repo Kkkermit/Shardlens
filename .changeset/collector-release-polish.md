@@ -22,5 +22,6 @@ bot process):
 - The image no longer ships the dashboard's source maps, its files are owned by root (the collector's user can't
   change them), and its health check allows two minutes for migrations. The package ships without source map
   comments.
-- `/openapi.json` describes the ingest body with the published batch schema, including the privacy-mode rule.
+- `/openapi.json` describes the ingest body with the published batch schema, including the privacy-mode rule, and
+  carries the collector's version instead of `0.0.0`.
 - Docker Compose reads `SHARDLENS_TRUST_PROXY` from `.env` (default `1`), and `.env.example` lists every variable.

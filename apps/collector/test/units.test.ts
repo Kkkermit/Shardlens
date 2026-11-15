@@ -110,6 +110,11 @@ describe('docs stay in step with the code', () => {
     };
     expect(doc.openapi).toBe('3.1.0');
     expect(doc.info.version).toBe('1.2.3');
+    // Served and published without an argument: the collector's own version, not a placeholder.
+    const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+      version: string;
+    };
+    expect((openApiDocument() as typeof doc).info.version).toBe(manifest.version);
     for (const path of [
       '/v1/ingest',
       '/v1/config',

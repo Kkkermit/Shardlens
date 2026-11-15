@@ -119,8 +119,9 @@ The copy follows the same rules as the collector:
 - Users are the same salted hashes, never user IDs. Nothing the [data register](../../concepts/data-collected/)
   marks as identifying is copied: in audit mode, who ran a command stays in the collector's encrypted store, and your
   app team's IDs (used for dashboard sign-in) stay in the collector.
-- Erasure reaches the copy: `forgetUser()`, `/privacy erase` and the dashboard's erase delete a person's rows from
-  your database as well, and the request fails (so it is retried) if your database can't be reached or hasn't
+- Erasure reaches the copy: `forgetUser()`, `/privacy erase` and the dashboard's erase delete from your database the
+  same rows they delete in the collector (in privacy mode, a person's rows under the salts the bot still holds: the
+  current and previous period), and the request fails (so it is retried) if your database can't be reached or hasn't
   answered within 20 seconds.
 - Copies are deleted after `SHARDLENS_SINK_RETENTION_DAYS`. If you keep them longer than about a month, their hashes
   outlive the salt that made them: they can no longer be tied to anyone, or erased by user.

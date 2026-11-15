@@ -32,7 +32,7 @@ const MAX_FLUSHES = 3;
 /** Hashed only to ask whether the client has a salt for now; never sent. */
 const PROBE_USER = '0';
 
-export interface Transports {
+interface Transports {
   /** The client for calls outside a `waitUntil`. Created on first use. */
   current(): ShardlensClient;
   /** Whether a client exists yet (nothing runs until the first event). */
@@ -82,6 +82,7 @@ export function createTransports(build: (serverless: boolean) => ShardlensClient
         if (transport !== t) {
           // Another request replaced it meanwhile.
           t = transport ?? t;
+          await t.client.idle();
         } else {
           const old = t;
           t = mine = created(true);
@@ -93,7 +94,6 @@ export function createTransports(build: (serverless: boolean) => ShardlensClient
             replaceDelay = Math.min(REPLACE_MAX_MS, replaceDelay * 2);
           }
         }
-        await t.client.idle();
       }
       return await work(t);
     } finally {

@@ -22,7 +22,7 @@ export function snowflake(msAgo = 0) {
   return ((BigInt(Date.now() - msAgo) - 1_420_070_400_000n) << 22n).toString();
 }
 
-export interface FakeCollectorOptions {
+interface FakeCollectorOptions {
   mode?: 'privacy' | 'audit';
   /** Answers the nth settings request (from 0) itself, for example with a promise that never settles. */
   config?: (n: number) => Promise<Response> | undefined;
@@ -31,7 +31,7 @@ export interface FakeCollectorOptions {
 }
 
 /** A collector that checks every batch against the wire schema and keeps what it received. */
-export function fakeCollector({ mode = 'privacy', config, salts }: FakeCollectorOptions = {}) {
+function fakeCollector({ mode = 'privacy', config, salts }: FakeCollectorOptions = {}) {
   const batches: { events: Record<string, unknown>[]; raw: string }[] = [];
   const violations: unknown[] = [];
   let configs = 0;

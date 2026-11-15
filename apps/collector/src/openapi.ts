@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { batchJsonSchema, ConfigResponse, ErrorResponse, IngestAccepted } from '@shardlens/schema';
 import { z } from 'zod';
 import { QuerySpec } from './query/spec.js';
@@ -31,11 +32,17 @@ const auditLogFilters = Object.entries(
   (json(AuditLogFilters) as { properties: Record<string, object> }).properties,
 ).map(([name, schema]) => ({ name, in: 'query', required: false, schema }));
 
+/** This collector's version, from its package.json: one folder up from `src/` and from `dist/` alike. */
+function collectorVersion(): string {
+  const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
+  return manifest.version;
+}
+
 /**
  * OpenAPI 3.1 description of the collector's HTTP API, generated from the same zod schemas the routes validate with,
  * so the document cannot drift from the code. Served at `/openapi.json` and rendered on the docs site.
  */
-export function openApiDocument(version = '0.0.0'): Record<string, unknown> {
+export function openApiDocument(version = collectorVersion()): Record<string, unknown> {
   return {
     openapi: '3.1.0',
     info: {
@@ -99,6 +106,8 @@ export function openApiDocument(version = '0.0.0'): Record<string, unknown> {
         get: {
           tags: ['SDK'],
           summary: 'Salts, sampling and data mode for the SDK',
+          description:
+            'The salt of the current period first, then the previous one while it is inside its grace week. In the last 5 minutes of a period the next period’s salt comes too, last: SDKs ask again 1 to 4 minutes before a boundary, so they hold it before the period starts.',
           security: [{ ingestKey: [] }],
           responses: { '200': ok('Current configuration', ConfigResponse), ...unauthorized },
         },

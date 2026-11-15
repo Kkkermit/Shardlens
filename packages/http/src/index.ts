@@ -115,7 +115,10 @@ export interface ShardlensHttp {
   isOptedOut(userId: string): boolean;
   /** Deletes everything the collector stored about a user. Never throws. */
   forgetUser(userId: string): Promise<{ erased: number } | undefined>;
-  /** Waits for hashing to finish, then sends queued events. Use it inside `waitUntil` if you flush yourself. */
+  /**
+   * Waits for hashing to finish, then sends queued events. A wrapped handler given a `waitUntil` does this itself;
+   * use it on a platform without one, before you return.
+   */
   flush(): Promise<void>;
   /** Sends what is queued and stops. Call it when a long-running server stops; Workers don't need it. */
   shutdown(options?: { timeoutMs?: number }): Promise<void>;
@@ -192,6 +195,24 @@ function attach(options: ShardlensHttpOptions): ShardlensHttp {
     info: (message) => output.info?.(message),
   };
 
+  // A client shuts its exporters down when it stops, and under waitUntil clients are replaced: the exporters must
+  // outlive them, and stop only with the lens.
+  let stopping = false;
+  const lasting = (exporter: ShardlensExporter): ShardlensExporter =>
+    typeof exporter?.observe === 'function' && typeof exporter.shutdown === 'function'
+      ? {
+          name: exporter.name,
+          observe: (event) => exporter.observe(event),
+          shutdown: () => (stopping ? exporter.shutdown?.() : undefined),
+        }
+      : exporter;
+  let exporters: readonly ShardlensExporter[] | undefined = options.exporters;
+  try {
+    if (Array.isArray(exporters)) exporters = exporters.map(lasting);
+  } catch {
+    exporters = options.exporters;
+  }
+
   const build = (withoutTimer: boolean): ShardlensClient => {
     dedupe = withoutTimer;
     let client: ShardlensClient;
@@ -199,7 +220,7 @@ function attach(options: ShardlensHttpOptions): ShardlensHttp {
       client = new ShardlensClient({
         endpoint: options.endpoint,
         apiKey: options.apiKey,
-        exporters: options.exporters,
+        exporters,
         sdk: { name: SDK_NAME, version: SDK_VERSION },
         mode: describeOptions.mode,
         source: () => ({ shards: [], instance: String(options.instance ?? 'http').slice(0, 128) }),
@@ -358,6 +379,7 @@ function attach(options: ShardlensHttpOptions): ShardlensHttp {
     flush: () => transports.flush(),
     shutdown: async (shutdownOptions) => {
       if (!transports.started()) return;
+      stopping = true;
       const client = transports.current();
       await client.idle(shutdownOptions?.timeoutMs);
       await client.shutdown(shutdownOptions);

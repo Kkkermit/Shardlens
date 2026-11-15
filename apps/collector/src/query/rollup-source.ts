@@ -1,4 +1,5 @@
 import type { Db } from '../db.js';
+import { ACCEPT_BACK_DAYS } from '../storage/maintenance.js';
 
 const DAY = 86_400_000;
 const BUCKET_MS = { rollup_1m: 60_000, rollup_1h: 3_600_000, rollup_1d: DAY } as const;
@@ -23,5 +24,5 @@ export async function rawFrom(db: Db, appId: string, from: Date, now: Date): Pro
   const app = await db.query<{ days: number }>('SELECT raw_retention_days AS days FROM apps WHERE app_id = $1', [
     appId,
   ]);
-  return new Date(Math.max(from.getTime(), now.getTime() - (app.rows[0]?.days ?? 35) * DAY));
+  return new Date(Math.max(from.getTime(), now.getTime() - (app.rows[0]?.days ?? ACCEPT_BACK_DAYS) * DAY));
 }

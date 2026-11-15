@@ -103,8 +103,9 @@ export function startJobs(db: Db, log: JobLogger, opts?: { settingsKey: string; 
       log.error({ job: 'rollups', skipped }, 'rows the database could not aggregate were skipped');
   };
 
-  // A job queued by the election, between two ticks, would otherwise wait for the tick after the one it falls due at:
-  // a 5-minute job ran every 6 minutes. Due within half a tick counts as due.
+  // Due within half a tick counts as due. A tick can come a moment before the interval is up (the election queues
+  // the first runs between two ticks, and timers round differently from the clock), and the job would then wait
+  // for the next one: a 5-minute job every 6 minutes.
   const due = (name: string, every: number) => Date.now() - (lastRun.get(name) ?? 0) >= every - MINUTE / 2;
 
   const tick = () => {

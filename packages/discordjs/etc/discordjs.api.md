@@ -10,6 +10,7 @@ import { Client } from 'discord.js';
 import { ClientStats } from '@shardlens/core';
 import { CustomEventName } from '@shardlens/core';
 import { CustomEventProps } from '@shardlens/core';
+import { CustomEvents } from '@shardlens/core';
 import { Logger } from '@shardlens/core';
 import { Message } from 'discord.js';
 import { RESTPostAPIChatInputApplicationCommandsJSONBody } from 'discord.js';
@@ -22,6 +23,8 @@ export function createPrivacyCommand(lens: Shardlens, options?: PrivacyCommandOp
 
 // @public
 export function createShardlens(client: Client, options: ShardlensOptions): Shardlens;
+
+export { CustomEvents }
 
 // @public
 export interface HandlerResult {

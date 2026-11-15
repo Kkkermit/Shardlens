@@ -172,7 +172,10 @@ export async function ensureSalt(db: Db | Tx, appId: string, label: string): Pro
   await ensureUniquesPartition(db, label);
 }
 
-/** How long before a period ends its successor's salt is handed out too. */
+/**
+ * How long before a period ends its successor's salt is handed out too. At least 5 minutes: the SDK asks for its
+ * settings again 1 to 4 minutes before a salt boundary and counts on finding the next salt in the answer.
+ */
 export const UPCOMING_SALT_MS = 5 * 60_000;
 
 /**

@@ -14,8 +14,13 @@
   "keywords": [
     "shardlens",
     "discord",
+    "discord-bot",
     "interactions",
+    "http-interactions",
     "cloudflare-workers",
+    "deno",
+    "bun",
+    "serverless",
     "analytics",
     "privacy"
   ],

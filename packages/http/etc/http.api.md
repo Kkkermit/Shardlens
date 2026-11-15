@@ -53,7 +53,7 @@ export interface RawInteraction {
     user?: RawUser | undefined;
 }
 
-// @public (undocumented)
+// @public
 export interface RawInteractionData {
     // (undocumented)
     component_type?: number | undefined;
@@ -71,7 +71,7 @@ export interface RawInteractionData {
     type?: number | undefined;
 }
 
-// @public (undocumented)
+// @public
 export interface RawOption {
     // (undocumented)
     focused?: boolean | undefined;
@@ -85,7 +85,7 @@ export interface RawOption {
     value?: unknown;
 }
 
-// @public (undocumented)
+// @public
 export interface RawUser {
     // (undocumented)
     avatar?: string | null | undefined;
@@ -103,17 +103,12 @@ export interface ShardlensHttp {
     } | undefined>;
     // (undocumented)
     isOptedOut(userId: string): boolean;
-    // (undocumented)
     on(event: 'error', listener: (name: string, error: unknown) => void): () => void;
-    // (undocumented)
     optIn(userId: string): void;
-    // (undocumented)
     optOut(userId: string): void;
-    // (undocumented)
     shutdown(options?: {
         timeoutMs?: number;
     }): Promise<void>;
-    // (undocumented)
     stats(): ClientStats;
     track<N extends CustomEventName>(name: N, props?: CustomEventProps<N>, context?: TrackContext, waitUntil?: WaitUntilContext): void;
     wrapInteractionHandler<I extends RawInteraction, A extends unknown[], R>(handler: (interaction: I, ...args: A) => R | Promise<R>): (interaction: I, ...args: A) => Promise<Awaited<R>>;
@@ -124,26 +119,22 @@ export interface ShardlensHttpOptions {
     apiKey?: string | undefined;
     auditIncludeProfile?: boolean | undefined;
     captureOptionValues?: readonly string[] | undefined;
-    // (undocumented)
     dryRun?: boolean | undefined;
     endpoint?: string | undefined;
     environment?: string | undefined;
-    // (undocumented)
     exporters?: readonly ShardlensExporter[] | undefined;
     fetch?: typeof fetch | undefined;
     instance?: string | undefined;
-    // (undocumented)
     logger?: Logger | undefined;
     mode?: 'privacy' | 'audit' | undefined;
     normaliseCustomId?: ((customId: string) => string) | undefined;
     optedOut?: Iterable<string | bigint> | undefined;
-    // (undocumented)
     release?: string | undefined;
     saltPeriod?: SaltPeriod | undefined;
     sampleRate?: Readonly<Record<string, number>> | undefined;
 }
 
-// @public (undocumented)
+// @public
 export interface TrackContext {
     // (undocumented)
     guildId?: string | null | undefined;
@@ -153,7 +144,6 @@ export interface TrackContext {
 
 // @public
 export interface WaitUntilContext {
-    // (undocumented)
     waitUntil(promise: Promise<unknown>): void;
 }
 

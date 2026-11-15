@@ -13,40 +13,211 @@ Bots that receive interactions over HTTP (an **Interactions Endpoint URL**) inst
 Web-standard APIs only.
 
 <Tabs syncKey="pkg">
-  <TabItem label="pnpm">`pnpm add @shardlens/http`</TabItem>
-  <TabItem label="npm">`npm install @shardlens/http`</TabItem>
+  <TabItem label="pnpm">
+    ```sh
+    pnpm add @shardlens/http
+    ```
+  </TabItem>
+  <TabItem label="npm">
+    ```sh
+    npm install @shardlens/http
+    ```
+  </TabItem>
+  <TabItem label="yarn">
+    ```sh
+    yarn add @shardlens/http
+    ```
+  </TabItem>
+  <TabItem label="bun">
+    ```sh
+    bun add @shardlens/http
+    ```
+  </TabItem>
+  <TabItem label="deno">
+    ```sh
+    deno add npm:@shardlens/http
+    ```
+  </TabItem>
 </Tabs>
 
-Wrap the function that answers an interaction:
+You need a running [collector](../../getting-started/quick-start/) and its ingest key (`slk_ingest_…`). The code on
+this page takes its types from `discord-api-types`; install it too if you don't have it.
+
+## Wrap your handler
+
+`wrapInteractionHandler` takes the function that answers an interaction and returns one you call the same way. Your
+answer goes back to Discord unchanged; a handler that throws still throws.
+
+This is a whole bot in one module. It verifies Discord's signature, answers, and records every interaction:
 
 <Code code={worker} lang="ts" title="worker.ts" />
+
+The same module runs on every runtime. Only the last few lines, which start the server, differ:
+
+<Tabs syncKey="runtime">
+  <TabItem label="Cloudflare Workers">
+    The default export above is the Worker. Keep the URL in `wrangler.toml` and the two keys in secrets:
+
+    ```toml title="wrangler.toml"
+    name = "my-bot"
+    main = "worker.ts"
+    compatibility_date = "2026-10-01"
+
+    [vars]
+    SHARDLENS_URL = "https://stats.example.com"
+    ```
+
+    ```sh
+    npx wrangler secret put DISCORD_PUBLIC_KEY
+    npx wrangler secret put SHARDLENS_INGEST_KEY
+    npx wrangler deploy
+    ```
+
+    For `npx wrangler dev`, put the same two names in a `.dev.vars` file, which Git should ignore.
+
+    Pass `ctx` to the wrapped handler, as the module does. Shardlens sends each interaction's events through
+    `ctx.waitUntil`, after your response has gone back to Discord.
+
+  </TabItem>
+  <TabItem label="Deno">
+    ```ts title="main.ts"
+    import { createBot } from './worker.ts';
+
+    const bot = createBot(Deno.env.toObject());
+    const server = Deno.serve({ port: 8787 }, (request) => bot.fetch(request));
+
+    // Send what is queued before the process stops.
+    Deno.addSignalListener('SIGTERM', async () => {
+      await server.shutdown();
+      await bot.lens.shutdown();
+      Deno.exit(0);
+    });
+    ```
+
+    ```sh
+    deno run --allow-net --allow-env main.ts
+    ```
+
+  </TabItem>
+  <TabItem label="Bun">
+    ```ts title="main.ts"
+    import { createBot } from './worker.ts';
+
+    const bot = createBot(process.env);
+    const server = Bun.serve({ port: 8787, fetch: (request) => bot.fetch(request) });
+
+    // Send what is queued before the process stops.
+    process.on('SIGTERM', async () => {
+      await server.stop();
+      await bot.lens.shutdown();
+      process.exit(0);
+    });
+    ```
+
+    ```sh
+    bun main.ts
+    ```
+
+  </TabItem>
+  <TabItem label="Node + @discordjs/core">
+    Node has no built-in server for `Request` and `Response`, so this one turns each request into a `Request`.
+    `@discordjs/core` sends what comes after the first answer: follow-ups and edits.
+
+    ```ts title="main.ts"
+    import { createServer } from 'node:http';
+    import { API } from '@discordjs/core/http-only';
+    import { REST } from '@discordjs/rest';
+    import { createBot } from './worker.ts';
+
+    const bot = createBot(process.env);
+    // Follow-ups and edits after a deferred reply: api.interactions.followUp(applicationId, token, { content })
+    export const api = new API(new REST().setToken(process.env.DISCORD_TOKEN ?? ''));
+
+    const server = createServer(async (req, res) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const request = new Request(`http://localhost${req.url}`, {
+        method: req.method ?? 'GET',
+        headers: req.headers as Record<string, string>,
+        body: req.method === 'POST' ? Buffer.concat(chunks) : null,
+      });
+      const response = await bot.fetch(request);
+      res.writeHead(response.status, Object.fromEntries(response.headers));
+      res.end(Buffer.from(await response.arrayBuffer()));
+    });
+    server.listen(8787);
+
+    // Send what is queued before the process stops.
+    process.on('SIGTERM', async () => {
+      server.close();
+      await bot.lens.shutdown();
+      process.exit(0);
+    });
+    ```
+
+    Node 22.18 and later run `main.ts` as it is (`node main.ts`); on older versions, compile it first or use `tsx`.
+
+  </TabItem>
+</Tabs>
+
+On Deno, Bun and Node, set `DISCORD_PUBLIC_KEY`, `SHARDLENS_URL` and `SHARDLENS_INGEST_KEY` in the environment.
+Then put the bot's public URL in **Interactions Endpoint URL** in the Developer Portal. Discord checks it with a PING
+and with a badly signed request, which must get a `401`: the module answers both.
+
+<Aside type="tip">
+  Any signature check works. Shardlens only needs the parsed interaction, after you have verified the request: it
+  never sees the signature, the public key or the raw body.
+</Aside>
 
 ## What it records
 
 For every interaction except PING, exactly the same fields as the [discord.js adapter](../../concepts/data-collected/):
 command, subcommand, options used, context, channel type, install type, locale, member tier, premium, the response type, and how long
-your answer took against Discord's 3-second deadline. The user ID is hashed before anything is sent. Buttons and
-selects are attributed to the command that created their message.
+your answer took against Discord's 3-second deadline. The user ID is hashed before anything is sent. The interaction
+token, option values and anything a user typed never leave your bot.
 
+- **Buttons, selects and modals** are recorded by their custom ID, with numbers and IDs replaced by `*`. Buttons and
+  selects are attributed to the command that created their message, and a command that opens a modal is linked to the
+  modal's submissions.
 - **Errors** thrown by your handler are recorded by class (never the message) and re-thrown unchanged.
 - **Slow answers**: a response returned more than 3 seconds after the interaction was created is recorded as a
   timeout, because Discord will already have shown "The application did not respond".
-- **Custom events**: `lens.track(name, props, { userId, guildId }, ctx)` works as in the discord.js adapter.
+- **Deferred replies**: the time recorded is the time to your first answer, the deferral. Follow-ups and edits you
+  send through Discord's REST API afterwards are not recorded.
+- **`Response` objects**: a handler may return a `Response` instead of the body. Shardlens reads the callback type
+  from a copy of a JSON body; your `Response` is returned as it is.
+- **Custom events**: `lens.track(name, props, { userId, guildId }, ctx)` works as in the
+  [discord.js adapter](../custom-events/). Pass `ctx` on Workers, or the event waits for the next interaction.
 
-## Sending events on serverless runtimes
+## When events are sent
 
-Serverless runtimes can stop as soon as the response is sent. If any argument you pass to the wrapped handler has a
-`waitUntil` method (a Workers `ExecutionContext`, for example), Shardlens hashes and sends that request's events
-through it, after your response. Without `waitUntil` (on a long-running Node server), events are batched and sent in
-the background, as in the discord.js adapter.
+- **With `waitUntil`** (Cloudflare Workers, and anything else whose handler gets an object with a `waitUntil`
+  method): if any argument you pass to the wrapped handler has `waitUntil`, Shardlens hashes and sends that request's
+  events through it, after your response. Nothing is left for a timer, because a Worker's timers stop with the request
+  that set them. If the collector could not be reached, the next interaction asks it for its settings again.
+- **Without `waitUntil`** (a long-running Node, Bun or Deno server): events are batched and sent in the background
+  every 5 seconds, as in the discord.js adapter. Call `await lens.shutdown()` when the process stops.
+- **Serverless without `waitUntil`**: if your platform can stop the process as soon as the response is sent and gives
+  you nothing like `waitUntil`, `await lens.flush()` before you return. That adds the collector's round trip to your
+  answer, so prefer `waitUntil` where there is one.
 
-Creating the Shardlens instance is free: nothing runs (no timers, no network) until the first interaction, so it is safe
-on runtimes that forbid I/O at startup.
+Creating the Shardlens instance is free: nothing runs (no timers, no network) until the first interaction that is
+recorded, so it is safe on runtimes that forbid I/O at startup. A PING, such as Discord checking your endpoint URL,
+starts nothing.
 
 <Aside type="note">
-  HTTP bots have no gateway, so there are no shard, server-lifecycle or gateway metrics. Server and user installs can
-  come from [webhook events](../webhook-events/) instead.
+  HTTP bots have no gateway, so there are no shard, server-lifecycle, REST or gateway metrics. Server and user installs
+  can come from [webhook events](../webhook-events/) instead.
 </Aside>
 
-A complete Worker, with signature verification, is in
+## Options
+
+`createShardlensHttp` takes the options of the discord.js adapter that make sense without a gateway: `endpoint`,
+`apiKey`, `mode`, `auditIncludeProfile`, `captureOptionValues`, `normaliseCustomId`, `environment`, `release`,
+`optedOut`, `sampleRate`, `exporters`, `dryRun`, `logger` and `fetch`, described in
+[Configuration](../../getting-started/configuration/). One is its own: `instance`, a label for this deployment in SDK health
+(the Worker's name, for example). Opt-outs and erasure work the same way: `lens.optOut(userId)`,
+`lens.optIn(userId)` and `await lens.forgetUser(userId)`.
+
+A complete Worker is in
 [`examples/cloudflare-worker`](https://github.com/Kkkermit/Shardlens/tree/main/examples/cloudflare-worker).

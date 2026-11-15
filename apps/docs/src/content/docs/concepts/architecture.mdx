@@ -32,12 +32,12 @@ import { Aside } from '@astrojs/starlight/components';
 ## In your bot
 
 The SDK listens to public discord.js events and REST hooks. A listener copies the fields it needs into a plain object
-and pushes it onto a bounded queue: no I/O and no waiting on the hot path. Every 5 seconds (or sooner when the queue
-fills) the SDK:
+and pushes it onto a bounded queue: no I/O and no waiting on the hot path. The user ID is hashed as the event is
+recorded, with the salt of the period the event falls in (HMAC-SHA-256), so in privacy mode a raw ID never waits in the
+queue or leaves the process. Every 5 seconds (or sooner when the queue fills) the SDK:
 
-1. Hashes user IDs with the current salt (HMAC-SHA-256), so raw IDs never leave the process in privacy mode.
-2. Packs up to 500 events into a batch, gzips it with `CompressionStream` and sends it with the ingest key.
-3. Keeps the batch on failure and retries with jittered backoff (1 to 60 seconds).
+1. Packs up to 500 events into a batch, gzips it with `CompressionStream` and sends it with the ingest key.
+2. Keeps the batch on failure and retries with jittered backoff (1 to 60 seconds).
 
 When the queue is full, the least important events are dropped first: gauges, then REST windows, then custom events,
 and interactions and server changes last. Every drop is counted and reported in SDK health.

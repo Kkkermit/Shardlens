@@ -105,4 +105,24 @@ describe('under waitUntil', () => {
     expect(collector.spy).not.toHaveBeenCalled();
     expect(warnings).toHaveLength(1);
   });
+  it('keeps exporters running when a client is replaced, and stops them with the lens', async () => {
+    const observed: string[] = [];
+    const shutdown = vi.fn();
+    const exporter = { name: 'test', observe: (event: { type: string }) => void observed.push(event.type), shutdown };
+    const { collector, lens } = setup(
+      { exporters: [exporter] },
+      { salts: (n) => (n === 0 ? [month(-1)] : [month(0), month(-1)]) },
+    );
+    const handle = lens.wrapInteractionHandler(answer);
+    for (let i = 0; i < 2; i++) {
+      const ctx = new Ctx();
+      await handle(slash(), ctx);
+      await ctx.settle();
+    }
+    expect(collector.configRequests()).toBe(2);
+    expect(shutdown).not.toHaveBeenCalled();
+    expect(observed).toEqual(['interaction', 'interaction']);
+    await lens.shutdown();
+    expect(shutdown).toHaveBeenCalledTimes(1);
+  });
 });
