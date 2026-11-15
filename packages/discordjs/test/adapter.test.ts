@@ -260,7 +260,8 @@ describe('interactions', () => {
     const value = `${'a'.repeat(5_990)}.b`;
     const started = performance.now();
     for (let i = 0; i < 20; i++) capturedValues([['reason', value, 3]], ['reason']);
-    expect(performance.now() - started).toBeLessThan(100);
+    // Well under a millisecond each when the value is cut first, about 40 ms each when it isn't.
+    expect(performance.now() - started).toBeLessThan(400);
   });
 
   it('records deferred and ephemeral first responses', async () => {

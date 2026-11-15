@@ -87,7 +87,8 @@ describe('redaction cost', () => {
     for (const input of ['a'.repeat(20_000), `${'a'.repeat(30)}.`.repeat(700), '-'.repeat(20_000)]) {
       const started = performance.now();
       redactSecrets(input);
-      expect(performance.now() - started).toBeLessThan(50);
+      // About a millisecond when linear, over half a second when quadratic: a wide limit holds on a busy machine.
+      expect(performance.now() - started).toBeLessThan(250);
     }
   });
 });
