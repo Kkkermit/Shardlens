@@ -1,6 +1,6 @@
 {
   "name": "@shardlens/exporter-otel",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "OpenTelemetry metrics exporter for Shardlens: bot health metrics through your MeterProvider, with no user or server labels.",
   "license": "MIT",
   "type": "module",

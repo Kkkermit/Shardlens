@@ -1,6 +1,6 @@
 {
   "name": "@shardlens/core",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Library-agnostic core of the Shardlens SDK for Discord bots: batching, retries, in-process user hashing and secret redaction. Zero dependencies, Web-standard APIs only.",
   "license": "MIT",
   "type": "module",

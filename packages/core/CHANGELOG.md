@@ -1,5 +1,102 @@
 # @shardlens/core
 
+## 1.1.0
+
+### Minor Changes
+
+- c220106: Fixes found by soak-testing the client against a collector that flaps, hangs, rate limits with odd `Retry-After`
+  values, rejects events and sends broken replies, across salt-period boundaries and clock steps:
+
+  - No user events are lost when a salt period starts. The SDK asks for the next period's salt 1 to 4 minutes before the
+    boundary, while the collector serves it; before, it asked just after, so a busy bot dropped user events at every
+    boundary (daily with a `day` salt period) while they waited for the salt.
+  - After a clock step, or a machine waking from sleep, into a period the SDK has no salt for, it asks for one within
+    seconds instead of at the next hourly refresh, dropping user events until then.
+  - The SDK holds only the salts the collector serves, so a salt destroyed there no longer stays in the bot's memory, and
+    an erasure names only live periods. New: `UserHasher.deleteSalt()`.
+  - During an outage, events go to the spool in full batches rather than one or two at a time, so the spool replays in a
+    few requests instead of thousands once the collector is back. While a request hangs, events go to the spool before
+    memory fills up; before, they were dropped from memory until the request timed out.
+  - `stats().dropped` accounts for every event. Rejections in a replayed spool batch, which were counted as replayed, and
+    in a `202` reply are counted once each, never the health event; so are events whose builder throws, and user events
+    still waiting for a salt at shutdown, whose raw IDs are then released.
+  - A spooled batch that can't be sent (not a list, or holding `null`) is dropped instead of blocking every later send. A
+    spooled batch answered with `413` is split in two and tried again, as batches from memory already were, instead of
+    being dropped whole. A dry run never sends events spooled by an earlier run.
+  - A client that can't send (no `apiKey`, or an endpoint that isn't allowed) queues nothing instead of holding up to
+    `maxQueueSize` events.
+  - `flush()` after `shutdown()` sends nothing, and a request given up at the end of shutdown is not reported as an
+    outage. While the collector flaps, "can't reach the collector" is logged at most every 5 minutes.
+  - `cutText()` and `sanitiseCustomProps()` replace NUL, which the collector refuses, and the source instance goes
+    through `cutText()`, so a NUL can't get a whole batch refused. A `source()` that returns something other than an
+    object falls back to the default instead of dropping every batch.
+  - A sample rate below 1/10,000 is used as 1/10,000, the lowest whose weight the collector accepts; lower rates lost
+    every event they kept.
+  - `translateEvent()` skips REST rows and gauges that aren't objects instead of throwing.
+  - Each batch is serialised once instead of twice. Published files no longer point at source maps the package leaves
+    out. An empty `environment` no longer warns.
+
+- c220106: Record prefix (message) commands. `lens.wrapMessageCommand(name, handler)` and `lens.trackMessageCommand(message, run)`
+  record a command your bot's parser matched in a message, such as `!ban @someone`, with its outcome, handler time and
+  error class. The SDK reads the message's author, server, channel type and the author's permissions, and never its
+  content. Prefix commands are stored with interactions as the `message_command` kind ("Prefix command" on the
+  dashboard), so the Commands page, unique users, servers, funnels and the exporters count them. Deadline, response-time,
+  Reliability and premium figures still cover interactions only.
+
+  The wire format gains the additive `message_command` event; collectors older than this release drop it per event.
+  `lens.wrap()` now runs a handler untouched when its first argument isn't an interaction, so one function can serve both
+  slash and prefix commands.
+
+### Patch Changes
+
+- c220106: Fixes from a full review of the SDK packages:
+
+  - `shutdown()` sends events whose user hash was still being computed, instead of dropping them.
+  - Numeric options that aren't numbers (`Number(process.env.UNSET)`) fall back to their defaults instead of throwing
+    into the bot, stopping sends or running a 1 ms timer.
+  - A rejected API key is reported as a rejected key even when its reply can't be read, and the "connected" log line
+    follows a spool replay after an outage.
+  - Opt-outs work with `disable: ['interactions']`, and an opted-out user's entitlements and subscriptions are dropped
+    too, as the privacy docs say.
+  - A REST window stays within the wire format's 2,000-row limit, so the collector no longer rejects it whole.
+  - Bot processes sharing a spool folder can't replace each other's segments, and `spool.maxBytes` that isn't a number
+    keeps the default cap.
+  - `@shardlens/http`: unsubscribing an error listener added before the first event works.
+  - `shardlens privacy --retention abc` fails instead of printing the default, and `doctor` no longer contradicts its own
+    key check.
+
+- c220106: Fixes from chaos-testing the SDKs against a hostile collector, bad options and real discord.js clients:
+
+  - Options of the wrong type (a number `environment` or `release`, an exporter passed without the array, an `optedOut`
+    or `disable` that isn't a list, no options at all) are ignored or converted with one warning, never thrown. With
+    `@shardlens/http`, one bad option made every wrapped handler fail.
+  - Erasing a user drops their events still waiting to be sent (in memory, waiting for a retry, or in the disk spool),
+    so they can't arrive after the erasure and survive it.
+  - REST routes hold route words only: invite and template codes, tokens, query strings and any other value become
+    placeholders, so they never leave the bot or become metric labels.
+  - `captureOptionValues` never records user, channel, role, mentionable or attachment options, nor any value holding a
+    Discord ID. Values and names are cut on whole characters, so PostgreSQL never refuses a batch for half an emoji.
+  - A bot's own REST `response` listener can read the response body again with Shardlens attached (fetch-based REST,
+    Bun, Deno).
+  - The disk spool works when shards share a folder: the size cap covers the folder, a segment is never handed out again
+    after it was accepted (even on a read-only volume), and leftover temp files are cleaned up. Events go to the spool
+    during an outage that started before the collector was first reached.
+  - No salt yet for the current period (a clock slightly ahead of the collector's) is asked for again within seconds, not
+    an hour later, and a clock more than 30 seconds off is warned about once. The SDK keeps three salts, so the next
+    period's, which the collector now sends just before a boundary, is ready when it starts.
+  - Replies from the collector are read up to a size limit; secret redaction takes linear time on long input.
+  - Retries never come sooner than the backoff, whatever `Retry-After` says; a failed batch goes back in one step.
+  - `shutdown()` accepts `null` and non-numeric timeouts, and aborts requests still hanging when it ends, so the process
+    can exit.
+  - `refreshGuildCounts` doesn't pile up requests while Discord is slow, and two Shardlens instances on one client
+    restore the REST client whatever order they shut down in.
+  - Dry-run output hides audit identities, error listeners get errors with tokens and request bodies removed, and opted-out
+    IDs may be BigInts.
+
+- c220106: A second `shutdown()` call waits for the flush the first one started instead of returning at once. With a shard
+  manager, Ctrl+C sends `SIGINT` from the terminal and then `SIGTERM` from the manager, and the second handler used to
+  exit the process before the last events were sent.
+
 ## 1.0.0
 
 ### Major Changes
