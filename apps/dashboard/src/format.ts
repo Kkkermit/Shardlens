@@ -49,6 +49,16 @@ export function ago(value: string | Date | null | undefined): string {
   return `${Math.round(s / 86_400)}d ago`;
 }
 
+/**
+ * `ago` for the start of an hourly bucket (the Commands page's "last used"): a run in the current hour reads "this
+ * hour", not the minutes since the hour began.
+ */
+export function agoHour(value: string | Date | null | undefined): string {
+  const d = value ? toDate(value) : undefined;
+  if (d && Date.now() - d.getTime() < 3_600_000) return 'this hour';
+  return ago(value);
+}
+
 /** Labels for coded dimensions, so the UI never shows raw codes. */
 const LABELS: Record<string, Record<string, string>> = {
   context: { '0': 'Server', '1': 'Bot DM', '2': 'Private channel' },

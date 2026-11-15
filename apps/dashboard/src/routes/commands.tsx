@@ -5,7 +5,7 @@ import { pivot } from '../chart-data';
 import { BarList, Heatmap, TimeChart } from '../components/charts';
 import { DataTable } from '../components/DataTable';
 import { Delta, ErrorNote, GuildIcon, Loading, PageHead, Panel, RangePicker, Tile } from '../components/ui';
-import { ago, label, ms, num, pct } from '../format';
+import { agoHour, label, ms, num, pct } from '../format';
 import { useRange } from '../range';
 
 interface CommandRow {
@@ -104,7 +104,7 @@ export function CommandsPage() {
                 sort: (row) => row.p95Ms,
                 render: (row) => ms(row.p95Ms),
               },
-              { key: 'last', header: 'Last used', sort: (row) => row.lastUsed, render: (row) => ago(row.lastUsed) },
+              { key: 'last', header: 'Last used', sort: (row) => row.lastUsed, render: (row) => agoHour(row.lastUsed) },
             ]}
           />
         )}

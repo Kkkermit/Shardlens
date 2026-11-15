@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { formatX, pivot } from '../src/chart-data';
-import { ago, date, dateTime, label, ms, num, pct } from '../src/format';
+import { formatX, pivot, xRange } from '../src/chart-data';
+import { ago, agoHour, date, dateTime, label, ms, num, pct } from '../src/format';
 
 describe('pivot', () => {
   it('aligns grouped points on a shared x axis, filling gaps with zero', () => {
@@ -51,5 +51,22 @@ describe('format', () => {
     expect(label('channel', '11')).toBe('Public thread or forum post');
     expect(label('locale', 'en-GB')).toBe('en-GB');
     expect(label('install', null)).toBe('(none)');
+  });
+});
+
+describe('charts with a single bucket', () => {
+  it('pad one point by a day either side instead of the ~1,000 days uPlot adds', () => {
+    const x = 1_800_000_000;
+    expect(xRange([x], x, x + 86_400_000)).toEqual([x - 86_400, x + 86_400]);
+    expect(xRange([x, x + 86_400], x, x + 86_400)).toEqual([x, x + 86_400]);
+  });
+});
+
+describe('agoHour', () => {
+  it('says "this hour" for the current hour bucket, and falls back to ago otherwise', () => {
+    const hourStart = new Date(Math.floor(Date.now() / 3_600_000) * 3_600_000);
+    expect(agoHour(hourStart)).toBe('this hour');
+    expect(agoHour(new Date(Date.now() - 3 * 3_600_000))).toBe('3h ago');
+    expect(agoHour(null)).toBe('never');
   });
 });

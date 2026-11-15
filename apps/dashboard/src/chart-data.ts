@@ -13,6 +13,15 @@ export function formatX(sec: number, withTime: boolean): string {
   return withTime ? `${day} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}` : day;
 }
 
+/**
+ * The x range for a chart's points. For a single point uPlot adds `86400 / ms` seconds, about 1,000 days with
+ * second timestamps, which reads as broken on a new install whose data is all in one bucket: a day either side instead.
+ */
+export function xRange(xs: ArrayLike<number>, min: number, max: number): [number, number] {
+  const only = xs.length === 1 ? xs[0] : undefined;
+  return only === undefined ? [min, max] : [only - 86_400, only + 86_400];
+}
+
 /** Pivots `{t, key, value}` points into aligned uPlot data. */
 export function pivot(
   points: { t: string; key: string | null; value: number | null }[],

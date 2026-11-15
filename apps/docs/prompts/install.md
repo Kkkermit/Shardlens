@@ -227,6 +227,8 @@ if (interaction.isChatInputCommand() && (await privacy.handle(interaction))) {
 }
 ```
 
+Opt-outs are held in memory, so the command's "no longer recorded" reply stops being true at the next restart unless they are saved. If the project has a database, save them there: pass the saved IDs as `optedOut` and save changes in `onOptOutChange` (both options of `createShardlens`). If it has none, tell me instead of choosing a store yourself. Also tell me to register the command with Discord if the project registers commands in a separate deploy script.
+
 **Embedded mode**, for a small bot on one host with no separate collector. It needs Node.js 24.11 or newer. Install `@shardlens/collector` and `@electric-sql/pglite` as well, add the data folder to `.gitignore`, document `DISCORD_APP_ID` (the application ID from the Developer Portal) next to the bot's other settings, and use the collector's own address and key instead of the two environment variables:
 
 ```ts

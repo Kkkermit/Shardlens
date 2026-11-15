@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
-import { formatX, type Series } from '../chart-data';
+import { formatX, type Series, xRange } from '../chart-data';
 import { count } from '../format';
 import { DataTable } from './DataTable';
 import { Empty, TableToggle } from './ui';
@@ -123,7 +123,10 @@ export function TimeChart(props: {
         tzDate: (ts) => uPlot.tzDate(new Date(ts * 1e3), 'Etc/UTC'),
         legend: { show: false },
         cursor: { drag: { x: false, y: false }, points: { size: 8, width: 2 } },
-        scales: { x: { time: true }, y: { range: (_u, _min, max) => [0, max > 0 ? max * 1.1 : 1] } },
+        scales: {
+          x: { time: true, range: (_u, min, max) => xRange(props.x, min, max) },
+          y: { range: (_u, _min, max) => [0, max > 0 ? max * 1.1 : 1] },
+        },
         axes: [
           { stroke: muted, font, grid: { stroke: grid, width: 1 }, ticks: { stroke: axis, width: 1 } },
           {
@@ -141,7 +144,8 @@ export function TimeChart(props: {
             label: s.name,
             stroke: colors[i] ?? '',
             width: 2,
-            points: { show: false },
+            // A line needs two points: a lone one is drawn as a dot.
+            points: { show: props.x.length === 1, size: 6 },
           })),
         ],
         plugins: [tooltip],
