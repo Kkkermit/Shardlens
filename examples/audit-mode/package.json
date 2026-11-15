@@ -1,6 +1,6 @@
 {
   "name": "audit-mode-example",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "description": "Shardlens audit mode with the /privacy command and persisted opt-outs.",
   "license": "MIT",

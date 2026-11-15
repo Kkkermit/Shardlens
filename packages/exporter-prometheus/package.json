@@ -1,6 +1,6 @@
 {
   "name": "@shardlens/exporter-prometheus",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Prometheus exporter for Shardlens: bot health metrics for Grafana, with no user or server labels.",
   "license": "MIT",
   "type": "module",

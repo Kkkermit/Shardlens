@@ -1,5 +1,114 @@
 # @shardlens/discordjs
 
+## 1.1.0
+
+### Minor Changes
+
+- c220106: Runs on every discord.js release it claims, and keeps events whole when values are out of range:
+
+  - The ES module build no longer fails to load on discord.js 14 releases that don't export `ApplicationIntegrationType`
+    or `InteractionContextType` (14.14 and 14.15, among others), and buttons, select menus, modals and autocomplete are
+    recorded on 14.18 and older, which have no `isPrimaryEntryPointCommand()`. The peer range now starts at
+    discord.js 14.12: earlier releases use `@discordjs/rest` 1, whose responses the SDK can't read. Application info is
+    sent on releases without `fetchSKUs()` (before 14.15).
+  - A global rate-limit wait is recorded with scope `global` (discord.js reports every wait as `user`), and a component
+    whose handler fails after its row was sent is attributed to the command that created its message.
+  - Numbers the wire format refuses no longer drop the whole event: non-finite rate-limit and invalid-request values,
+    negative boosts, out-of-range handler times and error codes that aren't safe integers are clamped or left out, and a
+    custom event's server ID must be a valid snowflake (a 20-digit one is left out instead of losing the event).
+  - An `async` `onOptOutChange` (or one returning any thenable) that rejects is counted, not left as an unhandled
+    rejection that could stop the bot.
+  - Events the disk spool deletes at its size cap are counted, in `stats().dropped.spool_evicted` (and as
+    `spool_evicted` in SDK health): until now they stayed in `spooled` and were never reported as lost.
+  - `/privacy erase` no longer says everything was deleted: in privacy mode an erasure reaches the salt periods the bot
+    still holds (the current and the previous one), and the reply and the `forgetUser()` documentation now say so.
+  - `CustomEvents` is exported, so typed custom events can be declared on `@shardlens/discordjs`, which also works with
+    pnpm, where `@shardlens/core` isn't resolvable from the bot's code.
+  - `saltPeriod` is documented as having no effect (the collector decides) and marked deprecated. The published files no
+    longer point at source maps they don't include.
+
+- c220106: `lens.handlerStarted(interaction)` and `lens.handlerFinished(interaction, { durationMs, error })` record handler time
+  and failures for frameworks that run handlers themselves and announce it, such as Sapphire's
+  `chatInputCommandRun`/`chatInputCommandSuccess`/`chatInputCommandError` events. `wrap()` and these methods now accept
+  any `BaseInteraction`, including the `ContextMenuCommandInteraction` frameworks pass.
+- c220106: Record prefix (message) commands. `lens.wrapMessageCommand(name, handler)` and `lens.trackMessageCommand(message, run)`
+  record a command your bot's parser matched in a message, such as `!ban @someone`, with its outcome, handler time and
+  error class. The SDK reads the message's author, server, channel type and the author's permissions, and never its
+  content. Prefix commands are stored with interactions as the `message_command` kind ("Prefix command" on the
+  dashboard), so the Commands page, unique users, servers, funnels and the exporters count them. Deadline, response-time,
+  Reliability and premium figures still cover interactions only.
+
+  The wire format gains the additive `message_command` event; collectors older than this release drop it per event.
+  `lens.wrap()` now runs a handler untouched when its first argument isn't an interaction, so one function can serve both
+  slash and prefix commands.
+
+### Patch Changes
+
+- c220106: Fixes from a simulated install on a discord.js 15 development build:
+
+  - npm installs the adapter next to discord.js 15 development builds: the peer range is `^14.0.0 || ^15.0.0-0`.
+  - A fatal gateway error on discord.js 15 (an invalid token on re-identify, say) crashes the bot as it does without
+    Shardlens. The adapter's `error` listener on `client.ws` used to swallow it and leave the bot running, disconnected.
+  - With `ShardingManager` on discord.js 15, whose `client.shard` has no `ids`, events are tagged with the process's
+    shards again, and the startup work (server snapshot, application info, command list) runs.
+  - After a fresh gateway session, the server snapshot comes from Discord's READY list instead of the cache, so servers
+    removed while the shard was away are found (the cache keeps them), and on discord.js 15 servers added meanwhile too.
+  - On discord.js 15, a shard's ready state no longer reports every server as unavailable.
+
+- c220106: Fixes from a full review of the SDK packages:
+
+  - `shutdown()` sends events whose user hash was still being computed, instead of dropping them.
+  - Numeric options that aren't numbers (`Number(process.env.UNSET)`) fall back to their defaults instead of throwing
+    into the bot, stopping sends or running a 1 ms timer.
+  - A rejected API key is reported as a rejected key even when its reply can't be read, and the "connected" log line
+    follows a spool replay after an outage.
+  - Opt-outs work with `disable: ['interactions']`, and an opted-out user's entitlements and subscriptions are dropped
+    too, as the privacy docs say.
+  - A REST window stays within the wire format's 2,000-row limit, so the collector no longer rejects it whole.
+  - Bot processes sharing a spool folder can't replace each other's segments, and `spool.maxBytes` that isn't a number
+    keeps the default cap.
+  - `@shardlens/http`: unsubscribing an error listener added before the first event works.
+  - `shardlens privacy --retention abc` fails instead of printing the default, and `doctor` no longer contradicts its own
+    key check.
+
+- c220106: Fixes from chaos-testing the SDKs against a hostile collector, bad options and real discord.js clients:
+
+  - Options of the wrong type (a number `environment` or `release`, an exporter passed without the array, an `optedOut`
+    or `disable` that isn't a list, no options at all) are ignored or converted with one warning, never thrown. With
+    `@shardlens/http`, one bad option made every wrapped handler fail.
+  - Erasing a user drops their events still waiting to be sent (in memory, waiting for a retry, or in the disk spool),
+    so they can't arrive after the erasure and survive it.
+  - REST routes hold route words only: invite and template codes, tokens, query strings and any other value become
+    placeholders, so they never leave the bot or become metric labels.
+  - `captureOptionValues` never records user, channel, role, mentionable or attachment options, nor any value holding a
+    Discord ID. Values and names are cut on whole characters, so PostgreSQL never refuses a batch for half an emoji.
+  - A bot's own REST `response` listener can read the response body again with Shardlens attached (fetch-based REST,
+    Bun, Deno).
+  - The disk spool works when shards share a folder: the size cap covers the folder, a segment is never handed out again
+    after it was accepted (even on a read-only volume), and leftover temp files are cleaned up. Events go to the spool
+    during an outage that started before the collector was first reached.
+  - No salt yet for the current period (a clock slightly ahead of the collector's) is asked for again within seconds, not
+    an hour later, and a clock more than 30 seconds off is warned about once. The SDK keeps three salts, so the next
+    period's, which the collector now sends just before a boundary, is ready when it starts.
+  - Replies from the collector are read up to a size limit; secret redaction takes linear time on long input.
+  - Retries never come sooner than the backoff, whatever `Retry-After` says; a failed batch goes back in one step.
+  - `shutdown()` accepts `null` and non-numeric timeouts, and aborts requests still hanging when it ends, so the process
+    can exit.
+  - `refreshGuildCounts` doesn't pile up requests while Discord is slow, and two Shardlens instances on one client
+    restore the REST client whatever order they shut down in.
+  - Dry-run output hides audit identities, error listeners get errors with tokens and request bodies removed, and opted-out
+    IDs may be BigInts.
+
+- c220106: A second `shutdown()` call waits for the flush the first one started instead of returning at once. With a shard
+  manager, Ctrl+C sends `SIGINT` from the terminal and then `SIGTERM` from the manager, and the second handler used to
+  exit the process before the last events were sent.
+- Updated dependencies [c220106]
+- Updated dependencies [c220106]
+- Updated dependencies [c220106]
+- Updated dependencies [c220106]
+- Updated dependencies [c220106]
+  - @shardlens/core@1.1.0
+
 ## 1.0.0
 
 ### Major Changes

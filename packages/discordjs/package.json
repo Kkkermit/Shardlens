@@ -1,6 +1,6 @@
 {
   "name": "@shardlens/discordjs",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Shardlens adapter for discord.js: privacy-first product analytics and bot health in three lines.",
   "license": "MIT",
   "type": "module",
