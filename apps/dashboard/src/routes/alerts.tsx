@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { api, errorText, useMeta } from '../api';
 import { NeedsDiscord, useAdminGate } from '../components/AdminGate';
 import { DataTable } from '../components/DataTable';
-import { Loading, PageHead, Panel } from '../components/ui';
+import { Loading, PageHead, Panel, StatusMessage } from '../components/ui';
 import { ago, dateTime } from '../format';
 
 interface AlertRule {
@@ -89,11 +89,7 @@ export function AlertsPage() {
         title="Alerts"
         description="Messages to a Discord channel when something needs attention. At most one per rule every 30 minutes."
       />
-      {message ? (
-        <p role="status" className="notice">
-          {message}
-        </p>
-      ) : null}
+      <StatusMessage message={message} />
       <div className="stack">
         <Panel title="Rules">
           {alerts.isLoading ? (
@@ -117,14 +113,15 @@ export function AlertsPage() {
                   key: 'actions',
                   header: 'Actions',
                   render: (r) => (
-                    <span style={{ display: 'inline-flex', gap: 6 }}>
-                      <button
-                        type="button"
-                        aria-pressed={r.enabled}
-                        onClick={() => void action(`/v1/alerts/${r.id}`, 'PATCH', { enabled: !r.enabled })}
-                      >
-                        {r.enabled ? 'On' : 'Off'}
-                      </button>
+                    <span className="row-actions">
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={r.enabled}
+                          onChange={() => void action(`/v1/alerts/${r.id}`, 'PATCH', { enabled: !r.enabled })}
+                        />
+                        Enabled
+                      </label>
                       <button
                         type="button"
                         onClick={() => void action(`/v1/alerts/${r.id}/test`, 'POST', {}, 'Test message sent.')}

@@ -51,6 +51,35 @@ test('the dark theme passes axe too', async ({ reader: page }) => {
   }
 });
 
+test('live updates do not redraw the overview chart', async ({ reader: page }) => {
+  await page.goto('/');
+  await settled(page, 'Overview');
+  await expect(page.getByRole('img', { name: 'Live' }).first()).toBeVisible();
+  await page.locator('.chart canvas').evaluate((canvas) => canvas.setAttribute('data-e2e', 'first-draw'));
+  // Live tiles arrive every second and re-render the page around the chart.
+  await page.waitForTimeout(2_500);
+  await expect(page.locator('.chart canvas[data-e2e="first-draw"]')).toHaveCount(1);
+});
+
+test('the theme choice is remembered', async ({ reader: page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Theme: system' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Theme: light' })).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+});
+
+test('choice buttons are labelled groups', async ({ reader: page }) => {
+  await page.goto('/events');
+  await settled(page, 'Custom events');
+  await expect(page.getByRole('group', { name: 'Time range' })).toBeVisible();
+  const size = page.getByRole('group', { name: 'Cohort size' });
+  await size.getByRole('button', { name: 'Daily' }).click();
+  await expect(size.getByRole('button', { name: 'Daily' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('columnheader', { name: 'Day 1', exact: true })).toBeVisible();
+});
+
 test('server names render as text, never as markup', async ({ reader: page }) => {
   await page.goto('/servers');
   await settled(page, 'Servers');

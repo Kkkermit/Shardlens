@@ -17,16 +17,12 @@ import { ServerPage, ServersPage } from './routes/servers';
 import { SettingsPage } from './routes/settings';
 import { NotFound, Root } from './routes/shell';
 import { TimePage } from './routes/time-patterns';
+import { applyTheme, storedTheme } from './theme';
 import './styles/tokens.css';
 import './styles/app.css';
 
-// Apply a stored theme before first paint (no inline script: the CSP forbids it).
-try {
-  const theme = localStorage.getItem('shardlens:theme');
-  if (theme === 'light' || theme === 'dark') document.documentElement.setAttribute('data-theme', theme);
-} catch {
-  // storage unavailable
-}
+// Before first paint, and not from an inline script: the CSP forbids one.
+applyTheme(storedTheme());
 
 const rootRoute = createRootRoute({ component: Root, notFoundComponent: NotFound });
 const routes = [

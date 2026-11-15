@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { formatX, pivot } from '../src/chart-data';
-import { label, ms, num, pct } from '../src/format';
+import { ago, date, dateTime, label, ms, num, pct } from '../src/format';
 
 describe('pivot', () => {
   it('aligns grouped points on a shared x axis, filling gaps with zero', () => {
@@ -32,6 +32,17 @@ describe('format', () => {
     expect(ms(412)).toBe('412 ms');
     expect(ms(3_250)).toBe('3.3 s');
     expect(ms(undefined)).toBe('—');
+    expect(num(Number.NaN)).toBe('—');
+    expect(pct(Number.POSITIVE_INFINITY)).toBe('—');
+  });
+
+  it('formats dates in the given time zone, with a dash for missing or unreadable ones', () => {
+    expect(date('2026-11-13T23:30:00Z', 'Asia/Tokyo')).toBe(date('2026-11-14T12:00:00Z', 'UTC'));
+    expect(dateTime(null)).toBe('—');
+    expect(date('not a date')).toBe('—');
+    expect(ago(null)).toBe('never');
+    expect(ago('not a date')).toBe('—');
+    expect(ago(new Date(Date.now() - 90 * 60_000))).toBe('2h ago');
   });
 
   it('labels coded dimensions in plain words', () => {

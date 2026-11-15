@@ -28,6 +28,8 @@ const PAGE = 50;
 
 export function ServersPage() {
   const navigate = useNavigate();
+  const meta = useMeta();
+  const tz = meta.data?.timezone ?? 'UTC';
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState<'active' | 'left' | 'all'>('active');
   const [size, setSize] = useState('');
@@ -164,7 +166,7 @@ export function ServersPage() {
                   header: 'Added',
                   sort: (row) => row.joinedAt,
                   render: (row) =>
-                    row.baseline ? <span className="muted">before Shardlens</span> : date(row.joinedAt),
+                    row.baseline ? <span className="muted">before Shardlens</span> : date(row.joinedAt, tz),
                 },
                 { key: 'locale', header: 'Locale', render: (row) => row.locale ?? '—' },
                 { key: 'boosts', header: 'Boosts', numeric: true, render: (row) => num(row.boosts) },
@@ -295,10 +297,10 @@ export function ServerPage() {
             value={p.leftAt ? 'Removed' : 'Installed'}
             sub={
               p.leftAt
-                ? `Removed ${date(p.leftAt)}`
+                ? `Removed ${date(p.leftAt, tz)}`
                 : p.baseline
                   ? 'Added before Shardlens'
-                  : `Added ${date(p.joinedAt)}`
+                  : `Added ${date(p.joinedAt, tz)}`
             }
           />
         </div>
@@ -337,7 +339,7 @@ export function ServerPage() {
                 {num(p.boosts)} (tier {p.premiumTier ?? 0})
               </dd>
               <dt>Created</dt>
-              <dd>{date(p.createdAt)}</dd>
+              <dd>{date(p.createdAt, tz)}</dd>
               <dt>Shard</dt>
               <dd>{num(p.shard)}</dd>
               <dt>Roles · emoji · stickers</dt>

@@ -3,7 +3,7 @@ import { type FormEvent, useState } from 'react';
 import { api, errorText } from '../api';
 import { NeedsDiscord, useAdminGate } from '../components/AdminGate';
 import { DataTable } from '../components/DataTable';
-import { ErrorNote, Loading, PageHead, Panel } from '../components/ui';
+import { ErrorNote, Loading, PageHead, Panel, StatusMessage } from '../components/ui';
 import { ago, dateTime } from '../format';
 
 interface Settings {
@@ -106,11 +106,7 @@ export function SettingsPage() {
   return (
     <>
       <PageHead title="Settings" />
-      {message ? (
-        <p role="status" className="notice">
-          {message}
-        </p>
-      ) : null}
+      <StatusMessage message={message} />
       <div className="stack">
         <Panel title="General">
           <form
@@ -289,8 +285,8 @@ export function SettingsPage() {
                     <button
                       type="button"
                       onClick={async () => {
-                        if (!window.confirm(`Revoke “${k.label}”? Anything using it stops working immediately.`))
-                          return;
+                        const name = k.label ? `“${k.label}”` : 'this key';
+                        if (!window.confirm(`Revoke ${name}? Anything using it stops working immediately.`)) return;
                         await api(`/v1/keys/${k.id}`, { method: 'DELETE', body: {} }).catch((err: unknown) =>
                           setMessage(errorText(err)),
                         );

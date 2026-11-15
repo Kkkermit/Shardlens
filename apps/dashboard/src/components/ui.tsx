@@ -1,4 +1,5 @@
 import { type ReactNode, useState } from 'react';
+import { finite } from '../format';
 import { PRESETS, type PresetId } from '../range';
 
 export function Panel(props: { title: string; subtitle?: ReactNode; actions?: ReactNode; children: ReactNode }) {
@@ -47,17 +48,27 @@ export function PageHead(props: { title: string; description?: ReactNode; action
   );
 }
 
-export function RangePicker(props: { value: PresetId; onChange: (id: PresetId) => void }) {
+/** One choice from a few, as toggle buttons in a labelled group. */
+export function Segmented<T extends string>(props: {
+  label: string;
+  options: readonly { id: T; label: string }[];
+  value: T;
+  onChange: (id: T) => void;
+}) {
   return (
-    <fieldset className="segmented" style={{ border: 0, padding: 0, margin: 0 }}>
-      <legend className="visually-hidden">Time range</legend>
-      {PRESETS.map((p) => (
-        <button key={p.id} type="button" aria-pressed={props.value === p.id} onClick={() => props.onChange(p.id)}>
-          {p.label}
+    <fieldset className="segmented">
+      <legend className="visually-hidden">{props.label}</legend>
+      {props.options.map((o) => (
+        <button key={o.id} type="button" aria-pressed={props.value === o.id} onClick={() => props.onChange(o.id)}>
+          {o.label}
         </button>
       ))}
     </fieldset>
   );
+}
+
+export function RangePicker(props: { value: PresetId; onChange: (id: PresetId) => void }) {
+  return <Segmented label="Time range" options={PRESETS} value={props.value} onChange={props.onChange} />;
 }
 
 export function Empty(props: { children: ReactNode }) {
@@ -80,26 +91,49 @@ export function ErrorNote(props: { error: unknown }) {
   );
 }
 
-/** Who ran something, in audit mode: avatar (Discord's CDN only), username and ID. All rendered as text. */
-export function UserTag(props: { id: string | null; username: string | null; avatar: string | null }) {
+/** The result of an action. The live region is always there, so screen readers announce each new message. */
+export function StatusMessage(props: { message: string }) {
+  return <div role="status">{props.message ? <p className="notice">{props.message}</p> : null}</div>;
+}
+
+const CDN_HASH = /^(a_)?[0-9a-f]{32}$/;
+const SNOWFLAKE = /^\d{17,20}$/;
+
+/**
+ * An avatar or server icon from Discord's CDN, the only image host the CSP allows, with initials when there is none.
+ * The ID and hash are checked so a stored value can't point the address anywhere else.
+ */
+function CdnImage(props: { path: 'avatars' | 'icons'; id: string; hash: string | null | undefined; initials: string }) {
   const [failed, setFailed] = useState(false);
+  if (failed || !props.hash || !CDN_HASH.test(props.hash) || !SNOWFLAKE.test(props.id)) {
+    return (
+      <span className="initials" aria-hidden="true">
+        {props.initials}
+      </span>
+    );
+  }
+  return (
+    <img
+      src={`https://cdn.discordapp.com/${props.path}/${props.id}/${props.hash}.png?size=64`}
+      alt=""
+      loading="lazy"
+      referrerPolicy="no-referrer"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
+/** Who ran something, in audit mode: avatar, username and ID, all rendered as text. */
+export function UserTag(props: { id: string | null; username: string | null; avatar: string | null }) {
   if (!props.id) return <>—</>;
-  const valid = props.avatar && /^(a_)?[0-9a-f]{32}$/.test(props.avatar) && /^\d{17,20}$/.test(props.id);
   return (
     <span className="guild">
-      {valid && !failed ? (
-        <img
-          src={`https://cdn.discordapp.com/avatars/${props.id}/${props.avatar}.png?size=64`}
-          alt=""
-          loading="lazy"
-          referrerPolicy="no-referrer"
-          onError={() => setFailed(true)}
-        />
-      ) : (
-        <span className="initials" aria-hidden="true">
-          {(props.username ?? '?').slice(0, 2).toUpperCase()}
-        </span>
-      )}
+      <CdnImage
+        path="avatars"
+        id={props.id}
+        hash={props.avatar}
+        initials={(props.username ?? '?').slice(0, 2).toUpperCase()}
+      />
       <span>
         {props.username ? `${props.username} ` : ''}
         <code>{props.id}</code>
@@ -108,11 +142,8 @@ export function UserTag(props: { id: string | null; username: string | null; ava
   );
 }
 
-/** Server icon from Discord's CDN only (the CSP allows nothing else); initials when there is none. */
 export function GuildIcon(props: { id: string; icon: string | null | undefined; name: string | null | undefined }) {
-  const [failed, setFailed] = useState(false);
   const name = props.name || 'Unknown server';
-  const valid = props.icon && /^(a_)?[0-9a-f]{32}$/.test(props.icon) && /^\d{17,20}$/.test(props.id);
   const initials = name
     .split(/\s+/)
     .map((w) => w[0] ?? '')
@@ -121,29 +152,17 @@ export function GuildIcon(props: { id: string; icon: string | null | undefined; 
     .toUpperCase();
   return (
     <span className="guild">
-      {valid && !failed ? (
-        <img
-          src={`https://cdn.discordapp.com/icons/${props.id}/${props.icon}.png?size=64`}
-          alt=""
-          loading="lazy"
-          referrerPolicy="no-referrer"
-          onError={() => setFailed(true)}
-        />
-      ) : (
-        <span className="initials" aria-hidden="true">
-          {initials}
-        </span>
-      )}
+      <CdnImage path="icons" id={props.id} hash={props.icon} initials={initials} />
       <span>{name}</span>
     </span>
   );
 }
 
+/** A change in percent (`12.5` is +12.5%). */
 export function Delta(props: { pct: number | null | undefined }) {
-  if (props.pct === null || props.pct === undefined || !Number.isFinite(props.pct)) {
-    return <span className="muted">new</span>;
-  }
-  const up = props.pct >= 0;
+  if (!finite(props.pct)) return <span className="muted">new</span>;
+  if (props.pct === 0) return <span className="muted">no change</span>;
+  const up = props.pct > 0;
   return (
     <span className={up ? 'delta-up' : 'delta-down'}>
       <span aria-hidden="true">{up ? '▲' : '▼'}</span> {Math.abs(props.pct).toFixed(1)}%

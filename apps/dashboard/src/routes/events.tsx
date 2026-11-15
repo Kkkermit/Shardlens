@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useMeta, useSpec } from '../api';
 import { BarList } from '../components/charts';
 import { DataTable } from '../components/DataTable';
-import { ErrorNote, Loading, PageHead, Panel, RangePicker } from '../components/ui';
+import { ErrorNote, Loading, PageHead, Panel, RangePicker, Segmented } from '../components/ui';
 import { ago, num, pct } from '../format';
 import { useRange } from '../range';
 
@@ -31,10 +31,11 @@ const toStep = (value: StepValue) => {
   const [type, ...rest] = value.split(':');
   return { type: type === 'command' ? 'command' : 'event', name: rest.join(':') };
 };
-const stepLabel = (value: StepValue) => {
-  const s = toStep(value);
-  return s.type === 'command' ? `/${s.name}` : s.name;
-};
+
+const COHORT_SIZES = [
+  { id: 'day', label: 'Daily' },
+  { id: 'week', label: 'Weekly' },
+] as const;
 
 const WINDOWS = [
   { hours: 1, label: '1 hour' },
@@ -101,7 +102,6 @@ export function EventsPage() {
     [events, commands],
   );
 
-  // Property breakdown
   const [selected, setSelected] = useState<string>();
   const current = selected ?? events[0];
   const keys = useSpec<{ keys: { key: string; count: number }[] }>(
@@ -113,7 +113,6 @@ export function EventsPage() {
     current && currentProp ? { kind: 'eventProps', name: current, prop: currentProp, range: r.range } : null,
   );
 
-  // Funnel builder
   const [stepsState, setSteps] = useState<StepValue[]>([]);
   const steps = stepsState.length >= 2 ? stepsState : options.slice(0, 2);
   const [windowHours, setWindowHours] = useState(24);
@@ -123,11 +122,10 @@ export function EventsPage() {
   );
   const setStep = (i: number, v: StepValue) => setSteps(steps.map((s, j) => (j === i ? v : s)));
 
-  // Cohort builder
   const [startState, setStart] = useState<StepValue>();
   const start = startState ?? options[0];
   const [back, setBack] = useState<StepValue>('any');
-  const [interval, setInterval] = useState<'day' | 'week'>('week');
+  const [cohortSize, setCohortSize] = useState<'day' | 'week'>('week');
   const retention = useSpec<RetentionResult>(
     start
       ? {
@@ -135,7 +133,7 @@ export function EventsPage() {
           start: toStep(start),
           return: back === 'any' ? 'any' : toStep(back),
           range: r.range,
-          interval,
+          interval: cohortSize,
           timezone: tz,
         }
       : null,
@@ -237,8 +235,7 @@ export function EventsPage() {
             <>
               <div className="filters">
                 {steps.map((s, i) => (
-                  // A funnel step is identified by its position (the same event can appear twice).
-                  // biome-ignore lint/suspicious/noArrayIndexKey: position is the step's identity
+                  // biome-ignore lint/suspicious/noArrayIndexKey: a step is its position, as the same event can appear twice
                   <span key={i} style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
                     <StepSelect
                       id={`funnel-step-${i}`}
@@ -297,7 +294,7 @@ export function EventsPage() {
                   />
                   <DataTable
                     caption="Funnel steps"
-                    rowKey={(s) => s.label + s.users}
+                    rowKey={(s) => String(s.i)}
                     rows={funnel.data.steps.map((s, i) => ({ ...s, i }))}
                     columns={[
                       { key: 'step', header: 'Step', render: (s) => `${s.i + 1}. ${s.label}` },
@@ -333,9 +330,9 @@ export function EventsPage() {
                     empty="Nobody entered this funnel in the range."
                     columns={[
                       { key: 'day', header: 'Day', render: (c) => c.day },
-                      ...steps.map((s, i) => ({
+                      ...funnel.data.steps.map((s, i) => ({
                         key: `s${i}`,
-                        header: stepLabel(s),
+                        header: s.label,
                         numeric: true,
                         render: (c: { users: number[] }) => {
                           const v = c.users[i] ?? 0;
@@ -374,14 +371,7 @@ export function EventsPage() {
                   commands={commands}
                   allowAny
                 />
-                <fieldset className="segmented" style={{ border: 0, padding: 0, margin: 0 }}>
-                  <legend className="visually-hidden">Cohort size</legend>
-                  {(['day', 'week'] as const).map((i) => (
-                    <button key={i} type="button" aria-pressed={interval === i} onClick={() => setInterval(i)}>
-                      {i === 'day' ? 'Daily' : 'Weekly'}
-                    </button>
-                  ))}
-                </fieldset>
+                <Segmented label="Cohort size" options={COHORT_SIZES} value={cohortSize} onChange={setCohortSize} />
               </div>
               {retention.error ? (
                 <ErrorNote error={retention.error} />
@@ -394,16 +384,16 @@ export function EventsPage() {
                   rows={retention.data.cohorts}
                   empty="Nobody started in this range."
                   columns={[
-                    { key: 'cohort', header: interval === 'day' ? 'Day' : 'Week of', render: (c) => c.cohort },
+                    { key: 'cohort', header: cohortSize === 'day' ? 'Day' : 'Week of', render: (c) => c.cohort },
                     { key: 'size', header: 'People', numeric: true, render: (c) => num(c.size) },
                     ...Array.from({ length: shownPeriods }, (_, p) => ({
                       key: `p${p + 1}`,
-                      header: `${interval === 'day' ? 'Day' : 'Week'} ${p + 1}`,
+                      header: `${cohortSize === 'day' ? 'Day' : 'Week'} ${p + 1}`,
                       numeric: true,
                       render: (c: { cohort: string; size: number; retained: number[] }) => {
                         // A period that hasn't started yet has no data, not zero people.
                         const periodStart =
-                          Date.parse(`${c.cohort}T00:00:00Z`) + (p + 1) * (interval === 'day' ? 1 : 7) * 86_400_000;
+                          Date.parse(`${c.cohort}T00:00:00Z`) + (p + 1) * (cohortSize === 'day' ? 1 : 7) * 86_400_000;
                         if (periodStart > Date.now()) return '—';
                         const v = c.retained[p] ?? 0;
                         return c.size > 0 ? `${num(v)} (${pct(v / c.size, 0)})` : num(v);

@@ -2,13 +2,16 @@ import { type ReactNode, useEffect, useRef, useState } from 'react';
 import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 import { formatX, type Series } from '../chart-data';
+import { count } from '../format';
 import { DataTable } from './DataTable';
 import { Empty, TableToggle } from './ui';
 
 const css = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
 /** Categorical slots in their validated, fixed order: colour follows the series, never its rank. */
-const seriesColor = (i: number) => `var(--series-${(i % 8) + 1})`;
+const seriesToken = (i: number) => `--series-${(i % 8) + 1}`;
+
+const HEIGHT = 220;
 
 function useThemeVersion(): number {
   const [v, setV] = useState(0);
@@ -32,7 +35,7 @@ function Legend(props: { names: string[] }) {
     <ul className="chart-legend">
       {props.names.map((n, i) => (
         <li key={n}>
-          <span className="swatch" style={{ background: seriesColor(i) }} aria-hidden="true" />
+          <span className="swatch" style={{ background: `var(${seriesToken(i)})` }} aria-hidden="true" />
           {n}
         </li>
       ))}
@@ -48,8 +51,8 @@ export function TimeChart(props: {
   label: string;
   x: number[];
   series: Series[];
+  /** Pass a function defined once (such as `ms`), not an inline one: a new function rebuilds the chart. */
   format?: (v: number) => string;
-  height?: number;
   withTime?: boolean;
   timezone?: string;
 }) {
@@ -57,14 +60,14 @@ export function TimeChart(props: {
   const tip = useRef<HTMLDivElement>(null);
   const [asTable, setAsTable] = useState(false);
   const theme = useThemeVersion();
-  const format = props.format ?? ((v: number) => new Intl.NumberFormat().format(Math.round(v)));
+  const format = props.format ?? count;
   const withTime = props.withTime ?? false;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: `theme` re-reads the colour tokens when the theme changes
   useEffect(() => {
     const el = box.current;
     if (!el || asTable || props.x.length === 0) return;
-    const colors = props.series.map((_, i) => css(`--series-${(i % 8) + 1}`));
+    const colors = props.series.map((_, i) => css(seriesToken(i)));
     const muted = css('--text-muted');
     const grid = css('--grid');
     const axis = css('--axis');
@@ -75,12 +78,17 @@ export function TimeChart(props: {
           const t = tip.current;
           if (!t) return;
           const idx = u.cursor.idx;
-          if (idx === null || idx === undefined || u.cursor.left === undefined || u.cursor.left < 0) {
+          const xv = idx === null || idx === undefined ? undefined : u.data[0][idx];
+          if (
+            idx === null ||
+            idx === undefined ||
+            xv === undefined ||
+            u.cursor.left === undefined ||
+            u.cursor.left < 0
+          ) {
             t.style.display = 'none';
             return;
           }
-          const xv = u.data[0][idx];
-          if (xv === undefined) return;
           t.replaceChildren();
           const head = document.createElement('div');
           head.className = 't';
@@ -111,7 +119,7 @@ export function TimeChart(props: {
     const plot = new uPlot(
       {
         width: el.clientWidth || 600,
-        height: props.height ?? 220,
+        height: HEIGHT,
         tzDate: (ts) => uPlot.tzDate(new Date(ts * 1e3), 'Etc/UTC'),
         legend: { show: false },
         cursor: { drag: { x: false, y: false }, points: { size: 8, width: 2 } },
@@ -141,7 +149,7 @@ export function TimeChart(props: {
       [props.x, ...props.series.map((s) => s.values)] as uPlot.AlignedData,
       el,
     );
-    const resize = new ResizeObserver(() => plot.setSize({ width: el.clientWidth, height: props.height ?? 220 }));
+    const resize = new ResizeObserver(() => plot.setSize({ width: el.clientWidth, height: HEIGHT }));
     resize.observe(el);
     const leave = () => {
       if (tip.current) tip.current.style.display = 'none';
@@ -152,7 +160,7 @@ export function TimeChart(props: {
       el.removeEventListener('mouseleave', leave);
       plot.destroy();
     };
-  }, [props.x, props.series, props.height, asTable, theme, format, withTime, props.timezone]);
+  }, [props.x, props.series, asTable, theme, format, withTime, props.timezone]);
 
   if (props.x.length === 0) return <Empty>No data in this range yet.</Empty>;
   return (
@@ -200,7 +208,7 @@ export function BarList(props: {
 }) {
   const rows = props.rows.slice(0, props.limit ?? 10);
   const max = Math.max(0, ...rows.map((r) => r.value));
-  const format = props.format ?? ((v: number) => new Intl.NumberFormat().format(Math.round(v)));
+  const format = props.format ?? count;
   if (rows.length === 0) return <Empty>{props.empty ?? 'Nothing recorded in this range.'}</Empty>;
   return (
     <ul className="bars" aria-label={props.label}>
@@ -230,7 +238,6 @@ export function Heatmap(props: { label: string; cells: { weekday: number; hour: 
     const s = Math.min(7, Math.max(1, Math.ceil((v / max) * 7)));
     return `var(--seq-${s}00)`;
   };
-  const fmt = new Intl.NumberFormat();
   if (props.cells.length === 0) return <Empty>No activity in this range yet.</Empty>;
   return (
     <div>
@@ -240,7 +247,7 @@ export function Heatmap(props: { label: string; cells: { weekday: number; hour: 
           {[1, 2, 3, 4, 5, 6, 7].map((s) => (
             <span key={s} className="cell" style={{ background: `var(--seq-${s}00)` }} />
           ))}
-          More · peak {fmt.format(max)} runs per slot
+          More · peak {count(max)} runs per slot
         </span>
         <TableToggle pressed={asTable} onToggle={() => setAsTable((v) => !v)} />
       </div>
@@ -255,7 +262,7 @@ export function Heatmap(props: { label: string; cells: { weekday: number; hour: 
               key: String(h),
               header: `${h}`,
               numeric: true,
-              render: (d: number) => fmt.format(value(d, h)),
+              render: (d: number) => count(value(d, h)),
             })),
           ]}
         />
@@ -277,7 +284,6 @@ export function Heatmap(props: { label: string; cells: { weekday: number; hour: 
 }
 
 function Row(props: { name: string; values: number[]; step: (v: number) => string }) {
-  const fmt = new Intl.NumberFormat();
   return (
     <>
       <span className="rowlabel">{props.name}</span>
@@ -285,7 +291,7 @@ function Row(props: { name: string; values: number[]; step: (v: number) => strin
         <span
           key={h}
           className="cell"
-          title={`${props.name} ${String(h).padStart(2, '0')}:00 · ${fmt.format(props.values[h] ?? 0)} runs`}
+          title={`${props.name} ${String(h).padStart(2, '0')}:00 · ${count(props.values[h] ?? 0)} runs`}
           style={{ background: props.step(props.values[h] ?? 0) }}
         />
       ))}

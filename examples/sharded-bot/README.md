@@ -12,5 +12,5 @@ pnpm start:internal       # or internal sharding
 ```
 
 Register a `/ping` command first (for example with `examples/basic-bot`'s `pnpm register`). Every shard uses the same
-ingest key; the dashboard's shard grid shows each one. See the
+ingest key; the dashboard's Reliability page lists each one. See the
 [sharding guide](https://kkkermit.github.io/Shardlens/guides/sharding/).

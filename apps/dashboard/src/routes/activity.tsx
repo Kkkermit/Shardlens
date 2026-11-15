@@ -3,8 +3,13 @@ import { type FormEvent, useState } from 'react';
 import { api, useMeta } from '../api';
 import { NeedsDiscord, useAdminGate } from '../components/AdminGate';
 import { DataTable } from '../components/DataTable';
-import { ErrorNote, Loading, PageHead, Panel, UserTag } from '../components/ui';
-import { dateTime, label, ms } from '../format';
+import { ErrorNote, Loading, PageHead, Panel, Segmented, UserTag } from '../components/ui';
+import { dateTime, label, ms, num } from '../format';
+
+const WINDOWS = [
+  { id: '24h', label: '24 hours' },
+  { id: '7d', label: '7 days' },
+] as const;
 
 interface AuditRow {
   interactionId: string;
@@ -150,15 +155,7 @@ export function ActivityPage() {
         <Panel
           title="Top users"
           subtitle="Counts only, for abuse and support"
-          actions={
-            <span className="segmented">
-              {(['24h', '7d'] as const).map((w) => (
-                <button key={w} type="button" aria-pressed={windowSel === w} onClick={() => setWindowSel(w)}>
-                  {w}
-                </button>
-              ))}
-            </span>
-          }
+          actions={<Segmented label="Top users over" options={WINDOWS} value={windowSel} onChange={setWindowSel} />}
         >
           <DataTable
             caption="Top users"
@@ -166,7 +163,7 @@ export function ActivityPage() {
             rows={top.data?.rows ?? []}
             columns={[
               { key: 'user', header: 'User ID', render: (r) => <code>{r.userId ?? '—'}</code> },
-              { key: 'runs', header: 'Runs', numeric: true, render: (r) => r.runs },
+              { key: 'runs', header: 'Runs', numeric: true, render: (r) => num(r.runs) },
             ]}
           />
         </Panel>

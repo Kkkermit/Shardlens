@@ -18,6 +18,8 @@ test('audit mode: switch on, view the activity log, export with confirmation, sw
   await page.getByRole('link', { name: 'Activity' }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Activity' })).toBeVisible();
   await expect(page.getByRole('status').filter({ hasText: 'Loading' })).toHaveCount(0);
+  await page.getByRole('group', { name: 'Top users over' }).getByRole('button', { name: '7 days' }).click();
+  await expect(page.getByRole('button', { name: '7 days' })).toHaveAttribute('aria-pressed', 'true');
   await expectAccessible(page);
 
   const unconfirmed = await page.request.get('/v1/audit/export.csv', { headers: { 'x-shardlens-csrf': '1' } });

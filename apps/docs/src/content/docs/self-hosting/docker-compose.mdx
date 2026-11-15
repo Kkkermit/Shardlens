@@ -35,6 +35,7 @@ A small VPS (1 vCPU, 1 GB RAM) is enough for most bots.
      - docker-compose.yml
      - Caddyfile
      - .env secrets and keys, generated; never commit it
+     - bot.env the bot's two settings, to copy to where the bot runs
    </FileTree>
 
    `init` refuses to overwrite an existing `.env` unless you pass `--force`. You can also copy `deploy/` from the

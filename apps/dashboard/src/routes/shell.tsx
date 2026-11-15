@@ -1,39 +1,11 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { Link, Outlet } from '@tanstack/react-router';
-import { type FormEvent, useEffect, useState } from 'react';
+import { type FormEvent, useState } from 'react';
 import { ApiError, api, useMe, useMeta } from '../api';
 import { ErrorNote, Loading, PageHead } from '../components/ui';
+import { type Theme, useTheme } from '../theme';
 
-type Theme = 'system' | 'light' | 'dark';
-const THEME_KEY = 'shardlens:theme';
-
-function applyTheme(theme: Theme) {
-  if (theme === 'system') document.documentElement.removeAttribute('data-theme');
-  else document.documentElement.setAttribute('data-theme', theme);
-}
-
-function useTheme(): [Theme, (t: Theme) => void] {
-  const [theme, setTheme] = useState<Theme>(() => {
-    try {
-      const t = localStorage.getItem(THEME_KEY);
-      return t === 'light' || t === 'dark' ? t : 'system';
-    } catch {
-      return 'system';
-    }
-  });
-  useEffect(() => applyTheme(theme), [theme]);
-  return [
-    theme,
-    (t) => {
-      setTheme(t);
-      try {
-        localStorage.setItem(THEME_KEY, t);
-      } catch {
-        // ignore
-      }
-    },
-  ];
-}
+const NEXT_THEME: Record<Theme, Theme> = { system: 'light', light: 'dark', dark: 'system' };
 
 const NAV = [
   { to: '/', label: 'Overview' },
@@ -82,7 +54,6 @@ function Shell(props: { demo: boolean }) {
     await api('/auth/logout', { method: 'POST', body: {} }).catch(() => undefined);
     await client.invalidateQueries();
   };
-  const next: Record<Theme, Theme> = { system: 'light', light: 'dark', dark: 'system' };
   return (
     <div className="shell">
       <nav className="nav" aria-label="Main">
@@ -95,14 +66,14 @@ function Shell(props: { demo: boolean }) {
             {item.label}
           </Link>
         ))}
-        <hr style={{ border: 0, borderTop: '1px solid var(--border)', width: '100%', margin: '8px 0' }} />
+        <hr />
         {ADMIN_NAV.filter((item) => !item.auditOnly || meta.data?.mode === 'audit').map((item) => (
           <Link key={item.to} to={item.to}>
             {item.label}
           </Link>
         ))}
         <div className="spacer" />
-        <button type="button" className="ghost" onClick={() => setTheme(next[theme])}>
+        <button type="button" className="ghost" onClick={() => setTheme(NEXT_THEME[theme])}>
           Theme: {theme}
         </button>
         {props.demo ? null : (

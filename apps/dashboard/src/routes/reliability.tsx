@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { type ReactNode, useMemo } from 'react';
 import { useMeta, useSpec } from '../api';
 import { pivot } from '../chart-data';
 import { BarList, TimeChart } from '../components/charts';
@@ -59,7 +59,7 @@ const ERROR_NAMES: Record<string, string> = {
 };
 
 /** Status with an icon and a word, never colour alone. */
-function Status(props: { level: 'good' | 'warning' | 'critical'; children: React.ReactNode }) {
+function Status(props: { level: 'good' | 'warning' | 'critical'; children: ReactNode }) {
   const icon = props.level === 'good' ? '✓' : props.level === 'warning' ? '!' : '✕';
   return (
     <span className={`badge ${props.level === 'good' ? 'good' : props.level === 'critical' ? 'bad' : ''}`}>
@@ -92,12 +92,12 @@ export function ReliabilityPage() {
   const latency = useMemo(() => {
     const a = pivot(p95.data?.points ?? [], () => 'p95');
     const b = pivot(p99.data?.points ?? [], () => 'p99');
-    const index = new Map(b.x.map((x, i) => [x, i]));
+    const p99At = new Map(b.x.map((x, i) => [x, b.series[0]?.values[i] ?? null]));
     return {
       x: a.x,
       series: [
         { name: 'p95', values: a.series[0]?.values ?? [] },
-        { name: 'p99', values: a.x.map((x) => (index.has(x) ? (b.series[0]?.values[index.get(x)!] ?? null) : null)) },
+        { name: 'p99', values: a.x.map((x) => p99At.get(x) ?? null) },
       ],
     };
   }, [p95.data, p99.data]);
@@ -125,7 +125,7 @@ export function ReliabilityPage() {
           <Tile label="Missed deadlines" value={num(t?.missedDeadlines)} sub="Users saw “interaction failed”" />
           <Tile
             label="Invalid requests (10 min)"
-            value={`${num(budget?.used)} / 10,000`}
+            value={`${num(budget?.used)} / ${num(budget?.limit)}`}
             sub={
               <Status level={budgetLevel}>
                 {budgetLevel === 'good' ? 'Healthy' : budgetLevel === 'warning' ? 'Watch' : 'Ban risk'}
@@ -154,7 +154,7 @@ export function ReliabilityPage() {
               label="p95 and p99 time to first response"
               x={latency.x}
               series={latency.series}
-              format={(v) => ms(v)}
+              format={ms}
               withTime={r.interval === 'hour'}
               timezone={tz}
             />

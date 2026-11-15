@@ -141,6 +141,7 @@ interface CommandDetail {
   modals: { customId: string; shown: number; submitted: number }[];
 }
 
+/** Upper edge of bucket `i` of the SDK's latency histogram: 40 log-scale buckets up to 60 s (`@shardlens/core`). */
 const bucketUpper = (i: number) => Math.exp(((i + 1) / 39) * Math.log(60_000));
 
 export function CommandPage() {

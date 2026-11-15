@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMeta, useSpec } from '../api';
 import { Heatmap } from '../components/charts';
 import { DataTable } from '../components/DataTable';
-import { Loading, PageHead, Panel, RangePicker } from '../components/ui';
+import { ErrorNote, Loading, PageHead, Panel, RangePicker } from '../components/ui';
 import { dateTime, num } from '../format';
 import { useRange } from '../range';
 
@@ -54,12 +54,18 @@ export function TimePage() {
         >
           {heat.isLoading ? (
             <Loading />
+          ) : heat.error ? (
+            <ErrorNote error={heat.error} />
           ) : (
             <Heatmap label="Runs by hour of day and weekday" cells={heat.data?.cells ?? []} />
           )}
         </Panel>
         <Panel title="Bursts" subtitle="Minutes with more than 5× the median minute (last 14 days at most)">
-          {(bursts.data?.rows ?? []).length === 0 ? (
+          {bursts.isLoading ? (
+            <Loading />
+          ) : bursts.error ? (
+            <ErrorNote error={bursts.error} />
+          ) : (bursts.data?.rows ?? []).length === 0 ? (
             <p className="muted">No bursts found.</p>
           ) : (
             <DataTable

@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { api, errorText } from '../api';
 import { NeedsDiscord, useAdminGate } from '../components/AdminGate';
 import { DataTable } from '../components/DataTable';
-import { Loading, PageHead, Panel } from '../components/ui';
+import { Loading, PageHead, Panel, StatusMessage } from '../components/ui';
 import { ago } from '../format';
 
 interface Report {
@@ -74,11 +74,7 @@ export function ReportsPage() {
         title="Reports"
         description="A daily or weekly summary posted to a Discord channel of your choice: commands run, unique users, failures, response time, servers and your top commands. Counts only."
       />
-      {message ? (
-        <p role="status" className="notice">
-          {message}
-        </p>
-      ) : null}
+      <StatusMessage message={message} />
       <div className="stack">
         <Panel title="Scheduled reports" subtitle={`Times are in ${timezone}, the time zone from Settings`}>
           {reports.isLoading ? (
@@ -105,14 +101,15 @@ export function ReportsPage() {
                   key: 'actions',
                   header: 'Actions',
                   render: (r) => (
-                    <span style={{ display: 'inline-flex', gap: 6 }}>
-                      <button
-                        type="button"
-                        aria-pressed={r.enabled}
-                        onClick={() => void action(`/v1/reports/${r.id}`, 'PATCH', { enabled: !r.enabled })}
-                      >
-                        {r.enabled ? 'On' : 'Off'}
-                      </button>
+                    <span className="row-actions">
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={r.enabled}
+                          onChange={() => void action(`/v1/reports/${r.id}`, 'PATCH', { enabled: !r.enabled })}
+                        />
+                        Enabled
+                      </label>
                       <button
                         type="button"
                         onClick={() => void action(`/v1/reports/${r.id}/send`, 'POST', {}, 'Report sent.')}

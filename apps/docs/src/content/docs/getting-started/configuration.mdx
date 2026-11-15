@@ -11,8 +11,9 @@ import OptionsTable from '../../../components/OptionsTable.astro';
 import configuration from '../../../../snippets/configuration.ts?raw';
 import shutdown from '../../../../snippets/shutdown.ts?raw';
 
-`createShardlens(client, options)` attaches Shardlens to a discord.js client. Call it before `client.login()`. Only
-`endpoint` and `apiKey` are required.
+`createShardlens(client, options)` attaches Shardlens to a discord.js client. Call it before `client.login()`. Sending
+to a collector needs only `endpoint` and `apiKey`; with [exporters only](../../self-hosting/exporter-only/), leave both
+out.
 
 <Code code={configuration} lang="ts" title="bot.ts" />
 

@@ -1,38 +1,47 @@
 const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 });
 const whole = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
 
+/** A number that can be shown: not `null`, `undefined`, `NaN` or infinite. */
+export const finite = (n: number | null | undefined): n is number => typeof n === 'number' && Number.isFinite(n);
+
+/** A whole number in full, for chart axes and bars. */
+export const count = (n: number) => whole.format(n);
+
 export function num(n: number | null | undefined): string {
-  if (n === null || n === undefined || !Number.isFinite(n)) return '—';
+  if (!finite(n)) return '—';
   return Math.abs(n) >= 100_000 ? compact.format(n) : whole.format(n);
 }
 
 export function pct(n: number | null | undefined, digits = 1): string {
-  if (n === null || n === undefined || !Number.isFinite(n)) return '—';
+  if (!finite(n)) return '—';
   return `${(n * 100).toFixed(digits)}%`;
 }
 
 export function ms(n: number | null | undefined): string {
-  if (n === null || n === undefined || !Number.isFinite(n)) return '—';
+  if (!finite(n)) return '—';
   return n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)} s` : `${Math.round(n)} ms`;
 }
 
-export function date(value: string | Date | null | undefined, timeZone = 'UTC'): string {
-  if (!value) return '—';
+function toDate(value: string | Date): Date | undefined {
   const d = typeof value === 'string' ? new Date(value) : value;
-  if (Number.isNaN(d.getTime())) return '—';
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeZone }).format(d);
+  return Number.isNaN(d.getTime()) ? undefined : d;
 }
 
-export function dateTime(value: string | Date | null | undefined, timeZone = 'UTC'): string {
-  if (!value) return '—';
-  const d = typeof value === 'string' ? new Date(value) : value;
-  if (Number.isNaN(d.getTime())) return '—';
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short', timeZone }).format(d);
+function formatDate(value: string | Date | null | undefined, options: Intl.DateTimeFormatOptions): string {
+  const d = value ? toDate(value) : undefined;
+  return d ? new Intl.DateTimeFormat(undefined, options).format(d) : '—';
 }
+
+export const date = (value: string | Date | null | undefined, timeZone = 'UTC') =>
+  formatDate(value, { dateStyle: 'medium', timeZone });
+
+export const dateTime = (value: string | Date | null | undefined, timeZone = 'UTC') =>
+  formatDate(value, { dateStyle: 'medium', timeStyle: 'short', timeZone });
 
 export function ago(value: string | Date | null | undefined): string {
   if (!value) return 'never';
-  const d = typeof value === 'string' ? new Date(value) : value;
+  const d = toDate(value);
+  if (!d) return '—';
   const s = Math.round((Date.now() - d.getTime()) / 1000);
   if (s < 60) return `${Math.max(0, s)}s ago`;
   if (s < 3600) return `${Math.round(s / 60)}m ago`;

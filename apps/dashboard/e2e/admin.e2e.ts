@@ -34,6 +34,11 @@ test('a report can be scheduled, and only to a Discord webhook', async ({ admin:
   await expect(page.getByRole('cell', { name: 'Every Friday at 09:00' })).toBeVisible();
   await expect(page.getByText('e2e-token')).toHaveCount(0);
   await expectAccessible(page);
+
+  const enabled = page.getByRole('row', { name: /Morning summary/ }).getByRole('checkbox', { name: 'Enabled' });
+  await expect(enabled).toBeChecked();
+  await enabled.click();
+  await expect(enabled).not.toBeChecked();
 });
 
 test('alerts render and refuse non-Discord webhooks', async ({ admin: page }) => {
@@ -53,6 +58,16 @@ test('alerts render and refuse non-Discord webhooks', async ({ admin: page }) =>
     headers: { 'x-shardlens-csrf': '1' },
   });
   expect(res.status()).toBe(400);
+
+  await page.getByLabel('Name').fill('Missed deadlines');
+  await page.getByLabel('Discord webhook URL').fill('https://discord.com/api/webhooks/112233445566778899/e2e-token');
+  await page.getByRole('button', { name: 'Create' }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Alert created.' })).toBeVisible();
+  const enabled = page.getByRole('row', { name: /Missed deadlines/ }).getByRole('checkbox', { name: 'Enabled' });
+  await expect(enabled).toBeChecked();
+  await enabled.click();
+  await expect(enabled).not.toBeChecked();
+  await expectAccessible(page);
 });
 
 test('settings fit a phone screen without sideways scrolling', async ({ admin: page }) => {

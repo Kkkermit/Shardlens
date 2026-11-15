@@ -12,15 +12,17 @@ export async function loadOptOuts(): Promise<string[]> {
   }
 }
 
-let queue = Promise.resolve();
+let queue: Promise<unknown> = Promise.resolve();
 
 /** Serialises writes so concurrent opt-outs don't overwrite each other. */
 export function saveOptOut(userId: string, optedOut: boolean): Promise<void> {
-  queue = queue.then(async () => {
+  const write = queue.then(async () => {
     const ids = new Set(await loadOptOuts());
     if (optedOut) ids.add(userId);
     else ids.delete(userId);
     await writeFile(FILE, JSON.stringify([...ids]));
   });
-  return queue;
+  // One failed write must not stop every later one: the queue carries on, the caller still sees the error.
+  queue = write.catch(() => undefined);
+  return write;
 }

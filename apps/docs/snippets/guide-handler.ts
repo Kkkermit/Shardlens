@@ -1,7 +1,14 @@
 // The layout from the discord.js guide: one file per command with `execute`, one `interactionCreate` file, and the
 // client created in index.ts. `lens` travels on the client, so every file reaches it as `interaction.client.lens`.
 import { createShardlens, type Shardlens } from '@shardlens/discordjs';
-import { type ChatInputCommandInteraction, Client, Collection, Events, GatewayIntentBits } from 'discord.js';
+import {
+  type ChatInputCommandInteraction,
+  Client,
+  Collection,
+  Events,
+  GatewayIntentBits,
+  MessageFlags,
+} from 'discord.js';
 
 declare module 'discord.js' {
   interface Client {
@@ -28,7 +35,12 @@ const interactionCreate = {
       // Wrapped inside the try, so the error reaches Shardlens on its way to your catch.
       await interaction.client.lens.wrap((i: ChatInputCommandInteraction) => command.execute(i))(interaction);
     } catch {
-      await interaction.reply({ content: 'There was an error while running this command.' });
+      const reply = {
+        content: 'There was an error while running this command.',
+        flags: MessageFlags.Ephemeral,
+      } as const;
+      if (interaction.replied || interaction.deferred) await interaction.followUp(reply);
+      else await interaction.reply(reply);
     }
   },
 };

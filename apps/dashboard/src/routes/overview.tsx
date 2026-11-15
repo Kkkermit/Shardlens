@@ -1,5 +1,6 @@
-import { useMemo } from 'react';
+import { type ReactNode, useMemo } from 'react';
 import { useLive, useMeta, useSpec } from '../api';
+import { dayX } from '../chart-data';
 import { TimeChart } from '../components/charts';
 import { DataTable } from '../components/DataTable';
 import { ErrorNote, Loading, PageHead, Panel, Tile } from '../components/ui';
@@ -39,7 +40,7 @@ export function OverviewPage() {
   const runs = overview.data?.runs30d ?? [];
   const chart = useMemo(
     () => ({
-      x: runs.map((r) => Date.parse(`${r.day}T00:00:00Z`) / 1000),
+      x: runs.map((r) => dayX(r.day)),
       series: [
         { name: 'Runs', values: runs.map((r) => r.runs) },
         { name: 'Failed', values: runs.map((r) => r.failures ?? 0) },
@@ -146,7 +147,7 @@ export function OverviewPage() {
   );
 }
 
-function Check(props: { ok: boolean | undefined; text: React.ReactNode }) {
+function Check(props: { ok: boolean | undefined; text: ReactNode }) {
   return (
     <li>
       <span className={`badge ${props.ok ? 'good' : ''}`} aria-hidden="true">

@@ -85,6 +85,6 @@ These are read by `docker-compose.yml`, not by the collector itself.
 | Variable            | What it is                                                                         |
 | ------------------- | ---------------------------------------------------------------------------------- |
 | `SHARDLENS_DOMAIN`  | The domain Caddy gets a certificate for.                                            |
-| `POSTGRES_PASSWORD` | Password for the bundled PostgreSQL.                                                |
+| `POSTGRES_PASSWORD` | Password for the bundled PostgreSQL. Letters, digits, `-` and `_` only: it goes into `DATABASE_URL`. |
 | `SHARDLENS_IMAGE`   | Collector image to run. Defaults to the published image for the current major version. |
 | `CLICKHOUSE_PASSWORD` | Password for the bundled ClickHouse in `docker-compose.clickhouse.yml`. Letters and digits only.     |

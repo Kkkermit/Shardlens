@@ -55,7 +55,6 @@ h3 {
   white-space: nowrap;
 }
 
-/* Layout */
 .shell {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
@@ -102,6 +101,12 @@ h3 {
 }
 .nav .spacer {
   flex: 1;
+}
+.nav hr {
+  width: 100%;
+  margin: 8px 0;
+  border: 0;
+  border-top: 1px solid var(--border);
 }
 .nav button {
   justify-content: flex-start;
@@ -168,7 +173,6 @@ h3 {
   }
 }
 
-/* Panels and tiles */
 .panel {
   background: var(--surface-1);
   border: 1px solid var(--border);
@@ -223,7 +227,6 @@ h3 {
   background: var(--text-muted);
 }
 
-/* Controls */
 button,
 .button {
   display: inline-flex;
@@ -272,6 +275,8 @@ select {
 .segmented {
   display: inline-flex;
   flex: none;
+  margin: 0;
+  padding: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   overflow: hidden;
@@ -296,7 +301,6 @@ select {
   color: var(--text-secondary);
 }
 
-/* Tables */
 .table-wrap {
   /* Positioned, so visually hidden (absolutely positioned) header text is clipped here and can't widen the page. */
   position: relative;
@@ -342,8 +346,17 @@ tr.clickable {
 tr.clickable:hover td {
   background: var(--surface-2);
 }
+.row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.row-actions label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
 
-/* Charts */
 .chart {
   position: relative;
   width: 100%;
@@ -390,9 +403,6 @@ tr.clickable:hover td {
 .chart-tooltip .t {
   color: var(--text-muted);
   margin-bottom: 4px;
-}
-.u-legend {
-  display: none;
 }
 
 .bars {
@@ -464,7 +474,6 @@ tr.clickable:hover td {
   text-align: center;
 }
 
-/* Misc */
 .badge {
   display: inline-flex;
   align-items: center;
@@ -518,7 +527,6 @@ tr.clickable:hover td {
   text-align: center;
   color: var(--text-secondary);
 }
-.empty code,
 code {
   font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
   font-size: 12px;
