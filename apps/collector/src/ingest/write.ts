@@ -609,12 +609,16 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
 
   if (commandTimes.size > 0) {
     const ids = [...commandTimes.keys()];
+    // Commands run before the bot was removed count, also when the removal is in the same batch (a short-lived
+    // install, or a replay after an outage): by time, because a batch isn't in the order things happened. Commands
+    // after it are a user install being used in a server the bot has left, which isn't that server using the bot.
+    const whileInstalled = 'CASE WHEN g.left_at IS NULL OR v.last <= g.left_at THEN v.last ELSE v.first END';
     await tx.query(
       `UPDATE guilds g SET
          first_command_at = LEAST(coalesce(g.first_command_at, v.first), v.first),
-         last_command_at = GREATEST(coalesce(g.last_command_at, v.last), v.last)
+         last_command_at = GREATEST(coalesce(g.last_command_at, ${whileInstalled}), ${whileInstalled})
        FROM unnest($2::bigint[], $3::timestamptz[], $4::timestamptz[]) AS v(guild_id, first, last)
-       WHERE g.app_id = $1 AND g.guild_id = v.guild_id AND g.left_at IS NULL`,
+       WHERE g.app_id = $1 AND g.guild_id = v.guild_id AND (g.left_at IS NULL OR v.first <= g.left_at)`,
       [
         ctx.appId,
         ids,

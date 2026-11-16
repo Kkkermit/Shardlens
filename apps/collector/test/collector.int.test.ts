@@ -864,6 +864,39 @@ describe('servers and snapshots', () => {
     expect(detected.rows[0].n).toBe(0);
   });
 
+  it('counts the commands a server ran before removing the bot, when both arrive in one batch', async () => {
+    const { hasher, period } = await sdkHasher(h.app);
+    const user = (await hasher.hash('300000000000000009', period)) as string;
+    const [tried, never] = [snowflakeOnShard(0, 1, 71), snowflakeOnShard(0, 1, 72)];
+    const at = Date.now() - 120_000;
+    const event = (offset: number, fields: object) => ({ id: uuidv7(at + offset), ts: at + offset, ...fields });
+    const join = (guild: string) =>
+      event(0, { type: 'guild_join', info: guildInfo(guild, { joinedAt: at }), detectedAtStartup: false });
+    const leave = (guild: string) => event(20_000, { type: 'guild_leave', guild, detectedAtStartup: false });
+    const res = await ingest(
+      h.app,
+      envelope([
+        join(tried),
+        join(never),
+        // Not in the order they happened: the SDK sends server events ahead of commands.
+        leave(tried),
+        leave(never),
+        interaction(user, event(10_000, { guild: tried })),
+        // After the removal, a user install run in those servers: not the servers using the bot.
+        interaction(user, event(30_000, { guild: tried })),
+        interaction(user, event(30_000, { guild: never })),
+      ]),
+    );
+    expect(res.json()).toMatchObject({ accepted: 7 });
+    const rows = await h.db.query<{ id: string; first: Date | null; last: Date | null }>(
+      `SELECT guild_id::text AS id, first_command_at AS first, last_command_at AS last
+         FROM guilds WHERE guild_id = ANY($1::bigint[])`,
+      [[tried, never]],
+    );
+    const times = Object.fromEntries(rows.rows.map((r) => [r.id, [r.first?.getTime(), r.last?.getTime()]]));
+    expect(times).toEqual({ [tried]: [at + 10_000, at + 10_000], [never]: [undefined, undefined] });
+  });
+
   it('ignores a snapshot of a shard outside the layout instead of counting it toward a new one', async () => {
     await h.db.query('DELETE FROM snapshot_pending');
     const res = await ingest(

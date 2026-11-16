@@ -620,7 +620,7 @@ async function seed() {
   const stored = await ingest(h.app, envelope(events));
   expect(stored.statusCode).toBe(202);
   expect(stored.json()).toMatchObject({ accepted: events.length, rejected: [] });
-  // In a batch of its own, as it would arrive: a server's first command is only noted while the bot is in it.
+  // In a batch of its own, as a removal an hour and a half later would arrive.
   const left = await ingest(
     h.app,
     envelope([event(at(90), 'guild_leave', { guild: GUILD_B, detectedAtStartup: false })]),
