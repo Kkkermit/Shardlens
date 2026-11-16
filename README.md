@@ -166,6 +166,7 @@ privacy policy.
 | ---------------------------------------------------------------- | ------------------------------------------------------------------------------- |
 | [`@shardlens/discordjs`](packages/discordjs)                     | The discord.js adapter. This is the one you install                             |
 | [`@shardlens/http`](packages/http)                               | For HTTP-interaction bots: Cloudflare Workers, Deno, Bun, `@discordjs/core`     |
+| [`@shardlens/client`](packages/client)                           | Typed client that reads a collector from your own dashboard or scripts          |
 | [`@shardlens/exporter-prometheus`](packages/exporter-prometheus) | Bot-health metrics for Prometheus and Grafana                                   |
 | [`@shardlens/exporter-otel`](packages/exporter-otel)             | Bot-health metrics through OpenTelemetry                                        |
 | [`shardlens`](packages/cli)                                      | CLI: `init`, `keys`, `privacy`, `doctor`                                        |

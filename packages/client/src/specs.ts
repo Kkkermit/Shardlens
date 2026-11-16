@@ -111,7 +111,6 @@ export interface HeatmapQuery {
 export interface CommandsQuery {
   kind: 'commands';
   range: TimeRange;
-  extra?: string | undefined;
 }
 
 /** One command in depth. */

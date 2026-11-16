@@ -91,7 +91,7 @@ export interface OpenStream {
 export interface Transport {
   /** A JSON request: `GET`, or `POST` with a body. Resolves with the parsed answer. */
   request<T>(path: string, init?: { body?: unknown; signal?: AbortSignal | undefined }): Promise<T>;
-  /** A `GET` whose answer is read as a stream. The time limit covers connecting only. */
+  /** A `GET` whose answer is a stream of Server-Sent Events. The time limit covers connecting only. */
   open(path: string, signal: AbortSignal | undefined): Promise<OpenStream>;
   /** The error for a request or stream that broke off without an answer. */
   unreachable(cause: unknown): ShardlensClientError;
@@ -118,6 +118,12 @@ export function createTransport(options: ShardlensClientOptions): Transport {
           cause,
         })
       : unreachable(cause);
+  // A 2xx answer of another kind: `url` points at a website or a proxy's sign-in page, not at the collector.
+  const notCollector = (status: number) =>
+    new ShardlensClientError(`The answer from ${base.origin} is not a Shardlens collector's.`, {
+      status,
+      code: 'invalid_response',
+    });
 
   return {
     unreachable,
@@ -142,11 +148,7 @@ export function createTransport(options: ShardlensClientOptions): Transport {
         try {
           return JSON.parse(text) as T;
         } catch {
-          // A 2xx page that isn't JSON: `url` points at a website or a proxy's sign-in page, not at the collector.
-          throw new ShardlensClientError(`The answer from ${base.origin} is not a Shardlens collector's.`, {
-            status: res.status,
-            code: 'invalid_response',
-          });
+          throw notCollector(res.status);
         }
       } catch (error) {
         // The caller's own abort is passed on as `fetch` reports it.
@@ -172,7 +174,8 @@ export function createTransport(options: ShardlensClientOptions): Transport {
           signal: controller.signal,
         });
         if (!res.ok) throw await answerError(res);
-        if (!res.body) throw unreachable(undefined);
+        const events = res.headers.get('content-type')?.toLowerCase().startsWith('text/event-stream');
+        if (!events || !res.body) throw notCollector(res.status);
         return { body: res.body, close };
       } catch (error) {
         close();

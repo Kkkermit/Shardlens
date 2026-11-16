@@ -8,5 +8,10 @@
     "name": "@shardlens/http (ESM, minified + gzip, with core)",
     "path": "packages/http/dist/index.js",
     "limit": "12 kB"
+  },
+  {
+    "name": "@shardlens/client (ESM, minified + gzip)",
+    "path": "packages/client/dist/index.js",
+    "limit": "3 kB"
   }
 ]

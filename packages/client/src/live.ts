@@ -1,5 +1,5 @@
 import type { LiveUpdate } from './results.js';
-import type { Transport } from './transport.js';
+import type { OpenStream, Transport } from './transport.js';
 
 interface ServerSentEvent {
   /** The stream's `event` field; `message` when it gave none. */
@@ -62,7 +62,7 @@ export async function* liveUpdates(
   signal: AbortSignal | undefined,
 ): AsyncGenerator<LiveUpdate, void, undefined> {
   if (signal?.aborted) return;
-  let stream: Awaited<ReturnType<Transport['open']>>;
+  let stream: OpenStream;
   try {
     stream = await transport.open('/v1/live', signal);
   } catch (error) {

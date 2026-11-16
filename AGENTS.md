@@ -48,6 +48,9 @@ Shardlens works and why. Add an ADR when you change one of those decisions.
 - `packages/discordjs`: discord.js adapter (interactions, REST hooks, guilds, shards, premium, `/privacy` command); `bench/` overhead benchmark
 - `packages/cli`: `shardlens` CLI (init, keys, privacy, doctor)
 - `packages/http`: `@shardlens/http` for HTTP-interaction bots (Workers, Deno, Bun, `@discordjs/core`); Web APIs only
+- `packages/client`: `@shardlens/client`, a typed reader of the collector (queries, live stream, activity log) for other
+  dashboards and scripts; zero dependencies, Web APIs only. Its types are written by hand: the collector's
+  `test/client-types.test.ts` and `test/client.int.test.ts` fail when a query spec or an answer changes without them
 - `packages/exporter-prometheus`, `packages/exporter-otel`: metrics exporters; instruments come from `EXPORTER_METRICS` in core
 - `apps/collector`: Fastify + PostgreSQL: ingest, config, query, live (SSE), auth, settings/keys/alerts, audit, privacy erase,
   Discord webhook events, badges; jobs (rollups, uniques, salts, retention, alerts); `dist/cli/seed.js` demo data;

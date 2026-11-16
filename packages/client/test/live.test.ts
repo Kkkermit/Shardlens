@@ -261,6 +261,15 @@ describe('live', () => {
     });
   });
 
+  it('refuses a 2xx answer that is not an event stream', async () => {
+    const page = () => new Response('<html>Sign in</html>', { headers: { 'content-type': 'text/html' } });
+    const { client, asked } = clientFor(page);
+    const error = await rejection(collect(client.live()));
+    expect(error).toBeInstanceOf(ShardlensClientError);
+    expect(error).toMatchObject({ status: 200, code: 'invalid_response' });
+    expect(asked[0]?.signal?.aborted).toBe(true);
+  });
+
   it('reports a stream that breaks off as a network failure, after the updates it got', async () => {
     const body = sseBody();
     const { client } = clientFor(() => body.response());

@@ -18,7 +18,7 @@ import { createShardlensClient, lastDays } from '@shardlens/client';
 
 const shardlens = createShardlensClient({
   url: process.env.SHARDLENS_URL!, // https://stats.example.com
-  key: process.env.SHARDLENS_READ_KEY!, // slk_read_…, from Settings → API keys
+  key: process.env.SHARDLENS_READ_KEY!, // slk_read_…
 });
 
 // A route on your own backend: a Next.js route handler, Hono, a Worker, Bun.
@@ -27,6 +27,11 @@ export async function GET(): Promise<Response> {
   return Response.json(rows.slice(0, 10), { headers: { 'cache-control': 'private, max-age=60' } });
 }
 ```
+
+The two settings come from your collector. `npx shardlens init … --dashboard own` sets one up without the Shardlens
+dashboard and writes both to `dashboard.env`; with a collector that is already running, the read key is
+`SHARDLENS_READ_KEY` in its `.env`, or a new one from **Settings → API keys**.
+[Choose your setup](https://kkkermit.github.io/Shardlens/getting-started/choose-your-setup/) compares the options.
 
 ## What you can read
 
@@ -84,6 +89,8 @@ for await (const update of shardlens.live({ signal })) {
 
 A collector in audit mode keeps an activity log. Reading it takes an activity key (`slk_activity_…`), which can also
 do everything a read key can. The collector records every read in its access log.
+`npx shardlens init … --dashboard own --identify-users` creates one, as does **Settings → API keys**. Use it only on
+pages your own staff can open.
 
 ```ts
 const shardlens = createShardlensClient({ url, key: process.env.SHARDLENS_ACTIVITY_KEY! });
@@ -121,6 +128,7 @@ try {
 | 404      | `audit_mode_off`                   | The collector is not in audit mode                             |
 | 429      | `rate_limited`                     | Too many requests: wait `retryAfterSeconds`                    |
 | 500      | `internal`                         | The collector failed: `requestId` finds the request in its log |
+| 2xx      | `invalid_response`                 | The answer isn't a collector's: check `url`                    |
 | 0        | `timeout`, `network`               | No answer within `timeoutMs` (default 10 s), or none at all    |
 | 0        | `invalid_options`                  | A `url` or `key` the client can't use, thrown when it is made  |
 
