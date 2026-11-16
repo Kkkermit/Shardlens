@@ -331,7 +331,7 @@ export function openApiDocument(version = collectorVersion()): Record<string, un
           tags: ['Audit mode'],
           summary: 'Activity log (who ran what)',
           description:
-            'Filter by time, command, server or exact user ID. `nextBefore` in the reply is the `before` of the next page. Logged in the access log.',
+            'Filter by time, command, server, outcome (`failed` is every outcome but `ok`) or exact user ID. `nextBefore` in the reply is the `before` of the next page. Logged in the access log.',
           security: [{ session: [] }],
           parameters: auditLogFilters,
           responses: {

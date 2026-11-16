@@ -39,7 +39,7 @@ Every query is a JSON object with a `kind`. Ranges are ISO timestamps, at most 4
 | ----------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | `overview`                          | The app, runs and failures per day for the last 30 days, the server count, unique users this period, and the state of each bot process's SDK |
 | `commands`                          | Every command: runs, change on the previous period, failure rate, p95, servers, unique users, and the kinds it ran as (`chat_input`, `message_command`, menus) |
-| `command`                           | One command in depth: runs per kind, subcommands, options, channel types, member tiers, languages, top servers, latency |
+| `command`                           | One command in depth: runs by outcome (ok, error, missed deadline, no response), how often it deferred or took over 3 s, runs per kind, subcommands, options, channel types, member tiers, languages, top servers, latency |
 | `series`                            | A metric over time (`interval`: minute, hour, day, week or month), optionally split with `groupBy`       |
 | `top`                               | The top values of one dimension: commands, servers, languages, outcomes                                  |
 | `heatmap`                           | Hour-by-weekday counts in your time zone                                                                 |
@@ -53,10 +53,25 @@ Every query is a JSON object with a `kind`. Ranges are ISO timestamps, at most 4
 | `funnel`, `retention`               | Conversion through steps, and cohort retention                                                           |
 
 `series` and `top` take `filters`, so one server's numbers are a filter on `guild` away, as in `topCommandsIn` above.
-The full schema of every query is in the [HTTP API reference](../../reference/http-api/) and at `/openapi.json` on
+Add a filter on `outcome` for the commands that fail there (`failingCommandsIn`), and ask for `command` to build a
+page per command (`commandDetail`). The full schema of every query is in the [HTTP API reference](../../reference/http-api/) and at `/openapi.json` on
 your collector.
 
 There is no `groupBy: 'user'` and no per-user query: that is by design, in every mode.
+
+## Linking to Shardlens for the rest
+
+The pages of the Shardlens dashboard have plain addresses, so yours can link to them instead of rebuilding them:
+
+| Address                                                    | Opens                                                    |
+| ---------------------------------------------------------- | -------------------------------------------------------- |
+| `/commands/<name>`                                         | One command in depth                                     |
+| `/servers/<server ID>`                                     | One server: runs, top and failing commands, install history |
+| `/activity?guild=<server ID>&outcome=failed`               | Who ran into a failure in that server ([audit mode](../audit-mode/) only) |
+| `/activity?command=<name>&outcome=failed`                  | Who ran into a failure of that command (audit mode only) |
+
+A read key can't see who ran a command, so "who" is always answered in the Shardlens dashboard, behind a Discord
+sign-in. `outcome` is `failed`, `error`, `timeout`, `no_response` or `ok`. A user ID is never part of an address.
 
 ## What you can split a metric by
 

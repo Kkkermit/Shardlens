@@ -65,6 +65,17 @@ Audit mode has to be switched on in **both** places. One side alone does nothing
 
 </Steps>
 
+## Finding who ran into a failure
+
+When someone reports that a command "did nothing", open the server's page or the command's page and follow **View
+failed runs**: the Activity log opens already narrowed to the runs that errored, missed the 3-second deadline or got
+no response. The same filters are in the log itself (command, server ID, outcome, exact user ID), and its address can
+be linked to from your own tools: `/activity?guild=<server ID>&outcome=failed`. A user ID is never part of the
+address.
+
+Shardlens records and shows; it doesn't act on users. Blocking someone is your bot's job: copy the user ID from the
+log into your bot's own block command or admin panel.
+
 ## Guardrails
 
 - **Encrypted at rest** with AES-256-GCM, using a key that lives outside the database.

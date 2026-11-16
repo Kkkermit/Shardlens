@@ -159,7 +159,7 @@ describe('docs stay in step with the code', () => {
       expect(
         parameters.map((parameter) => parameter.name),
         path,
-      ).toEqual(['from', 'to', 'before', 'command', 'guild', 'user', 'limit']);
+      ).toEqual(['from', 'to', 'before', 'command', 'guild', 'user', 'outcome', 'limit']);
     }
   });
 });

@@ -47,6 +47,41 @@ export function topCommandsIn(guildId: string) {
   });
 }
 
+// The commands that fail in one server: errors, missed 3-second deadlines and runs that got no response.
+export function failingCommandsIn(guildId: string) {
+  return shardlensQuery<{ rows: { key: string; value: number }[] }>({
+    kind: 'top',
+    metric: 'interactions',
+    groupBy: 'command',
+    filters: [
+      { field: 'guild', value: guildId },
+      { field: 'outcome', op: 'in', value: ['error', 'timeout', 'no_response'] },
+    ],
+    range: lastDays(30),
+    limit: 10,
+  });
+}
+
+interface CommandDetail {
+  totals: {
+    runs: number | null;
+    ok: number | null;
+    error: number | null;
+    timeout: number | null;
+    noResponse: number | null;
+    deferRate: number | null;
+    over3sRate: number | null;
+  };
+  subcommands: { key: string; value: number }[];
+  options: { key: string; value: number }[];
+  topServers: { key: string; value: number; name: string | null }[];
+}
+
+// One command in depth, for a per-command page. It reads single events, which are kept for 35 days at most.
+export function commandDetail(name: string) {
+  return shardlensQuery<CommandDetail>({ kind: 'command', name, range: lastDays(30) });
+}
+
 // Commands per day, ready for any chart library.
 export function commandsPerDay() {
   return shardlensQuery<{ points: { t: string; value: number }[] }>({

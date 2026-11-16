@@ -669,6 +669,85 @@ describe('audit mode', () => {
     expect(exported.statusCode).toBe(400);
   });
 
+  it('narrows the log and its export to failed runs, or to one outcome', async () => {
+    const { hasher, period } = await sdkHasher(h.app);
+    const user = (await hasher.hash(USER, period))!;
+    const runs = ['ok', 'error', 'timeout', 'no_response'].map((outcome) =>
+      interaction(user, {
+        command: 'flaky',
+        outcome,
+        ...(outcome === 'no_response' ? { ackMs: undefined } : {}),
+        actor: { userId: USER },
+      }),
+    );
+    expect((await ingest(h.app, envelope(runs, { mode: 'audit' }))).json()).toMatchObject({ accepted: 4 });
+    const outcomes = async (filter: string) => {
+      const log = await h.app.inject({
+        method: 'GET',
+        url: `/v1/audit/log?command=flaky&${filter}`,
+        cookies: { shardlens_session: adminCookie },
+      });
+      return (log.json().rows as { outcome: string }[]).map((row) => row.outcome).sort();
+    };
+    expect(await outcomes('outcome=failed')).toEqual(['error', 'no_response', 'timeout']);
+    expect(await outcomes('outcome=failed&guild=112233445566778899')).toEqual(['error', 'no_response', 'timeout']);
+    expect(await outcomes('outcome=failed&guild=998877665544332211')).toEqual([]);
+    expect(await outcomes('outcome=timeout')).toEqual(['timeout']);
+    expect(await outcomes('outcome=ok')).toEqual(['ok']);
+
+    const unknown = await h.app.inject({
+      method: 'GET',
+      url: '/v1/audit/log?outcome=broken',
+      cookies: { shardlens_session: adminCookie },
+    });
+    expect(unknown.statusCode).toBe(400);
+
+    const csv = await h.app.inject({
+      method: 'GET',
+      url: '/v1/audit/export.csv?command=flaky&outcome=failed',
+      ...asAdmin({ 'x-shardlens-confirm': 'export-audit-log' }),
+    });
+    expect(csv.body.trim().split('\n')).toHaveLength(4);
+    expect(csv.body).not.toContain(',ok,');
+
+    const views = await h.db.query<{ details: { outcome: string | null } }>(
+      "SELECT details FROM audit_access_log WHERE action = 'view_log' AND details->>'command' = 'flaky'",
+    );
+    expect(views.rows.map((row) => row.details.outcome)).toEqual(expect.arrayContaining(['failed', 'timeout', 'ok']));
+  });
+
+  it('reads the newest failures from the indexes that hold only failures', async () => {
+    const failureIndexes = await h.db.query<{ indexname: string; indexdef: string }>(
+      `SELECT indexname, indexdef FROM pg_indexes
+        WHERE tablename LIKE 'audit_log\\_%' AND indexdef LIKE '%WHERE (outcome <> 0)'`,
+    );
+    const named = (perServer: boolean) =>
+      failureIndexes.rows.filter((row) => row.indexdef.includes('guild_id') === perServer).map((row) => row.indexname);
+    const plan = async (where: string) => {
+      const client = await h.db.connect();
+      try {
+        // A table this small is read whole and sorted unless told otherwise; this asks whether an index can serve
+        // the log's query as the route writes it.
+        await client.query('BEGIN');
+        await client.query(
+          'SET LOCAL enable_seqscan = off; SET LOCAL enable_bitmapscan = off; SET LOCAL enable_sort = off',
+        );
+        const res = await client.query<{ 'QUERY PLAN': string }>(
+          `EXPLAIN SELECT a.interaction_id FROM audit_log a WHERE a.app_id = ${APP_ID} AND ${where}
+            ORDER BY a.ts DESC, a.interaction_id DESC LIMIT 50`,
+        );
+        return res.rows.map((row) => row['QUERY PLAN']).join('\n');
+      } finally {
+        await client.query('ROLLBACK').catch(() => undefined);
+        client.release();
+      }
+    };
+    const everywhere = await plan('a.outcome <> 0');
+    expect(named(false).some((index) => everywhere.includes(index))).toBe(true);
+    const oneServer = await plan('a.guild_id = 112233445566778899 AND a.outcome <> 0 AND a.outcome = 2');
+    expect(named(true).some((index) => oneServer.includes(index))).toBe(true);
+  });
+
   it('erases a user everywhere on request: hashed rows, unique users and the encrypted activity log', async () => {
     const erase = await h.app.inject({
       method: 'POST',

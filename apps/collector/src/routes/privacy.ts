@@ -2,7 +2,7 @@ import { Snowflake } from '@shardlens/schema';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { Db } from '../db.js';
-import { KIND_NAME, OUTCOME_NAME, parseUserHash } from '../ingest/codes.js';
+import { KIND_NAME, OUTCOME, OUTCOME_NAME, parseUserHash } from '../ingest/codes.js';
 import { bearerToken } from '../security/auth.js';
 import { auditCipher } from '../security/crypto.js';
 import { csvRow } from '../security/csv.js';
@@ -33,6 +33,8 @@ export const AuditLogFilters = z
     command: z.string().max(32).optional(),
     guild: Snowflake.optional(),
     user: Snowflake.optional(),
+    /** One outcome, or `failed` for every outcome but `ok`. */
+    outcome: z.enum(['ok', 'error', 'timeout', 'no_response', 'failed']).optional(),
     limit: z.coerce.number().int().min(1).max(200).default(50),
   })
   .strict();
@@ -185,6 +187,9 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
     if (f.command) add('a.command = ?', f.command);
     if (f.guild) add('a.guild_id = ?', f.guild);
     if (f.user && cipher) add('a.actor_lookup = ?', cipher.lookupHash(f.user));
+    // Written as a literal for every failed outcome: it is the condition of the indexes that hold only failures.
+    if (f.outcome && f.outcome !== 'ok') where.push('a.outcome <> 0');
+    if (f.outcome && f.outcome !== 'failed') add('a.outcome = ?', OUTCOME[f.outcome]);
     params.push(maxRows);
     const res = await deps.db.query<{
       interaction_id: string;
@@ -236,6 +241,7 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
     await logAccess(deps.db, admin.appId, admin.userId, f.user ? 'lookup_user' : 'view_log', {
       command: f.command ?? null,
       guild: f.guild ?? null,
+      outcome: f.outcome ?? null,
       // The looked-up ID is recorded as its audit lookup key, not in clear.
       user: f.user && cipher ? cipher.lookupHash(f.user).toString('hex') : null,
       rows: rows.length,

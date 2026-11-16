@@ -4,6 +4,7 @@ import { ApiError, updating, useMeta, useSpec } from '../api';
 import { pivot } from '../chart-data';
 import { BarList, TimeChart } from '../components/charts';
 import { DataTable } from '../components/DataTable';
+import { FailedRunsLink } from '../components/FailedRunsLink';
 import { GuildIcon, Name, NotFoundPage, PageHead, Pager, Panel, QueryBody, RangePicker, Tile } from '../components/ui';
 import { ago, date, dateTime, day, label, num } from '../format';
 import { isSnowflake } from '../forms';
@@ -241,6 +242,8 @@ function ServerNotFound() {
   );
 }
 
+const FAILED_OUTCOMES = ['error', 'timeout', 'no_response'];
+
 const INSTALL_EVENTS: Record<string, string> = {
   join: 'Added',
   leave: 'Removed',
@@ -283,6 +286,14 @@ function ServerDetailPage(props: { id: string }) {
     groupBy: 'outcome',
     filters,
   });
+  const failing = useSpec<{ rows: { key: string; count: number }[] }>({
+    kind: 'top',
+    metric: 'interactions',
+    range: r.range,
+    groupBy: 'command',
+    filters: [...filters, { field: 'outcome', op: 'in', value: FAILED_OUTCOMES }],
+    limit: 10,
+  });
   const chart = useMemo(() => pivot(series.data?.points ?? [], () => 'Runs'), [series.data]);
   const p = detail.data?.profile;
 
@@ -303,7 +314,7 @@ function ServerDetailPage(props: { id: string }) {
         description={<Link to="/servers">← All servers</Link>}
         actions={<RangePicker value={r.id} onChange={r.setId} />}
       />
-      <div className="stack" aria-busy={updating(series, commands, outcomes) || undefined}>
+      <div className="stack" aria-busy={updating(series, commands, outcomes, failing) || undefined}>
         <div className="grid tiles">
           <Tile
             label="Members"
@@ -368,6 +379,29 @@ function ServerDetailPage(props: { id: string }) {
               />
             </QueryBody>
           </Panel>
+          <Panel
+            title="Failing commands"
+            subtitle="Runs that errored, missed the 3 s deadline or got no response"
+            actions={<FailedRunsLink guild={id} />}
+          >
+            <QueryBody query={failing}>
+              <BarList
+                label="Failing commands"
+                empty="No failed runs in this range."
+                rows={(failing.data?.rows ?? []).map((c) => ({
+                  key: c.key,
+                  name: (
+                    <Link to="/commands/$name" params={{ name: c.key }}>
+                      <Name>{c.key}</Name>
+                    </Link>
+                  ),
+                  value: c.count,
+                }))}
+              />
+            </QueryBody>
+          </Panel>
+        </div>
+        <div className="grid two">
           <Panel title="Profile">
             <dl className="dl">
               <dt>Locale</dt>
@@ -404,23 +438,23 @@ function ServerDetailPage(props: { id: string }) {
               </dd>
             </dl>
           </Panel>
+          <Panel title="Install history">
+            <DataTable
+              caption="Install history"
+              rowKey={(e) => `${e.ts}-${e.kind}`}
+              rows={detail.data.events ?? []}
+              columns={[
+                { key: 'ts', header: 'When', render: (e) => dateTime(e.ts, tz) },
+                { key: 'kind', header: 'Event', render: (e) => INSTALL_EVENTS[e.kind] ?? e.kind },
+                {
+                  key: 'detected',
+                  header: 'Detected',
+                  render: (e) => (e.detectedAtStartup ? 'At startup (bot was offline)' : 'Live'),
+                },
+              ]}
+            />
+          </Panel>
         </div>
-        <Panel title="Install history">
-          <DataTable
-            caption="Install history"
-            rowKey={(e) => `${e.ts}-${e.kind}`}
-            rows={detail.data.events ?? []}
-            columns={[
-              { key: 'ts', header: 'When', render: (e) => dateTime(e.ts, tz) },
-              { key: 'kind', header: 'Event', render: (e) => INSTALL_EVENTS[e.kind] ?? e.kind },
-              {
-                key: 'detected',
-                header: 'Detected',
-                render: (e) => (e.detectedAtStartup ? 'At startup (bot was offline)' : 'Live'),
-              },
-            ]}
-          />
-        </Panel>
       </div>
     </>
   );

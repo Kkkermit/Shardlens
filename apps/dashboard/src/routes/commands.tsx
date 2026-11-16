@@ -5,6 +5,7 @@ import { pivot } from '../chart-data';
 import { commandFound, KNOWN_COMMAND_DAYS, MAX_COMMAND_NAME } from '../commands';
 import { BarList, Heatmap, TimeChart } from '../components/charts';
 import { DataTable } from '../components/DataTable';
+import { FailedRunsLink } from '../components/FailedRunsLink';
 import { Delta, GuildIcon, Name, NotFoundPage, PageHead, Panel, QueryBody, RangePicker, Tile } from '../components/ui';
 import { agoHour, commandLabel, date, day, label, ms, num, pct } from '../format';
 import { lastDays, useRange } from '../range';
@@ -263,7 +264,7 @@ function CommandDetailPage(props: { name: string }) {
             </QueryBody>
           </Panel>
           <div className="grid three">
-            <Panel title="Outcomes">
+            <Panel title="Outcomes" actions={<FailedRunsLink command={name} />}>
               <BarList
                 label="Outcomes"
                 rows={[
