@@ -32,6 +32,7 @@ Writes the [Docker Compose deployment](../../self-hosting/docker-compose/) into 
 | `Caddyfile`          | HTTPS for your domain, with a certificate Caddy gets on its own.                                   |
 | `.env`               | The collector's settings, with a generated database password, session secret, settings key, ingest key and read key. Only you can read it (mode `600`). |
 | `bot.env`            | The two settings your bot needs: `SHARDLENS_URL` and `SHARDLENS_INGEST_KEY` (the same key as in `.env`). Mode `600`. |
+| `dashboard.env`      | With `--dashboard own` only: what the server of your own dashboard needs, `SHARDLENS_URL` and `SHARDLENS_READ_KEY`, and `SHARDLENS_ACTIVITY_KEY` with `--identify-users`. Mode `600`. |
 
 ```sh
 npx shardlens init --domain stats.example.com --app-id 123456789012345678
@@ -42,7 +43,8 @@ npx shardlens init --domain stats.example.com --app-id 123456789012345678
 | `--domain <host>`  | The collector's hostname, such as `stats.example.com`, without `https://`. Caddy gets a certificate for it. Required. |
 | `--app-id <id>`    | Your Discord application ID (17 to 20 digits, under General Information in the Developer Portal). Required. |
 | `--dir <path>`     | Where to write the files. Default `./shardlens`; created if needed.                            |
-| `--identify-users` | Also create `SHARDLENS_AUDIT_KEY`, so you can switch from hashed to [identified users](../../guides/audit-mode/) in Settings. Without it the key is written commented out. |
+| `--dashboard <choice>` | Where you will look at the numbers ([Choose your setup](../../getting-started/choose-your-setup/)). `shardlens` (default): the collector serves the Shardlens dashboard. `own`: no dashboard page (`SHARDLENS_DASHBOARD=off`), and `dashboard.env` for a dashboard of your own. `none`: no dashboard page; the collector is an API only. |
+| `--identify-users` | Also create `SHARDLENS_AUDIT_KEY`, so you can switch from hashed to [identified users](../../guides/audit-mode/) in Settings. Without it the key is written commented out. With `--dashboard own` or `none` there is no Settings page, so it also writes `SHARDLENS_MODE=audit` and an activity key to read who ran what. |
 | `--force`          | Replace the files that are already there. An existing `.env` keeps its secrets (see below).    |
 
 `init` prints where it wrote the files and what to do next, never a secret:
@@ -67,7 +69,7 @@ Keep a copy of .env somewhere safe: without its keys, the collector's encrypted 
 
 ### Running `init` again
 
-`init` refuses when any of the four files is already in the folder, so it never overwrites a project's own
+`init` refuses when any of the files it would write is already in the folder, so it never overwrites a project's own
 `docker-compose.yml` or a running collector's `.env` by accident. With `--force` it replaces `docker-compose.yml`,
 `Caddyfile` and `bot.env`, and updates an existing `.env` in place instead of replacing it:
 
@@ -75,6 +77,8 @@ Keep a copy of .env somewhere safe: without its keys, the collector's encrypted 
 - it generates any of the database password, session secret, settings key, ingest key and read key that is missing or
   empty, and new ingest and read keys when the application ID changes (keys belong to one application);
 - with `--identify-users`, it adds `SHARDLENS_AUDIT_KEY` if there is none;
+- it changes `SHARDLENS_DASHBOARD` only when `--dashboard` is given, so running it again never brings back a
+  dashboard you turned off;
 - it keeps every other line as it was: the existing secrets, your own settings and the comments.
 
 So `init --force` is safe on a collector that is already running, for example to change its domain or to get the
@@ -92,12 +96,12 @@ standard error.
 npx shardlens keys --scope read
 ```
 
-| Option                   | Meaning                      |
-| ------------------------ | ---------------------------- |
-| `--scope ingest \| read` | The kind of key. Default `ingest`. |
+| Option                               | Meaning                      |
+| ------------------------------------ | ---------------------------- |
+| `--scope ingest \| read \| activity` | The kind of key. Default `ingest`. An activity key reads what a read key does, and [who ran what](../../guides/audit-mode/#read-it-from-your-own-dashboard) in audit mode. |
 
-Put it in the collector's `.env` as `SHARDLENS_INGEST_KEY` or `SHARDLENS_READ_KEY` and restart the collector, which
-stores only a hash of it. The key it replaces keeps working until you revoke it in the dashboard under
+Put it in the collector's `.env` as `SHARDLENS_INGEST_KEY`, `SHARDLENS_READ_KEY` or `SHARDLENS_ACTIVITY_KEY` and
+restart the collector, which stores only a hash of it. The key it replaces keeps working until you revoke it in the dashboard under
 **Settings → API keys**, where you can also create keys instead.
 
 ## `privacy`

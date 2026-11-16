@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { doctor } from './doctor.js';
 import { readEnvFile } from './env-file.js';
-import { init, UsageError } from './init.js';
+import { DASHBOARD_CHOICES, type DashboardChoice, init, UsageError } from './init.js';
 import { newKey } from './keys.js';
 import { list } from './list.js';
 import { privacyParagraph } from './privacy.js';
@@ -18,10 +18,16 @@ Commands
               --domain <host>           the collector's hostname, such as stats.example.com (required)
               --app-id <id>             your Discord application ID (required)
               --dir <path>              where to write the files (default ./shardlens)
-              --identify-users          also create SHARDLENS_AUDIT_KEY, for identified users (audit mode)
+              --dashboard <choice>      shardlens (default): the collector serves the Shardlens dashboard
+                                        own: no dashboard page; also writes dashboard.env, the settings your own
+                                             dashboard's server needs to read the numbers with @shardlens/client
+                                        none: no dashboard page; the collector is an API only
+              --identify-users          also create SHARDLENS_AUDIT_KEY, for identified users (audit mode); with
+                                        own or none it turns audit mode on and creates an activity key to read it
               --force                   replace files already there; an existing .env keeps its secrets
   keys      Print a new API key
-              --scope ingest|read       the kind of key (default ingest)
+              --scope ingest|read|activity
+                                        the kind of key (default ingest); an activity key also reads who ran what
   privacy   Print a privacy-policy paragraph that matches your setup
               --audit                   you identify users (audit mode)
               --ids-only                audit mode without usernames and avatars
@@ -46,6 +52,7 @@ const OPTIONS = {
   'app-id': { type: 'string' },
   force: { type: 'boolean' },
   'identify-users': { type: 'boolean' },
+  dashboard: { type: 'string' },
   scope: { type: 'string' },
   audit: { type: 'boolean' },
   'ids-only': { type: 'boolean' },
@@ -63,7 +70,7 @@ const parse = (args: string[]) => parseArgs({ args, options: OPTIONS, allowPosit
 type Values = ReturnType<typeof parse>['values'];
 
 const COMMANDS: Record<string, readonly string[]> = {
-  init: ['dir', 'domain', 'app-id', 'force', 'identify-users'],
+  init: ['dir', 'domain', 'app-id', 'force', 'identify-users', 'dashboard'],
   keys: ['scope'],
   privacy: ['audit', 'ids-only', 'option-values', 'webhook-events', 'retention', 'audit-retention'],
   doctor: ['url', 'key'],
@@ -129,7 +136,12 @@ export async function run(argv: string[]): Promise<number> {
 async function initCommand(values: Values): Promise<number> {
   const missing = (['domain', 'app-id'] as const).filter((name) => !values[name]).map((name) => `--${name}`);
   if (missing.length > 0) return usage(`init needs ${list(missing)}.`);
+  const dashboard = values.dashboard;
+  if (dashboard !== undefined && !DASHBOARD_CHOICES.includes(dashboard)) {
+    return usage('--dashboard must be shardlens, own or none.');
+  }
   const result = await init({
+    ...(dashboard !== undefined ? { dashboard: dashboard as DashboardChoice } : {}),
     dir: values.dir ?? 'shardlens',
     domain: values.domain ?? '',
     appId: values['app-id'] ?? '',
@@ -150,15 +162,31 @@ Next:
        cd ${shellQuote(result.dir)} && docker compose up -d
   2. Copy the two lines in bot.env to where your bot runs, then delete bot.env.
   3. Run "npx shardlens doctor" in your bot's folder to check the connection.
-  4. Open ${result.url} and sign in with SHARDLENS_READ_KEY from .env.
+  4. ${LOOK[result.dashboard](result.url, result.written.includes('dashboard.env'))}
 Keep a copy of .env somewhere safe: without its keys, the collector's encrypted data can't be read.`);
   return 0;
 }
 
+const DOCS = 'https://kkkermit.github.io/Shardlens';
+
+/** The last step of `init`: where the numbers are looked at, for each dashboard choice. */
+const LOOK: Record<DashboardChoice, (url: string, wroteDashboardEnv: boolean) => string> = {
+  shardlens: (url) => `Open ${url} and sign in with SHARDLENS_READ_KEY from .env.`,
+  own: (_url, wrote) =>
+    `${wrote ? "Copy the lines in dashboard.env to your dashboard's server, then delete dashboard.env." : "Give your dashboard's server SHARDLENS_URL and SHARDLENS_READ_KEY from .env."}
+     There, "npm install @shardlens/client" reads every number: ${DOCS}/guides/your-own-dashboard/`,
+  none: () =>
+    `There is no dashboard to open: the collector is an API only. Read the numbers from a script with
+     @shardlens/client and SHARDLENS_READ_KEY, or copy every event into your own database with
+     SHARDLENS_SINK_URL: ${DOCS}/getting-started/choose-your-setup/`,
+};
+
 function keysCommand(scope = 'ingest'): number {
-  if (scope !== 'ingest' && scope !== 'read') return usage('--scope must be ingest or read.');
+  if (scope !== 'ingest' && scope !== 'read' && scope !== 'activity') {
+    return usage('--scope must be ingest, read or activity.');
+  }
   console.log(newKey(scope));
-  const name = scope === 'ingest' ? 'SHARDLENS_INGEST_KEY' : 'SHARDLENS_READ_KEY';
+  const name = `SHARDLENS_${scope.toUpperCase()}_KEY`;
   console.error(
     `Set it as ${name} in the collector's .env and restart the collector, which stores only its hash. The key it\n` +
       'replaces keeps working until you revoke it in Settings → API keys, where you can also create keys.',

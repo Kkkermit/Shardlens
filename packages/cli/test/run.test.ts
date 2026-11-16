@@ -46,6 +46,7 @@ describe('command line', () => {
       '--app-id',
       '--dir',
       '--identify-users',
+      '--dashboard',
       '--force',
       '--scope',
       '--audit',
@@ -84,7 +85,8 @@ describe('command line', () => {
         ['init', '--domain', 'https://stats.example.com', '--app-id', '1234567890123456789'],
         '--domain takes a hostname',
       ],
-      [['keys', '--scope', 'admin'], '--scope must be ingest or read.'],
+      [['keys', '--scope', 'admin'], '--scope must be ingest, read or activity.'],
+      [['init', ...initArgs, '--dashboard', 'mine'], '--dashboard must be shardlens, own or none.'],
     ];
     for (const [argv, message] of cases) {
       err.mockClear();
@@ -105,6 +107,19 @@ describe('init', () => {
     expect(printed()).toContain(`cd '${dir.replaceAll("'", "'\\''")}' && docker compose up -d`);
     expect(printed()).toContain('Copy the two lines in bot.env');
     expect(printed()).toContain('Open https://stats.example.com');
+  });
+
+  it('ends with where the numbers are looked at, for each dashboard choice', async () => {
+    const own = await tempDir();
+    expect(await run(['init', '--dir', own, ...initArgs, '--dashboard', 'own'])).toBe(0);
+    expect(printed()).toContain(`Wrote docker-compose.yml, Caddyfile, .env, bot.env and dashboard.env to ${own}`);
+    expect(printed()).toContain('Copy the lines in dashboard.env');
+    expect(printed()).toContain('npm install @shardlens/client');
+    expect(printed()).not.toContain('Open https://stats.example.com');
+    out.mockClear();
+    expect(await run(['init', '--dir', await tempDir(), ...initArgs, '--dashboard', 'none'])).toBe(0);
+    expect(printed()).toContain('There is no dashboard to open');
+    expect(printed()).not.toContain('dashboard.env');
   });
 
   it('says what --force changed in an existing .env', async () => {
@@ -130,6 +145,10 @@ describe('keys', () => {
     expect(await run(['keys', '--scope', 'read'])).toBe(0);
     expect(printed()).toMatch(/^slk_read_[\w-]{43}$/);
     expect(errors()).toContain('SHARDLENS_READ_KEY');
+    out.mockClear();
+    expect(await run(['keys', '--scope', 'activity'])).toBe(0);
+    expect(printed()).toMatch(/^slk_activity_[\w-]{43}$/);
+    expect(errors()).toContain('SHARDLENS_ACTIVITY_KEY');
   });
 });
 
