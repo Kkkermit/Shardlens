@@ -1,0 +1,98 @@
+---
+title: Choose your setup
+description: Use the Shardlens dashboard, a dashboard of your own, or none. Every number can be read through the package either way.
+sidebar:
+  order: 1.5
+---
+
+import { Aside, Code } from '@astrojs/starlight/components';
+import script from '../../../../snippets/no-dashboard-script.ts?raw';
+
+The SDK in your bot is the same in every setup: it sends events to a collector, which stores and counts them. What you
+choose is where you look at the numbers. You can change your mind later without losing anything.
+
+| You want                    | Set it up with                                 | You read the numbers                                         |
+| --------------------------- | ---------------------------------------------- | ------------------------------------------------------------ |
+| The Shardlens dashboard     | `npx shardlens init …`                         | At your collector's address, in a browser                    |
+| A dashboard you already have | `npx shardlens init … --dashboard own`        | In your own pages, through [`@shardlens/client`](../../guides/your-own-dashboard/) |
+| No dashboard                | `npx shardlens init … --dashboard none`        | From scripts, in Discord, in your own database or in Grafana |
+| No collector at all         | Nothing to run                                 | In Prometheus or OpenTelemetry only ([exporter only](../../self-hosting/exporter-only/)) |
+
+`…` stands for `--domain stats.example.com --app-id 123456789012345678`, as in the [quick start](../quick-start/).
+
+## The Shardlens dashboard
+
+The default. The collector serves the dashboard at its own address: follow the [quick start](../quick-start/).
+
+## A dashboard you already have
+
+The collector runs as an API only, and your dashboard's server asks it for what your pages show.
+
+```sh
+npx shardlens init --domain stats.example.com --app-id 123456789012345678 --dashboard own
+```
+
+Besides the collector's files, this writes `dashboard.env`: the collector's address and a read key, for your
+dashboard's server. There, install `@shardlens/client` and ask for any number the Shardlens dashboard would show:
+[Use your own dashboard](../../guides/your-own-dashboard/) has the code.
+
+To show **who ran what** in your own pages, add `--identify-users`. It turns on
+[audit mode](../../guides/audit-mode/) and adds an activity key to `dashboard.env`, which reads the activity log the
+way a Discord sign-in does in the Shardlens dashboard.
+
+## No dashboard
+
+The collector still stores and counts everything; there is no page to open.
+
+```sh
+npx shardlens init --domain stats.example.com --app-id 123456789012345678 --dashboard none
+```
+
+You can still get at every number:
+
+- **From a script**, with `@shardlens/client` and the read key in `.env`:
+
+  <Code code={script} lang="ts" title="this-week.ts" />
+
+- **In your own database:** set `SHARDLENS_SINK_URL` and every event is
+  [copied there](../../self-hosting/your-own-database/) as it arrives.
+- **In Grafana:** the [Prometheus and OpenTelemetry exporters](../../guides/grafana/) send bot health to the
+  monitoring you already run.
+- **In Discord:** [scheduled reports](../../guides/reports/) and [alerts](../../guides/alerts/) post to a channel.
+  They are set up in the Shardlens dashboard, so turn it on for that (below); once set up they keep running with it
+  off.
+
+## Inside your bot (embedded mode)
+
+[Embedded mode](../../self-hosting/embedded/) makes the same choice with one option: `dashboard: false` starts the
+collector without its pages, and `collector.readKey` is the key `@shardlens/client` needs.
+
+## What the package can read
+
+Everything the Shardlens dashboard shows is an answer from the collector's API, and `@shardlens/client` asks for the
+same answers. Nothing is kept for the dashboard alone.
+
+| Data                                                          | Key it needs    | In `@shardlens/client`                   |
+| ------------------------------------------------------------- | --------------- | ---------------------------------------- |
+| Every chart and table: commands, servers, growth, audience, reliability, premium, custom events, funnels, retention | Read key | One method per query, such as `commands()`, `command()`, `servers()`, `reliability()` |
+| The live tiles (runs per minute, response time, shards)       | Read key        | `live()`                                 |
+| Who ran what, in [audit mode](../../guides/audit-mode/)       | Activity key    | `activity.log()` and `activity.topUsers()` |
+
+What stays in the Shardlens dashboard is changing things, which needs a person signed in with Discord: settings,
+alerts, reports, API keys, erasing a user and the CSV export of the activity log.
+
+<Aside type="caution" title="Keys stay on a server">
+  A read key can read every number, and an activity key can read who ran what. Use them from your dashboard's server
+  or a script, never from code that runs in a browser.
+</Aside>
+
+## Changing your mind
+
+The choice is one line in the collector's `.env`:
+
+```sh
+SHARDLENS_DASHBOARD=on   # or off
+```
+
+Change it and restart the collector (`docker compose up -d`), or run `init` again with `--force` and the choice you
+want: `npx shardlens init … --force --dashboard shardlens`. Your data, keys and settings stay as they are.

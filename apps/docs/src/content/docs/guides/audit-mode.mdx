@@ -8,6 +8,7 @@ sidebar:
 import { Aside, Code, Steps } from '@astrojs/starlight/components';
 import PolicyRule from '../../../components/PolicyRule.astro';
 import audit from '../../../../snippets/audit-mode.ts?raw';
+import activity from '../../../../snippets/own-dashboard-activity.ts?raw';
 
 You choose whether Shardlens hashes user IDs or records them.
 
@@ -59,6 +60,10 @@ Audit mode has to be switched on in **both** places. One side alone does nothing
    In the dashboard, **Settings → User identity → Mode: Identified**. Only a Discord sign-in (owner or team) can
    change it.
 
+   Running the collector [without the Shardlens dashboard](../../getting-started/choose-your-setup/)? Set
+   `SHARDLENS_MODE=audit` in its `.env` instead (`mode: 'audit'` for an embedded collector) and restart it.
+   `npx shardlens init … --dashboard own --identify-users` writes both lines for you.
+
 3. **Switch the SDK to audit mode**
 
    <Code code={audit} lang="ts" title="bot.ts" />
@@ -74,14 +79,31 @@ be linked to from your own tools: `/activity?guild=<server ID>&outcome=failed`. 
 address.
 
 Shardlens records and shows; it doesn't act on users. Blocking someone is your bot's job: copy the user ID from the
-log into your bot's own block command or admin panel.
+log into your bot's own block command or admin panel, or read the log from that panel as below.
+
+## Read it from your own dashboard
+
+The activity log isn't tied to the Shardlens dashboard. An **activity key** (`slk_activity_…`) reads it from the
+server side of a dashboard of your own, through [`@shardlens/client`](../your-own-dashboard/#who-ran-what):
+
+<Code code={activity} lang="ts" title="lib/shardlens-activity.ts" />
+
+Create one in **Settings → API keys → New activity key**, with `npx shardlens init … --dashboard own
+--identify-users`, or with `npx shardlens keys --scope activity` and `SHARDLENS_ACTIVITY_KEY` in the collector's
+`.env`. An activity key reads the log and the top users, and everything a read key reads. It can't export the log,
+change settings or sign in to the Shardlens dashboard, and it is answered with `404 audit_mode_off` while users are
+hashed.
+
+Treat it like a password to personal data: keep it on a server, behind a sign-in of your own for your own staff, and
+revoke it in **Settings → API keys** when it is no longer needed.
 
 ## Guardrails
 
 - **Encrypted at rest** with AES-256-GCM, using a key that lives outside the database.
 - **Kept for 30 days** by default. You can choose up to 90; longer is rejected.
-- **Every access is logged**: viewing the activity log, looking up a user, viewing top users and exporting. The log is
-  visible under **Settings → Privacy**.
+- **Every access is logged**: viewing the activity log, looking up a user, viewing top users and exporting, by a
+  person or by an activity key (under the key's label; the same read repeated by a key within a minute, as a page
+  that refreshes does, is one entry). The log is visible under **Settings → Privacy**.
 - **Exact lookups only**: you can search for a known user ID, but there is no browsing of user profiles and the query
   API can't group by user.
 - **Exports need confirmation**, and spreadsheet formulas in the CSV are neutralised.

@@ -66,6 +66,12 @@ await client.login(process.env.DISCORD_TOKEN);
 **3. Open the dashboard** at your domain and sign in with your read key (`SHARDLENS_READ_KEY` in `.env`), or with
 Discord (the app owner and team) once you have set that up. `npx shardlens doctor` checks the bot's side.
 
+**Already have a dashboard, or want none?** The dashboard is optional. `npx shardlens init … --dashboard own` runs
+the collector as an API, and [`@shardlens/client`](packages/client) reads every number (and, in audit mode, who ran
+what) into your own pages; `--dashboard none` runs it with no dashboard at all, for scripts, Discord reports, your own
+database or Grafana. [Choose your setup](https://kkkermit.github.io/Shardlens/getting-started/choose-your-setup/)
+compares them.
+
 That's it. Add `lens.wrap(handler)` to record handler time and errors, `lens.wrapMessageCommand(name, handler)` for
 prefix commands, `lens.track('ticket_opened', { … })` for your own events, and `lens.shutdown()` to flush on exit.
 

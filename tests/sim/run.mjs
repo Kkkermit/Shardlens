@@ -56,6 +56,10 @@ try {
     cpSync(join(import.meta.dirname, 'bots', bot), join(work, 'bots', bot), { recursive: true });
     install(join(work, 'bots', bot), packages, setupLog);
   }
+  // An owner's own dashboard, reading through @shardlens/client as installed from the packed tarball.
+  const panel = join(work, 'panel');
+  cpSync(join(import.meta.dirname, 'panel'), panel, { recursive: true });
+  install(panel, packages, setupLog);
   const collectorDir = join(work, 'collector');
   if (bots.some((bot) => !BOTS[bot].embedded)) {
     mkdirSync(collectorDir);
@@ -78,7 +82,7 @@ try {
     const result = { bot, failures: [] };
     try {
       const collectorMain = join(collectorDir, 'node_modules/@shardlens/collector/dist/main.js');
-      const { failures, events, needles } = await drive(bot, { dir, logs, databases, collectorMain });
+      const { failures, events, needles } = await drive(bot, { dir, logs, databases, collectorMain, panel });
       const leaks = await leakCheck(bot, { dir, logs, needles });
       result.failures.push(...failures, ...leaks.found.map((leak) => `leak: ${leak}`));
       if (leaks.rows === 0) result.failures.push('the copy holds no events');

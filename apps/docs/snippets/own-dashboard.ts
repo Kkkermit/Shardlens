@@ -1,44 +1,21 @@
-// Runs on your dashboard's server. The read key must never reach a browser.
-const SHARDLENS_URL = process.env.SHARDLENS_URL!; // https://stats.example.com
-const READ_KEY = process.env.SHARDLENS_READ_KEY!; // slk_read_…
+// Runs on your dashboard's server. A key must never reach a browser.
+import { createShardlensClient, lastDays } from '@shardlens/client';
 
-export async function shardlensQuery<T>(spec: Record<string, unknown>): Promise<T> {
-  const res = await fetch(new URL('/v1/query', SHARDLENS_URL), {
-    method: 'POST',
-    headers: { authorization: `Bearer ${READ_KEY}`, 'content-type': 'application/json' },
-    body: JSON.stringify(spec),
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!res.ok) throw new Error(`Shardlens answered ${res.status}`);
-  return (await res.json()) as T;
-}
-
-const lastDays = (days: number) => ({
-  from: new Date(Date.now() - days * 86_400_000).toISOString(),
-  to: new Date().toISOString(),
+const shardlens = createShardlensClient({
+  url: process.env.SHARDLENS_URL!, // https://stats.example.com
+  key: process.env.SHARDLENS_READ_KEY!, // slk_read_…
 });
-
-interface CommandRow {
-  command: string;
-  runs: number;
-  changePct: number | null;
-  errorRate: number | null;
-  p95Ms: number | null;
-  servers: number;
-  uniqueUsersThisPeriod: number | null;
-}
 
 // A route on your own backend, for example GET /api/stats/commands. This is a Web-standard handler, so it works as a
 // Next.js route handler, in Hono, on Cloudflare Workers and in Bun.
 export async function GET(): Promise<Response> {
-  const { rows } = await shardlensQuery<{ rows: CommandRow[] }>({ kind: 'commands', range: lastDays(7) });
+  const { rows } = await shardlens.commands({ range: lastDays(7) });
   return Response.json(rows.slice(0, 10), { headers: { 'cache-control': 'private, max-age=60' } });
 }
 
 // One server's most used commands, for a per-server page in your dashboard.
 export function topCommandsIn(guildId: string) {
-  return shardlensQuery<{ rows: { key: string; value: number }[] }>({
-    kind: 'top',
+  return shardlens.top({
     metric: 'interactions',
     groupBy: 'command',
     filters: [{ field: 'guild', value: guildId }],
@@ -49,8 +26,7 @@ export function topCommandsIn(guildId: string) {
 
 // The commands that fail in one server: errors, missed 3-second deadlines and runs that got no response.
 export function failingCommandsIn(guildId: string) {
-  return shardlensQuery<{ rows: { key: string; value: number }[] }>({
-    kind: 'top',
+  return shardlens.top({
     metric: 'interactions',
     groupBy: 'command',
     filters: [
@@ -62,32 +38,13 @@ export function failingCommandsIn(guildId: string) {
   });
 }
 
-interface CommandDetail {
-  totals: {
-    runs: number | null;
-    ok: number | null;
-    error: number | null;
-    timeout: number | null;
-    noResponse: number | null;
-    deferRate: number | null;
-    over3sRate: number | null;
-  };
-  subcommands: { key: string; value: number }[];
-  options: { key: string; value: number }[];
-  topServers: { key: string; value: number; name: string | null }[];
-}
-
-// One command in depth, for a per-command page. It reads single events, which are kept for 35 days at most.
+// One command in depth, for a per-command page: outcomes, how often it deferred, subcommands, options and the servers
+// that use it most. It reads single events, which are kept for 35 days at most.
 export function commandDetail(name: string) {
-  return shardlensQuery<CommandDetail>({ kind: 'command', name, range: lastDays(30) });
+  return shardlens.command(name, { range: lastDays(30) });
 }
 
 // Commands per day, ready for any chart library.
 export function commandsPerDay() {
-  return shardlensQuery<{ points: { t: string; value: number }[] }>({
-    kind: 'series',
-    metric: 'interactions',
-    interval: 'day',
-    range: lastDays(30),
-  });
+  return shardlens.series({ metric: 'interactions', interval: 'day', range: lastDays(30) });
 }

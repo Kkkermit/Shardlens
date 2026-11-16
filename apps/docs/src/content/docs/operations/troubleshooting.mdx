@@ -37,6 +37,16 @@ The key was not accepted.
 
 The batch is for a different application. `SHARDLENS_APP_ID` on the collector has to match the bot's application ID.
 
+From your own dashboard, `403` with `activity_key_required` means a read key asked for who ran what: that takes an
+[activity key](../../guides/audit-mode/#read-it-from-your-own-dashboard). `404` with `audit_mode_off` means the key is
+right and the collector isn't in audit mode.
+
+## The collector's address shows `"dashboard":"off"`
+
+The collector was set up without the Shardlens dashboard (`SHARDLENS_DASHBOARD=off`, from `shardlens init --dashboard
+own` or `none`), so it answers as an API only. Set `SHARDLENS_DASHBOARD=on` in its `.env` and restart it to get the
+dashboard back: [Choose your setup](../../getting-started/choose-your-setup/#changing-your-mind).
+
 ## "Salt missing" or events waiting
 
 The SDK hashes user IDs with a salt from the collector's `/v1/config`. Until it has a salt, it holds events for up to 60

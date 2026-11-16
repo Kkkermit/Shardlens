@@ -1,0 +1,13 @@
+{
+  "name": "sim-panel",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The server side of an owner's own dashboard: it reads the numbers with @shardlens/client.",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "dependencies": {
+    "@shardlens/client": "^1.0.0"
+  }
+}

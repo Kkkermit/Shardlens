@@ -7,6 +7,7 @@ You are adding Shardlens to the discord.js bot in this repository. Everything yo
 Shardlens is self-hosted, privacy-first analytics and health monitoring for discord.js bots (MIT).
 
 - It has two parts: an **SDK** inside the bot (`@shardlens/discordjs`, what you are installing) and a **collector** with a dashboard that the bot's owner runs separately, or inside the bot in embedded mode. The SDK sends batches of events to the collector over HTTPS.
+- The dashboard is the owner's choice, and the SDK is the same for all three: the Shardlens dashboard (the default), a dashboard they already have (it reads every number through `@shardlens/client`), or none. If I haven't said which I want, assume the Shardlens dashboard and ask me at the end; don't build anything for the other two unless I ask.
 - The SDK records interactions (command name, outcome, response time), prefix commands the bot reports, servers joined and left, REST and shard health. It never records message content, and user IDs are hashed inside the bot before anything is sent.
 - It listens through public discord.js events only. It does not change how the bot behaves, never throws into the bot, and needs no Gateway intent beyond `Guilds`.
 - Requirements: discord.js 14.12 or newer, or 15; Node.js 22.12 or newer (24.11 for embedded mode). It ships ESM and CommonJS builds with types.
@@ -289,6 +290,35 @@ if (interaction.isChatInputCommand() && (await privacy.handle(interaction))) {
 
 Opt-outs are held in memory, so the command's "no longer recorded" reply stops being true at the next restart unless they are saved. If the project has a database, save them there: pass the saved IDs as `optedOut` and save changes in `onOptOutChange` (both options of `createShardlens`; the callback may be `async`, and a failed save is counted, never thrown). If it has none, tell me instead of choosing a store yourself. Also tell me to register the command with Discord if the project registers commands in a separate deploy script.
 
+**My own dashboard.** To show Shardlens numbers in a dashboard or admin panel I already have, install `@shardlens/client` on that panel's server side and ask the collector there. It has no dependencies and uses `fetch`. Never call it from code that runs in a browser: the key would be readable by whoever opens the page.
+
+```ts
+import { createShardlensClient, lastDays } from '@shardlens/client';
+
+const shardlens = createShardlensClient({
+  url: process.env.SHARDLENS_URL!,
+  key: process.env.SHARDLENS_READ_KEY!,
+});
+
+const { rows } = await shardlens.commands({ range: lastDays(7) }); // every command: runs, failures, p95, servers
+const ticket = await shardlens.command('ticket', { range: lastDays(30) }); // one command in depth
+const failing = await shardlens.top({
+  metric: 'interactions',
+  groupBy: 'command',
+  filters: [
+    { field: 'guild', value: '112233445566778899' },
+    { field: 'outcome', op: 'in', value: ['error', 'timeout', 'no_response'] },
+  ],
+  range: lastDays(30),
+}); // the commands that fail in one server
+```
+
+- There is one method per kind of answer (`overview`, `commands`, `command`, `series`, `top`, `heatmap`, `servers`, `server`, `growth`, `audience`, `reliability`, `gauge`, `bursts`, `premium`, `installs`, `events`, `eventProps`, `funnel`, `retention`), `meta()`, and `live()` for the live numbers. Answers are typed; a failed request throws `ShardlensClientError`. Cache answers for a minute: the collector rolls numbers up once a minute.
+- It needs two settings where the panel's server runs, `SHARDLENS_URL` and `SHARDLENS_READ_KEY` (a read key, `slk_read_…`, not the bot's ingest key). Document them the way step 6 documents the bot's two, and don't make the panel fail to start without them.
+- Follow the panel's existing patterns for routes, data loading and sign-in, and add pages only for what I asked to see.
+- Who ran what is separate. Only if I asked for audit mode: `shardlens.activity.log({ guild, command, user, outcome: 'failed' })` and `shardlens.activity.topUsers('7d')` read it, with `SHARDLENS_ACTIVITY_KEY` (an activity key, `slk_activity_…`) as the client's `key`, on pages only my own staff can open. Never put a user ID in a URL a browser's address bar shows, and add no page that profiles one user beyond that exact-ID lookup.
+- Tell me to set the collector up with `npx shardlens init … --dashboard own` (add `--identify-users` for who ran what): it turns the Shardlens dashboard off and writes `dashboard.env` with these settings. Guide: https://kkkermit.github.io/Shardlens/guides/your-own-dashboard/
+
 **Embedded mode**, for a small bot on one host with no separate collector: the collector and its dashboard run inside the bot process, with their data in one folder.
 
 - It runs in one process. If the bot uses `ShardingManager` or discord-hybrid-sharding, stop and tell me: those need a standalone collector. Internal sharding is fine.
@@ -296,6 +326,7 @@ Opt-outs are held in memory, so the command's "no longer recorded" reply stops b
 - Install `@shardlens/collector` and `@electric-sql/pglite` as well as the SDK. In CommonJS, `require('@shardlens/collector/embedded')` works on Node.js 24.
 - It needs the application ID (from the Developer Portal). Use the setting the project already has for it (often `CLIENT_ID`, `APPLICATION_ID` or a `clientId` in its config); only if it has none, add `DISCORD_APP_ID` next to the bot's other settings.
 - The dashboard listens on port 8080 of this machine. Pick another port if the project already uses 8080.
+- If I said I want my own dashboard or none, pass `dashboard: false`: the collector then serves its API only, and `collector.readKey` is the key `@shardlens/client` needs (with `url: collector.url`).
 - Add the data folder (`shardlens-data` below) to `.gitignore`. Skip step 6: the collector's own address and key replace the two settings.
 
 The collector has to start before `createShardlens`, because the SDK needs its address and key:
@@ -355,7 +386,7 @@ const collector = await startEmbeddedCollector({
 
 - Which files you changed, and what each change does.
 - What I still need to do:
-  1. With a standalone collector: run one with `npx shardlens init --domain <my domain> --app-id <my application ID>`, then `docker compose up -d` in the folder it creates. It prints nothing secret; the bot's two settings are in the generated `bot.env`. Guide: https://kkkermit.github.io/Shardlens/getting-started/quick-start/ Then set `SHARDLENS_URL` and `SHARDLENS_INGEST_KEY` where the bot runs.
+  1. With a standalone collector: run one with `npx shardlens init --domain <my domain> --app-id <my application ID>`, then `docker compose up -d` in the folder it creates. Ask me which dashboard I want if I haven't said: the Shardlens dashboard (nothing to add), my own (`--dashboard own`) or none (`--dashboard none`); https://kkkermit.github.io/Shardlens/getting-started/choose-your-setup/ compares them. It prints nothing secret; the bot's two settings are in the generated `bot.env`. Guide: https://kkkermit.github.io/Shardlens/getting-started/quick-start/ Then set `SHARDLENS_URL` and `SHARDLENS_INGEST_KEY` where the bot runs.
   2. In embedded mode instead: set the application ID if you added a setting for it, start the bot, and open the dashboard with the read key (say where it is).
   3. To see what would be sent before any of that, pass `dryRun: true` once and run a command in the bot.
 - Anything you skipped or weren't sure about.
