@@ -2,6 +2,7 @@ import { MAX_EVENT_WEIGHT, Snowflake } from '@shardlens/schema';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { isDiscordWebhookUrl, maskStoredWebhook, postToDiscordWebhook } from '../discord-webhook.js';
+import { dashboardUrl } from '../env.js';
 import { UNREADABLE_WEBHOOK } from '../jobs/alerts.js';
 import { TimeZoneName } from '../query/spec.js';
 import { auditCipher } from '../security/crypto.js';
@@ -106,6 +107,7 @@ async function readSettings(deps: Deps, appId: string) {
     sampling: (s.sampling as Record<string, number> | undefined) ?? {},
     badges: (s.badges as string[] | undefined) ?? [],
     auditKeyConfigured: deps.config.auditKey !== undefined,
+    modeSetByEnvironment: deps.config.mode !== undefined,
   };
 }
 
@@ -122,6 +124,12 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
     const admin = await requireAdmin(deps, req, reply, { mutate: true });
     if (!admin) return;
     const patch = SettingsPatch.parse(req.body ?? {});
+    if (patch.mode !== undefined && deps.config.mode !== undefined && patch.mode !== deps.config.mode) {
+      return reply.code(409).send({
+        error: 'mode_set_by_environment',
+        message: 'The mode is set by SHARDLENS_MODE on the collector (or `mode` of an embedded one). Change it there.',
+      });
+    }
     if (patch.mode === 'audit' && !deps.config.auditKey) {
       return reply
         .code(400)
@@ -179,7 +187,7 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
     const admin = await requireAdmin(deps, req, reply, { mutate: true });
     if (!admin) return;
     const body = z
-      .object({ scope: z.enum(['ingest', 'read']), label: z.string().min(1).max(64) })
+      .object({ scope: z.enum(['ingest', 'read', 'activity']), label: z.string().min(1).max(64) })
       .strict()
       .parse(req.body ?? {});
     const key = newApiKey(body.scope);
@@ -318,7 +326,7 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
       const result = await postToDiscordWebhook(url, {
         title: `Test: ${row.name}`,
         body: 'This is a test message from Shardlens. Alerts for this rule will look like this.',
-        link: new URL('/reliability', deps.config.publicUrl).toString(),
+        link: dashboardUrl(deps.config) && new URL('/reliability', deps.config.publicUrl).toString(),
         critical: false,
       });
       return result.ok ? { ok: true } : reply.code(502).send({ error: 'webhook_failed', message: result.error });

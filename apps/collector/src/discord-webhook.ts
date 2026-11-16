@@ -43,7 +43,8 @@ interface DiscordMessage {
   title: string;
   /** Discord Markdown. */
   body: string;
-  link: string;
+  /** A page of the Shardlens dashboard, when the collector serves one. */
+  link?: string | undefined;
   critical: boolean;
 }
 
@@ -77,7 +78,7 @@ export async function postToDiscordWebhook(
           components: [
             { type: 10, content: `### ${message.title}` },
             { type: 10, content: message.body },
-            { type: 10, content: `[Open in Shardlens](${message.link})` },
+            ...(message.link ? [{ type: 10, content: `[Open in Shardlens](${message.link})` }] : []),
           ],
         },
       ],
@@ -85,7 +86,7 @@ export async function postToDiscordWebhook(
     if (v2.ok) return { ok: true };
     if (v2.status !== 400) return { ok: false, error: `discord returned ${v2.status}` };
     const plain = await post(webhookUrl, {
-      content: `**${message.title}**\n${message.body}\n${message.link}`.slice(0, 2_000),
+      content: [`**${message.title}**`, message.body, message.link ?? ''].join('\n').trim().slice(0, 2_000),
       allowed_mentions: { parse: [] },
     });
     return plain.ok ? { ok: true } : { ok: false, error: `discord returned ${plain.status}` };

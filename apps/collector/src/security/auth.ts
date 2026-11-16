@@ -47,8 +47,14 @@ export class KeyStore {
     this.#db = db;
   }
 
-  async verify(presented: string | undefined, scope: ApiKeyScope): Promise<KeyAuth | undefined> {
-    if (!presented || apiKeyScope(presented) !== scope) return undefined;
+  /** The key's record when it is known, not revoked and of `scope` (or one of several scopes). */
+  async verify(
+    presented: string | undefined,
+    scope: ApiKeyScope | readonly ApiKeyScope[],
+  ): Promise<KeyAuth | undefined> {
+    const allowed: readonly ApiKeyScope[] = typeof scope === 'string' ? [scope] : scope;
+    const claimed = presented ? apiKeyScope(presented) : undefined;
+    if (!presented || !claimed || !allowed.includes(claimed)) return undefined;
     const digest = sha256(presented);
     const cacheKey = digest.toString('hex');
     const now = Date.now();
@@ -69,7 +75,7 @@ export class KeyStore {
       entry = { auth: { keyId: row.id, appId: row.app_id, scope: row.scope }, at: now };
       this.#known.set(cacheKey, entry);
     }
-    if (entry.auth.scope !== scope) return undefined;
+    if (!allowed.includes(entry.auth.scope)) return undefined;
     if (now - (this.#touched.get(entry.auth.keyId) ?? 0) > KEY_CACHE_MS) {
       this.#touched.set(entry.auth.keyId, now);
       void this.#db

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { type AddressInfo, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -171,6 +171,53 @@ describe('embedded collector (PGlite)', () => {
       } finally {
         vi.restoreAllMocks();
         taken.close();
+        rmSync(own, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it(
+    'runs without the dashboard, in the mode it is given, with a key for a dashboard of your own',
+    { timeout: 60_000 },
+    async () => {
+      const own = mkdtempSync(join(tmpdir(), 'shardlens-embedded-headless-'));
+      // A folder from before activity keys existed: its secrets stay, and the new key is added to them.
+      const before = {
+        sessionSecret: 's'.repeat(64),
+        settingsKey: Buffer.alloc(32, 4).toString('base64'),
+        ingestKey: `slk_ingest_${'I'.repeat(43)}`,
+        readKey: `slk_read_${'R'.repeat(43)}`,
+      };
+      writeFileSync(join(own, 'secrets.json'), JSON.stringify(before));
+      const options = { dataDir: own, appId: APP_ID, port: 0, logLevel: 'silent', dashboard: false } as const;
+      await expect(startEmbeddedCollector({ ...options, mode: 'audit' })).rejects.toThrow(/needs auditKey/);
+      const headless = await startEmbeddedCollector({
+        ...options,
+        mode: 'audit',
+        auditKey: Buffer.alloc(32, 3).toString('base64'),
+      });
+      try {
+        expect(headless).toMatchObject({ ingestKey: before.ingestKey, readKey: before.readKey });
+        expect(headless.activityKey).toMatch(/^slk_activity_[\w-]{43}$/);
+        expect(JSON.parse(readFileSync(join(own, 'secrets.json'), 'utf8'))).toEqual({
+          ...before,
+          activityKey: headless.activityKey,
+        });
+
+        expect(await (await fetch(`${headless.url}/`)).json()).toEqual({
+          name: 'shardlens-collector',
+          dashboard: 'off',
+        });
+        const get = (path: string, key: string) =>
+          fetch(`${headless.url}${path}`, { headers: { authorization: `Bearer ${key}` } });
+        // Audit mode without a Settings page to choose it in, read without a Discord sign-in.
+        expect(await (await get('/v1/meta', headless.readKey)).json()).toMatchObject({ mode: 'audit' });
+        const log = await get('/v1/audit/log', headless.activityKey);
+        expect(log.status).toBe(200);
+        expect(await log.json()).toEqual({ rows: [], nextBefore: null });
+        expect((await get('/v1/audit/log', headless.readKey)).status).toBe(403);
+      } finally {
+        await headless.close();
         rmSync(own, { recursive: true, force: true });
       }
     },

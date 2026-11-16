@@ -1343,4 +1343,34 @@ describe('dashboard files', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('serves no page with the dashboard off, and the API as before', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'shardlens-dashboard-'));
+    writeFileSync(join(dir, 'index.html'), '<!doctype html><title>Shardlens</title>');
+    const app = await buildServer({
+      db: h.db,
+      live: h.live,
+      keys: new KeyStore(h.db),
+      config: { ...h.config, dashboardDir: dir, dashboard: false },
+    });
+    try {
+      const root = await app.inject({ method: 'GET', url: '/' });
+      expect(root.json()).toEqual({ name: 'shardlens-collector', dashboard: 'off' });
+      for (const url of ['/commands/ticket', '/index.html', '/settings']) {
+        const res = await app.inject({ method: 'GET', url });
+        expect(res.statusCode, url).toBe(404);
+        expect(res.headers['content-type'], url).toContain('application/json');
+      }
+      const meta = await app.inject({
+        method: 'GET',
+        url: '/v1/meta',
+        headers: { authorization: `Bearer ${READ_KEY}` },
+      });
+      expect(meta.statusCode).toBe(200);
+      expect((await app.inject({ method: 'GET', url: '/readyz' })).statusCode).toBe(200);
+    } finally {
+      await app.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

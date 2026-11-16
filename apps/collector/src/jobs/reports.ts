@@ -22,7 +22,7 @@ interface ReportRow {
 
 interface ReportOptions {
   settingsKey: string;
-  publicUrl: URL;
+  dashboardUrl: URL | undefined;
   fetchImpl?: typeof fetch;
 }
 
@@ -200,7 +200,7 @@ async function send(db: Db, row: ReportRow, opts: ReportOptions, now: Date): Pro
     });
   }
   const report = await buildReport(db, row, now);
-  const message = { ...report, link: new URL('/', opts.publicUrl).toString(), critical: false };
+  const message = { ...report, link: opts.dashboardUrl && new URL('/', opts.dashboardUrl).toString(), critical: false };
   return record(db, row, now, await postToDiscordWebhook(url, message, opts.fetchImpl));
 }
 

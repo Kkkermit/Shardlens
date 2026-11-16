@@ -51,7 +51,9 @@ Shardlens works and why. Add an ADR when you change one of those decisions.
 - `packages/exporter-prometheus`, `packages/exporter-otel`: metrics exporters; instruments come from `EXPORTER_METRICS` in core
 - `apps/collector`: Fastify + PostgreSQL: ingest, config, query, live (SSE), auth, settings/keys/alerts, audit, privacy erase,
   Discord webhook events, badges; jobs (rollups, uniques, salts, retention, alerts); `dist/cli/seed.js` demo data;
-  `./embedded` export (PGlite, ADR 0012); optional ClickHouse analytics store (`storage/clickhouse.ts`)
+  `./embedded` export (PGlite, ADR 0012); optional ClickHouse analytics store (`storage/clickhouse.ts`); the
+  dashboard pages are optional (`SHARDLENS_DASHBOARD=off`) and activity keys read the audit log for other dashboards
+  (ADR 0020)
 - `apps/dashboard`: React dashboard served by the collector (Playwright + axe e2e in `e2e/`)
 - `apps/docs`: Starlight docs site; code samples in `snippets/` are type-checked; data, metrics, options, SDK and HTTP API pages are generated;
   `prompts/install.md` is the prompt people paste into a coding agent (served at `/install.md`, its samples are

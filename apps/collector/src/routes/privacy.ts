@@ -54,13 +54,17 @@ async function appMode(db: Db, appId: string): Promise<string | undefined> {
   return res.rows[0]?.mode;
 }
 
-async function logAccess(db: Db, appId: string, viewer: string | null, action: string, details: object) {
-  await db.query('INSERT INTO audit_access_log (app_id, viewer_user_id, action, details) VALUES ($1, $2, $3, $4)', [
-    appId,
-    viewer ?? '0',
-    action,
-    JSON.stringify(details),
-  ]);
+/** Who is reading audit data: a person signed in with Discord, or a backend holding an activity key. */
+interface Viewer {
+  userId: string | null;
+  keyId?: string | null;
+}
+
+async function logAccess(db: Db, appId: string, viewer: Viewer, action: string, details: object) {
+  await db.query(
+    'INSERT INTO audit_access_log (app_id, viewer_user_id, viewer_key_id, action, details) VALUES ($1, $2, $3, $4, $5)',
+    [appId, viewer.userId ?? '0', viewer.keyId ?? null, action, JSON.stringify(details)],
+  );
 }
 
 /**
@@ -149,7 +153,7 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
     const hashes = body.userHashes.map((h) => parseUserHash(h)?.bytes).filter((b): b is Buffer => b !== undefined);
     if (hashes.length === 0 && !body.userId) return reply.code(400).send({ error: 'nothing_to_erase' });
     const erased = await eraseUser(deps, appId, { hashes, userId: body.userId });
-    await logAccess(deps.db, appId, viewer, 'erase', {
+    await logAccess(deps.db, appId, { userId: viewer }, 'erase', {
       via: key ? 'sdk' : 'dashboard',
       erased,
       byId: Boolean(body.userId),
@@ -157,14 +161,54 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
     return { erased };
   });
 
+  const auditOn = async (appId: string, reply: FastifyReply): Promise<boolean> => {
+    if (cipher && (await appMode(deps.db, appId)) === 'audit') return true;
+    await reply.code(404).send({ error: 'audit_mode_off' });
+    return false;
+  };
+
   const requireAudit = async (req: FastifyRequest, reply: FastifyReply) => {
     const admin = await requireAdmin(deps, req, reply);
-    if (!admin) return undefined;
-    if (!cipher || (await appMode(deps.db, admin.appId)) !== 'audit') {
-      await reply.code(404).send({ error: 'audit_mode_off' });
+    return admin && (await auditOn(admin.appId, reply)) ? admin : undefined;
+  };
+
+  /**
+   * A dashboard of the owner's own asks again on every refresh. The same read by the same key is logged once a
+   * minute, so the access log says which key looked at what without growing with every poll. A person's reads are
+   * always logged.
+   */
+  const keyReads = new Map<string, number>();
+  const logRead = async (viewer: Viewer & { appId: string }, action: string, what: object, extra: object = {}) => {
+    if (viewer.keyId) {
+      const read = `${viewer.keyId} ${action} ${JSON.stringify(what)}`;
+      const now = Date.now();
+      if (now - (keyReads.get(read) ?? 0) < 60_000) return;
+      if (keyReads.size >= 5_000) keyReads.clear();
+      keyReads.set(read, now);
+    }
+    await logAccess(deps.db, viewer.appId, viewer, action, { ...what, ...extra });
+  };
+
+  /**
+   * The activity log is also read by the owner's own dashboard, with an activity key in place of a Discord sign-in.
+   * A request that presents any key is judged by that key alone, never by a session cookie sent along with it.
+   */
+  const requireActivityReader = async (
+    req: FastifyRequest,
+    reply: FastifyReply,
+  ): Promise<(Viewer & { appId: string }) | undefined> => {
+    const token = bearerToken(req);
+    if (token === undefined) {
+      const admin = await requireAudit(req, reply);
+      return admin && { appId: admin.appId, userId: admin.userId };
+    }
+    const key = await deps.keys.verify(token, 'activity');
+    if (!key) {
+      const reads = await deps.keys.verify(token, 'read');
+      await reply.code(reads ? 403 : 401).send({ error: reads ? 'activity_key_required' : 'unauthorized' });
       return undefined;
     }
-    return admin;
+    return (await auditOn(key.appId, reply)) ? { appId: key.appId, userId: null, keyId: key.keyId } : undefined;
   };
 
   const fetchLog = async (appId: string, f: z.output<typeof AuditLogFilters>, maxRows: number) => {
@@ -234,33 +278,33 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
   };
 
   app.get('/v1/audit/log', async (req, reply) => {
-    const admin = await requireAudit(req, reply);
-    if (!admin) return;
+    const viewer = await requireActivityReader(req, reply);
+    if (!viewer) return;
     const f = AuditLogFilters.parse(req.query);
-    const rows = await fetchLog(admin.appId, f, f.limit);
-    await logAccess(deps.db, admin.appId, admin.userId, f.user ? 'lookup_user' : 'view_log', {
+    const rows = await fetchLog(viewer.appId, f, f.limit);
+    const filters = {
       command: f.command ?? null,
       guild: f.guild ?? null,
       outcome: f.outcome ?? null,
       // The looked-up ID is recorded as its audit lookup key, not in clear.
       user: f.user && cipher ? cipher.lookupHash(f.user).toString('hex') : null,
-      rows: rows.length,
-    });
+    };
+    await logRead(viewer, f.user ? 'lookup_user' : 'view_log', filters, { rows: rows.length });
     const last = rows.length === f.limit ? rows.at(-1) : undefined;
     return { rows, nextBefore: last ? `${last.ts.toISOString()}~${last.interactionId}` : null };
   });
 
   app.get('/v1/audit/top-users', async (req, reply) => {
-    const admin = await requireAudit(req, reply);
-    if (!admin) return;
+    const viewer = await requireActivityReader(req, reply);
+    if (!viewer) return;
     const { window } = z.object({ window: z.enum(['24h', '7d']).default('24h') }).parse(req.query);
     const res = await deps.db.query<{ actor_enc: Buffer; runs: number }>(
       `SELECT (array_agg(actor_enc ORDER BY ts DESC))[1] AS actor_enc, count(*)::int AS runs
          FROM audit_log WHERE app_id = $1 AND ts >= now() - $2::interval
         GROUP BY actor_lookup ORDER BY runs DESC LIMIT 25`,
-      [admin.appId, window === '24h' ? '24 hours' : '7 days'],
+      [viewer.appId, window === '24h' ? '24 hours' : '7 days'],
     );
-    await logAccess(deps.db, admin.appId, admin.userId, 'top_users', { window });
+    await logRead(viewer, 'top_users', { window });
     return {
       window,
       rows: res.rows.map((r) => ({ userId: decrypt(r.actor_enc), runs: r.runs })),
@@ -279,7 +323,7 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
       }
       const f = AuditLogFilters.parse(req.query);
       const rows = await fetchLog(admin.appId, f, 10_000);
-      await logAccess(deps.db, admin.appId, admin.userId, 'export', {
+      await logAccess(deps.db, admin.appId, { userId: admin.userId }, 'export', {
         rows: rows.length,
         from: f.from ?? null,
         to: f.to ?? null,
@@ -327,8 +371,9 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
     const admin = await requireAdmin(deps, req, reply);
     if (!admin) return;
     const res = await deps.db.query(
-      `SELECT ts, viewer_user_id::text AS "viewerUserId", action, details FROM audit_access_log
-        WHERE app_id = $1 ORDER BY ts DESC LIMIT 200`,
+      `SELECT l.ts, l.viewer_user_id::text AS "viewerUserId", k.label AS "viewerKey", l.action, l.details
+         FROM audit_access_log l LEFT JOIN api_keys k ON k.id = l.viewer_key_id
+        WHERE l.app_id = $1 ORDER BY l.ts DESC LIMIT 200`,
       [admin.appId],
     );
     return { rows: res.rows };

@@ -120,6 +120,25 @@ test('a key is shown once when created, and revoking it says so', async ({ admin
   await expect(keys.getByText('Copy this key now')).toHaveCount(0);
 });
 
+test('an activity key is created for a dashboard of your own, and the collector accepts it', async ({
+  admin: page,
+}) => {
+  await page.goto('/settings');
+  const keys = page.getByRole('region', { name: 'API keys' });
+  page.once('dialog', (dialog) => void dialog.accept('e2e panel'));
+  await keys.getByRole('button', { name: 'New activity key' }).click();
+  const shown = keys.getByText(/Copy this key now.*slk_activity_/);
+  await expect(shown).toBeVisible();
+  await expect(keys.getByRole('row', { name: /e2e panel/ })).toContainText('activity');
+  const key = /slk_activity_[\w-]{43}/.exec((await shown.textContent()) ?? '')?.[0];
+  // It reads the numbers; who ran what is there only once the collector identifies users.
+  const headers = { authorization: `Bearer ${key}` };
+  expect((await page.request.post('/v1/query', { headers, data: { kind: 'overview' } })).status()).toBe(200);
+  const log = await page.request.get('/v1/audit/log', { headers });
+  expect(log.status()).toBe(404);
+  expect(await log.json()).toEqual({ error: 'audit_mode_off' });
+});
+
 test('a permission value the collector would refuse is caught in the form', async ({ admin: page }) => {
   await page.goto('/settings');
   const permissions = page.getByRole('region', { name: 'Permission health' });

@@ -57,7 +57,7 @@ export async function runSalts(db: Db, now: Date): Promise<string[]> {
  * Background jobs, run only by the collector holding the Postgres advisory lock. If the leader dies, its
  * session ends, the lock is released and another collector takes over within 30 seconds.
  */
-export function startJobs(db: Db, log: JobLogger, opts?: { settingsKey: string; publicUrl: URL }): Jobs {
+export function startJobs(db: Db, log: JobLogger, opts?: { settingsKey: string; dashboardUrl: URL | undefined }): Jobs {
   let lockClient: pg.PoolClient | undefined;
   let leader = false;
   let stopped = false;

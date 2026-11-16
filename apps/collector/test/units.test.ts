@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { batchJsonSchema } from '@shardlens/schema';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Db } from '../src/db.js';
-import { ENV_VARIABLES, loadConfig } from '../src/env.js';
+import { dashboardUrl, ENV_VARIABLES, loadConfig } from '../src/env.js';
 import { parseUserHash } from '../src/ingest/codes.js';
 import { startJobs } from '../src/jobs/scheduler.js';
 import { LiveHub } from '../src/live.js';
@@ -67,6 +67,36 @@ describe('loadConfig', () => {
 
   it('needs both Discord OAuth variables or neither', () => {
     expect(() => loadConfig({ ...base, DISCORD_CLIENT_ID: '1234567890123456789' })).toThrow(/DISCORD_CLIENT_SECRET/);
+  });
+
+  it('serves the dashboard unless told not to, and then has no dashboard to link to', () => {
+    const usual = loadConfig(base);
+    expect(usual).toMatchObject({ dashboard: true, mode: undefined, activityKey: undefined });
+    expect(dashboardUrl(usual)?.href).toBe('https://stats.example.com/');
+    const headless = loadConfig({ ...base, SHARDLENS_DASHBOARD: 'off' });
+    expect(headless.dashboard).toBe(false);
+    expect(dashboardUrl(headless)).toBeUndefined();
+    expect(() => loadConfig({ ...base, SHARDLENS_DASHBOARD: 'no' })).toThrow(/SHARDLENS_DASHBOARD/);
+  });
+
+  it('takes the mode from the environment, and audit mode only with the key that encrypts it', () => {
+    const auditKey = Buffer.alloc(32, 2).toString('base64');
+    const activityKey = `slk_activity_${'A'.repeat(43)}`;
+    expect(
+      loadConfig({
+        ...base,
+        SHARDLENS_MODE: 'audit',
+        SHARDLENS_AUDIT_KEY: auditKey,
+        SHARDLENS_ACTIVITY_KEY: activityKey,
+      }),
+    ).toMatchObject({ mode: 'audit', activityKey });
+    expect(loadConfig({ ...base, SHARDLENS_MODE: 'privacy' }).mode).toBe('privacy');
+    expect(() => loadConfig({ ...base, SHARDLENS_MODE: 'audit' })).toThrow(
+      /SHARDLENS_MODE=audit needs SHARDLENS_AUDIT_KEY/,
+    );
+    expect(() => loadConfig({ ...base, SHARDLENS_ACTIVITY_KEY: `slk_read_${'A'.repeat(43)}` })).toThrow(
+      /SHARDLENS_ACTIVITY_KEY/,
+    );
   });
 });
 
@@ -220,7 +250,7 @@ describe('job scheduler', () => {
     const jobs = startJobs(
       db,
       { info: () => undefined, error: (entry) => void errors.push(entry) },
-      { settingsKey: Buffer.alloc(32, 1).toString('base64'), publicUrl: new URL('https://stats.example.com') },
+      { settingsKey: Buffer.alloc(32, 1).toString('base64'), dashboardUrl: new URL('https://stats.example.com') },
     );
 
     await vi.advanceTimersByTimeAsync(10.5 * 60_000);
@@ -416,6 +446,14 @@ describe('KeyStore', () => {
     expect(await keys.verify(realKey, 'read')).toBeUndefined();
     expect(await keys.verify(undefined, 'ingest')).toBeUndefined();
     expect(lookups()).toBe(0);
+  });
+
+  it('accepts a key of any of the scopes asked for, and of no other', async () => {
+    const { keys, lookups } = store();
+    expect(await keys.verify(realKey, ['read', 'ingest'])).toMatchObject({ scope: 'ingest' });
+    expect(await keys.verify(realKey, ['read', 'activity'])).toBeUndefined();
+    expect(await keys.verify(`slk_activity_${'A'.repeat(43)}`, ['read', 'ingest'])).toBeUndefined();
+    expect(lookups()).toBe(1);
   });
 
   it('keeps real keys cached through a flood of made-up ones', async () => {

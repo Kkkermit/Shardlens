@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { Db } from './db.js';
-import type { Config } from './env.js';
+import { type Config, dashboardUrl } from './env.js';
 import { type Jobs, startJobs } from './jobs/scheduler.js';
 import { LiveHub } from './live.js';
 import { KeyStore, seedKey } from './security/auth.js';
@@ -26,6 +26,8 @@ export async function signInProblems(db: Db, config: Config): Promise<string[]> 
       'No ingest key: the bot cannot send events. Set SHARDLENS_INGEST_KEY (npx shardlens keys makes one).',
     );
   }
+  // Without the dashboard there is nothing to open: the owner reads with keys of their own choosing.
+  if (!config.dashboard) return problems;
   if (!scopes.has('read') && !config.discord) {
     problems.push(
       'No way to open the dashboard: set SHARDLENS_READ_KEY, or DISCORD_CLIENT_ID and DISCORD_CLIENT_SECRET for Discord sign-in.',
@@ -62,6 +64,20 @@ export async function startCollector(
   await db.query('INSERT INTO apps (app_id) VALUES ($1) ON CONFLICT (app_id) DO NOTHING', [config.appId]);
   if (config.ingestKey) await seedKey(db, config.appId, config.ingestKey, 'SHARDLENS_INGEST_KEY');
   if (config.readKey) await seedKey(db, config.appId, config.readKey, 'SHARDLENS_READ_KEY');
+  if (config.activityKey) await seedKey(db, config.appId, config.activityKey, 'SHARDLENS_ACTIVITY_KEY');
+  if (config.mode) {
+    const changed = await db.query('UPDATE apps SET mode = $2 WHERE app_id = $1 AND mode <> $2', [
+      config.appId,
+      config.mode,
+    ]);
+    if (changed.rowCount) {
+      await db.query('INSERT INTO admin_audit (app_id, user_id, action, details) VALUES ($1, NULL, $2, $3)', [
+        config.appId,
+        'settings_update',
+        JSON.stringify({ fields: ['mode'], by: 'environment' }),
+      ]);
+    }
+  }
   await ensurePartitions(db);
   const appRow = await db.query<{ salt_period: SaltPeriod }>('SELECT salt_period FROM apps WHERE app_id = $1', [
     config.appId,
@@ -112,7 +128,7 @@ export async function startCollector(
     if (!liveShared) {
       app.log.warn('Live tiles are not shared between collector instances yet: LISTEN failed on PostgreSQL. Retrying.');
     }
-    jobs = startJobs(db, app.log, { settingsKey: config.settingsKey, publicUrl: config.publicUrl });
+    jobs = startJobs(db, app.log, { settingsKey: config.settingsKey, dashboardUrl: dashboardUrl(config) });
     const address = await app.listen({ port: config.port, host: config.host });
     app.log.info(
       {
@@ -120,6 +136,7 @@ export async function startCollector(
         discordLogin: config.discord !== undefined,
         webhookEvents: config.discordPublicKey !== undefined,
         auditKey: config.auditKey !== undefined,
+        dashboard: config.dashboard,
         clickhouse: analytics !== undefined,
         sink: sink?.name ?? false,
         demo: config.demo,

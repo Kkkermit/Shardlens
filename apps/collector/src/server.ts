@@ -186,7 +186,7 @@ export async function buildServer(deps: Deps): Promise<FastifyInstance> {
   await app.register(async (scope) => adminRoutes(scope, deps));
   await app.register(async (scope) => reportRoutes(scope, deps));
 
-  const dir = dashboardDir(deps.config);
+  const dir = deps.config.dashboard ? dashboardDir(deps.config) : undefined;
   if (dir) {
     await app.register(fastifyStatic, {
       root: dir,
@@ -205,7 +205,7 @@ export async function buildServer(deps: Deps): Promise<FastifyInstance> {
       },
     });
   } else {
-    app.get('/', async () => ({ name: 'shardlens-collector', dashboard: 'not built' }));
+    app.get('/', async () => ({ name: 'shardlens-collector', dashboard: deps.config.dashboard ? 'not built' : 'off' }));
   }
   // Single-page app: unknown GETs for a page (not the API, not a file) return the dashboard shell.
   app.setNotFoundHandler({ preHandler: app.rateLimit() }, (req, reply) => {
