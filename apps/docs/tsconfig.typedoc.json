@@ -9,6 +9,7 @@
   "include": [
     "../../packages/discordjs/src",
     "../../packages/http/src",
+    "../../packages/client/src",
     "../../packages/exporter-prometheus/src",
     "../../packages/exporter-otel/src",
     "../../packages/core/src"

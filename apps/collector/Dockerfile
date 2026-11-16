@@ -14,6 +14,7 @@ COPY packages/schema/package.json packages/schema/
 COPY packages/core/package.json packages/core/
 COPY packages/discordjs/package.json packages/discordjs/
 COPY packages/http/package.json packages/http/
+COPY packages/client/package.json packages/client/
 COPY packages/cli/package.json packages/cli/
 COPY packages/exporter-prometheus/package.json packages/exporter-prometheus/
 COPY packages/exporter-otel/package.json packages/exporter-otel/
