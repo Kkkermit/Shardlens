@@ -15,7 +15,7 @@ starts at 1.0.0, and its exports are covered by semantic versioning like the oth
 - `meta()` reads the app's name, mode, salt period and time zone. `live()` reads the live numbers as an async
   iterable over Server-Sent Events: it ends when its signal aborts, and closes the connection when the loop is left.
 - `activity.log(filters)` and `activity.topUsers(window)` read who ran what from a collector in audit mode, with an
-  activity key. The log is paged with `nextBefore`.
+  activity key. The log is paged by passing each page's `nextBefore` back as `before`.
 - Every failure is a `ShardlensClientError` with the HTTP `status`, the collector's error `code`, `retryAfterSeconds`
   after a 429 and the `requestId` of a 500. A timeout (10 seconds unless `timeoutMs` says otherwise) or an unreachable
   collector has status 0. The key is never part of a message, and redirects are not followed, so the key goes to

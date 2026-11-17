@@ -7,8 +7,8 @@ export interface ActivityLogFilters {
   from?: string | undefined;
   /** Rows before this time. */
   to?: string | undefined;
-  /** Paging: the `nextBefore` of the page before, or a time to start below. */
-  before?: string | undefined;
+  /** Paging: the `nextBefore` of the page before (`null` is the same as leaving it out), or a time to start below. */
+  before?: string | null | undefined;
   /** A command's name, without the slash. */
   command?: string | undefined;
   /** A server's ID. */
@@ -47,7 +47,10 @@ export interface ActivityRow {
 /** One page of the activity log, newest first. */
 export interface ActivityLogPage {
   rows: ActivityRow[];
-  /** Pass as `before` for the next, older page. `null` on the last page. */
+  /**
+   * Pass as `before` for the next, older page. `null` when this page has fewer rows than `limit`; a full page can be
+   * followed by an empty one.
+   */
   nextBefore: string | null;
 }
 
@@ -64,7 +67,6 @@ export function activityLogPath(filters: ActivityLogFilters): string {
   const params = new URLSearchParams();
   for (const name of FILTERS) {
     const value = filters[name];
-    // `null` too: a last page's `nextBefore`, passed straight back from JavaScript, must not become `before=null`.
     if (value !== undefined && value !== null) params.set(name, String(value));
   }
   const query = params.toString();

@@ -7,8 +7,8 @@ const shardlens = createShardlensClient({
 });
 
 // The latest failed runs in one server, with who ran each. Pass `nextBefore` back as `before` for the next page.
-export function failedRunsIn(guildId: string, before?: string) {
-  return shardlens.activity.log({ guild: guildId, outcome: 'failed', limit: 50, ...(before ? { before } : {}) });
+export function failedRunsIn(guildId: string, before?: string | null) {
+  return shardlens.activity.log({ guild: guildId, outcome: 'failed', limit: 50, before });
 }
 
 // Everything one user ran, newest first: for a support ticket or an abuse report. Exact IDs only.

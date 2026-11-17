@@ -96,11 +96,11 @@ pages your own staff can open.
 const shardlens = createShardlensClient({ url, key: process.env.SHARDLENS_ACTIVITY_KEY! });
 
 // Who ran into a failure in this server? Page back with `nextBefore`.
-let before: string | undefined;
+let before: string | null = null;
 do {
   const page = await shardlens.activity.log({ guild: guildId, outcome: 'failed', before });
   for (const row of page.rows) console.log(row.ts, row.userId, row.command, row.outcome);
-  before = page.nextBefore ?? undefined;
+  before = page.nextBefore;
 } while (before);
 ```
 

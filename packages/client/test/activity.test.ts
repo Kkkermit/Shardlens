@@ -62,7 +62,7 @@ describe('activity.log', () => {
 
   it('leaves out the filters that are not set', async () => {
     const { client, asked } = clientFor(() => Response.json({ rows: [], nextBefore: null }));
-    await client.activity.log({ command: 'help', guild: undefined, before: null as unknown as string });
+    await client.activity.log({ command: 'help', guild: undefined, before: null });
     expect(asked[0]?.path).toBe('/v1/audit/log?command=help');
   });
 
@@ -80,11 +80,11 @@ describe('activity.log', () => {
     const { client, asked } = clientFor(() => Response.json(pages[served++]));
 
     const rows: ActivityRow[] = [];
-    let before: string | undefined;
+    let before: string | null = null;
     do {
       const page = await client.activity.log({ outcome: 'failed', limit: 2, before });
       rows.push(...page.rows);
-      before = page.nextBefore ?? undefined;
+      before = page.nextBefore;
     } while (before);
 
     expect(rows.map((r) => r.ts)).toEqual([row(4), row(3), row(2), row(1), row(0)].map((r) => r.ts));

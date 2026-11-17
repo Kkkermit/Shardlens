@@ -6,7 +6,7 @@
 
 // @public
 export interface ActivityLogFilters {
-    before?: string | undefined;
+    before?: string | null | undefined;
     command?: string | undefined;
     from?: string | undefined;
     guild?: string | undefined;
