@@ -31,6 +31,7 @@ describe('init', () => {
       url: 'https://stats.example.com',
       written: ['docker-compose.yml', 'Caddyfile', '.env', 'bot.env'],
       dashboard: 'shardlens',
+      audit: false,
     });
     const text = await readFile(join(dir, '.env'), 'utf8');
     expect(text).toMatch(/^SHARDLENS_INGEST_KEY=slk_ingest_[\w-]{43}$/m);

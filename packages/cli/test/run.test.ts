@@ -122,6 +122,17 @@ describe('init', () => {
     expect(printed()).not.toContain('dashboard.env');
   });
 
+  it('says the bot has to be switched to audit mode when .env switches the collector', async () => {
+    expect(await run(['init', '--dir', await tempDir(), ...initArgs, '--dashboard', 'own', '--identify-users'])).toBe(
+      0,
+    );
+    expect(printed()).toContain("give createShardlens mode: 'audit' in your bot too");
+    out.mockClear();
+    // With the Shardlens dashboard, audit mode is still off until it is chosen in Settings.
+    expect(await run(['init', '--dir', await tempDir(), ...initArgs, '--identify-users'])).toBe(0);
+    expect(printed()).not.toContain("mode: 'audit'");
+  });
+
   it('says what --force changed in an existing .env', async () => {
     const dir = await tempDir();
     await run(['init', '--dir', dir, ...initArgs]);

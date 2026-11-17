@@ -160,20 +160,24 @@ async function initCommand(values: Values): Promise<number> {
 Next:
   1. Point DNS for ${new URL(result.url).hostname} at this server, open ports 80 and 443, then start the collector:
        cd ${shellQuote(result.dir)} && docker compose up -d
-  2. Copy the two lines in bot.env to where your bot runs, then delete bot.env.
+  2. Copy the two lines in bot.env to where your bot runs, then delete bot.env.${result.audit ? AUDIT_BOT : ''}
   3. Run "npx shardlens doctor" in your bot's folder to check the connection.
-  4. ${LOOK[result.dashboard](result.url, result.written.includes('dashboard.env'))}
+  4. ${LOOK[result.dashboard](result.url)}
 Keep a copy of .env somewhere safe: without its keys, the collector's encrypted data can't be read.`);
   return 0;
 }
 
 const DOCS = 'https://kkkermit.github.io/Shardlens';
 
+// Audit mode is two-sided: until the bot is switched too, it keeps sending hashed users and the log stays empty.
+const AUDIT_BOT = `
+     The collector records who ran what: give createShardlens mode: 'audit' in your bot too (${DOCS}/guides/audit-mode/).`;
+
 /** The last step of `init`: where the numbers are looked at, for each dashboard choice. */
-const LOOK: Record<DashboardChoice, (url: string, wroteDashboardEnv: boolean) => string> = {
+const LOOK: Record<DashboardChoice, (url: string) => string> = {
   shardlens: (url) => `Open ${url} and sign in with SHARDLENS_READ_KEY from .env.`,
-  own: (_url, wrote) =>
-    `${wrote ? "Copy the lines in dashboard.env to your dashboard's server, then delete dashboard.env." : "Give your dashboard's server SHARDLENS_URL and SHARDLENS_READ_KEY from .env."}
+  own: () =>
+    `Copy the lines in dashboard.env to your dashboard's server, then delete dashboard.env.
      There, "npm install @shardlens/client" reads every number: ${DOCS}/guides/your-own-dashboard/`,
   none: () =>
     `There is no dashboard to open: the collector is an API only. Read the numbers from a script with

@@ -44,7 +44,7 @@ npx shardlens init --domain stats.example.com --app-id 123456789012345678
 | `--app-id <id>`    | Your Discord application ID (17 to 20 digits, under General Information in the Developer Portal). Required. |
 | `--dir <path>`     | Where to write the files. Default `./shardlens`; created if needed.                            |
 | `--dashboard <choice>` | Where you will look at the numbers ([Choose your setup](../../getting-started/choose-your-setup/)). `shardlens` (default): the collector serves the Shardlens dashboard. `own`: no dashboard page (`SHARDLENS_DASHBOARD=off`), and `dashboard.env` for a dashboard of your own. `none`: no dashboard page; the collector is an API only. |
-| `--identify-users` | Also create `SHARDLENS_AUDIT_KEY`, so you can switch from hashed to [identified users](../../guides/audit-mode/) in Settings. Without it the key is written commented out. With `--dashboard own` or `none` there is no Settings page, so it also writes `SHARDLENS_MODE=audit` and an activity key to read who ran what. |
+| `--identify-users` | Also create `SHARDLENS_AUDIT_KEY`, so you can switch from hashed to [identified users](../../guides/audit-mode/) in Settings. Without it the key is written commented out. With `--dashboard own` or `none` there is no Settings page, so it also writes `SHARDLENS_MODE=audit` and an activity key to read who ran what, and the next steps remind you to switch the bot to audit mode too. |
 | `--force`          | Replace the files that are already there. An existing `.env` keeps its secrets (see below).    |
 
 `init` prints where it wrote the files and what to do next, never a secret:

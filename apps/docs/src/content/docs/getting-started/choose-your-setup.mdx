@@ -37,8 +37,9 @@ dashboard's server. There, install `@shardlens/client` and ask for any number th
 [Use your own dashboard](../../guides/your-own-dashboard/) has the code.
 
 To show **who ran what** in your own pages, add `--identify-users`. It turns on
-[audit mode](../../guides/audit-mode/) and adds an activity key to `dashboard.env`, which reads the activity log the
-way a Discord sign-in does in the Shardlens dashboard.
+[audit mode](../../guides/audit-mode/) in the collector and adds an activity key to `dashboard.env`, which reads the
+activity log the way a Discord sign-in does in the Shardlens dashboard. Audit mode is two-sided: give your bot's
+`createShardlens` `mode: 'audit'` as well, or it keeps sending hashed users and the log stays empty.
 
 ## No dashboard
 

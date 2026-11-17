@@ -168,6 +168,8 @@ interface InitResult {
   updated?: string[];
   /** What the collector is set up for now: what was asked for, or else what an existing `.env` already said. */
   dashboard: DashboardChoice;
+  /** `.env` puts the collector in audit mode (`SHARDLENS_MODE=audit`), which the bot has to be switched to as well. */
+  audit: boolean;
 }
 
 /**
@@ -228,7 +230,10 @@ export async function init(opts: {
     } else {
       const headless = (opts.dashboard ?? 'shardlens') !== 'shardlens';
       values = Object.fromEntries(Object.entries(GENERATED).map(([name, make]) => [name, make()]));
-      if (headless && identifyUsers) values.SHARDLENS_ACTIVITY_KEY = newKey('activity');
+      if (headless && identifyUsers) {
+        values.SHARDLENS_MODE = 'audit';
+        values.SHARDLENS_ACTIVITY_KEY = newKey('activity');
+      }
       await writeSecret(env, envFile({ domain, appId: opts.appId, identifyUsers, headless, values }));
       written.push('.env');
     }
@@ -240,7 +245,7 @@ export async function init(opts: {
     }
     // Without the option, an `.env` with the dashboard off doesn't say which of the two it was turned off for.
     const dashboard = opts.dashboard ?? (values.SHARDLENS_DASHBOARD === 'off' ? 'none' : 'shardlens');
-    return { dir, url, written, ...(updated ? { updated } : {}), dashboard };
+    return { dir, url, written, ...(updated ? { updated } : {}), dashboard, audit: values.SHARDLENS_MODE === 'audit' };
   } catch (error) {
     throw explain(error);
   }
