@@ -389,6 +389,25 @@ describe('live tiles stream', () => {
     }
   });
 
+  it(
+    'ends open streams when the server closes, instead of waiting for them for ever',
+    { timeout: 10_000 },
+    async () => {
+      const db = { query: async () => ({ rows: [] }) } as unknown as Db;
+      const config = loadConfig({ ...base, SHARDLENS_DEMO: 'true', LOG_LEVEL: 'silent' });
+      const app = await buildServer({ config, db, keys: new KeyStore(db), live: new LiveHub(db) });
+      const address = await app.listen({ port: 0, host: '127.0.0.1' });
+      const res = await fetch(`${address}/v1/live`);
+      const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+      await reader.read();
+      const closed = app.close().then(() => 'closed');
+      const late = new Promise((resolve) => setTimeout(resolve, 3_000, 'still open'));
+      expect(await Promise.race([closed, late])).toBe('closed');
+      let done = false;
+      while (!done) ({ done } = await reader.read());
+    },
+  );
+
   it('waits for a slow database instead of starting another refresh every second', { timeout: 10_000 }, async () => {
     let queries = 0;
     const db = {

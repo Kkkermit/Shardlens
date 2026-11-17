@@ -63,6 +63,12 @@ export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void>
   // Open streams in all and per visitor, so one visitor (anyone, in demo mode) can't take every slot.
   let connections = 0;
   const perVisitor = new Map<string, number>();
+  // A stream never ends on its own, and closing the server waits for every open request: they are ended on shutdown,
+  // or a collector (and a bot running an embedded one) with a live page open never stops.
+  const streams = new Set<() => void>();
+  app.addHook('preClose', async () => {
+    for (const end of streams) end();
+  });
   app.get('/v1/live', async (req, reply) => {
     const appId = await requireReader(deps, req, reply);
     if (!appId) return;
@@ -132,7 +138,14 @@ export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void>
     };
     const timer = setInterval(() => void send(), 1_000);
     void send();
+    const end = () => {
+      closed = true;
+      clearInterval(timer);
+      res.end();
+    };
+    streams.add(end);
     req.raw.on('close', () => {
+      streams.delete(end);
       closed = true;
       clearInterval(timer);
       connections--;
