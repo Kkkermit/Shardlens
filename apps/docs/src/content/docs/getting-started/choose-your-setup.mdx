@@ -51,7 +51,8 @@ npx shardlens init --domain stats.example.com --app-id 123456789012345678 --dash
 
 You can still get at every number:
 
-- **From a script**, with `@shardlens/client` and the read key in `.env`:
+- **From a script**, with `@shardlens/client`, the read key in `.env` and the collector's address
+  (`SHARDLENS_PUBLIC_URL` in `.env`) as `SHARDLENS_URL`:
 
   <Code code={script} lang="ts" title="this-week.ts" />
 

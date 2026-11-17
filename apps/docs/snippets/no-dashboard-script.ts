@@ -8,5 +8,5 @@ const shardlens = createShardlensClient({
 
 const { rows } = await shardlens.commands({ range: lastDays(7) });
 for (const row of rows.slice(0, 10)) {
-  console.log(`${row.command}: ${row.runs} runs, p95 ${row.p95Ms ?? '?'} ms`);
+  console.log(`${row.command}: ${row.runs} runs, p95 ${row.p95Ms === null ? '?' : Math.round(row.p95Ms)} ms`);
 }

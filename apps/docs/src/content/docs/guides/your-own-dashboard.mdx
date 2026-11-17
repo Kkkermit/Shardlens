@@ -27,7 +27,8 @@ A read key can run queries and nothing else: it can't send events, change settin
 
 <Aside type="caution" title="Server side only">
   Call the collector from your backend, never from browser code: anything in a page can be read by whoever opens it.
-  The collector sends no CORS headers for the same reason.
+  The collector sends no CORS headers for the same reason. The key travels with every request, so the client accepts
+  plain HTTP to `localhost` only: from another container or machine, use the collector's HTTPS address.
 </Aside>
 
 ## 2. Ask for what you want to show
