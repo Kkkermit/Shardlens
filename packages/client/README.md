@@ -90,8 +90,9 @@ for await (const update of shardlens.live({ signal })) {
 
 ## Who ran what
 
-A collector in audit mode keeps an activity log. Reading it takes an activity key (`slk_activity_…`), which can also
-do everything a read key can. The collector records every read in its access log.
+A collector in [audit mode](https://kkkermit.github.io/Shardlens/guides/audit-mode/) (switched on in the collector
+and in the bot) keeps an activity log. Reading it takes an activity key (`slk_activity_…`), which can also do
+everything a read key can. The collector records every read in its access log.
 `npx shardlens init … --dashboard own --identify-users` creates one, as does **Settings → API keys**. Use it only on
 pages your own staff can open.
 

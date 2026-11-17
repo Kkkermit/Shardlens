@@ -96,4 +96,6 @@ SHARDLENS_DASHBOARD=on   # or off
 ```
 
 Change it and restart the collector (`docker compose up -d`), or run `init` again with `--force` and the choice you
-want: `npx shardlens init … --force --dashboard shardlens`. Your data, keys and settings stay as they are.
+want: `npx shardlens init … --force --dashboard shardlens`. Your data, keys and settings stay as they are, and so does
+`SHARDLENS_MODE` if `--identify-users` wrote it: while it is set, Settings shows the mode but can't change it, so
+remove the line to choose the mode there again.
