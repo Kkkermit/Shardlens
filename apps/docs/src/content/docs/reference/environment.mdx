@@ -49,7 +49,7 @@ The collector logs a warning at start-up when the bot or you would have no way i
 | Variable              | What it is                                                                                         |
 | --------------------- | -------------------------------------------------------------------------------------------------- |
 | `SHARDLENS_AUDIT_KEY` | 32 random bytes, base64. Encrypts audit-mode identities. Without it, audit mode can't be turned on. |
-| `SHARDLENS_MODE`      | Optional. `privacy` or `audit`: decides hashed or identified users here instead of in **Settings → User identity**, which then shows the choice but can't change it. The way to choose audit mode when the dashboard is off. `audit` needs `SHARDLENS_AUDIT_KEY`. |
+| `SHARDLENS_MODE`      | Optional. `privacy` or `audit`: decides hashed or identified users here instead of in **Settings → User identity**, which then shows the choice but can't change it. The way to choose audit mode when the dashboard is off. `audit` needs `SHARDLENS_AUDIT_KEY`. Give every collector instance the same value: each one sets it as it starts. |
 
 <Aside type="caution">
   Keep `SHARDLENS_SETTINGS_KEY` and `SHARDLENS_AUDIT_KEY` somewhere safe outside the server. Data encrypted with them

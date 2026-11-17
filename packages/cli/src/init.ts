@@ -85,7 +85,7 @@ function envFile(opts: {
     'DISCORD_PUBLIC_KEY=',
     ...(opts.identifyUsers ? identified : hashed),
     '# Optional: also copy every event into your own database (mongodb://, mysql://, mariadb://, postgres:// or',
-    '# sqlite:/path). The dashboard keeps using the bundled PostgreSQL.',
+    '# sqlite:/path). Shardlens keeps using the bundled PostgreSQL as well.',
     'SHARDLENS_SINK_URL=',
     'LOG_LEVEL=info',
     '',

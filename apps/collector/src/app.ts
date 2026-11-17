@@ -86,9 +86,10 @@ export async function startCollector(
     }
   }
   await ensurePartitions(db);
-  const appRow = await db.query<{ salt_period: SaltPeriod }>('SELECT salt_period FROM apps WHERE app_id = $1', [
-    config.appId,
-  ]);
+  const appRow = await db.query<{ salt_period: SaltPeriod; mode: string }>(
+    'SELECT salt_period, mode FROM apps WHERE app_id = $1',
+    [config.appId],
+  );
   await activeSalts(db, config.appId, appRow.rows[0]?.salt_period ?? 'month');
 
   const live = new LiveHub(db);
@@ -143,6 +144,8 @@ export async function startCollector(
         discordLogin: config.discord !== undefined,
         webhookEvents: config.discordPublicKey !== undefined,
         auditKey: config.auditKey !== undefined,
+        mode: appRow.rows[0]?.mode,
+        modeFrom: config.mode ? 'environment' : 'settings',
         dashboard: config.dashboard,
         clickhouse: analytics !== undefined,
         sink: sink?.name ?? false,
