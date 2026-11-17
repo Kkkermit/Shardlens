@@ -39,7 +39,7 @@ export function failingCommandsIn(guildId: string) {
 }
 
 // One command in depth, for a per-command page: outcomes, how often it deferred, subcommands, options and the servers
-// that use it most. It reads single events, which are kept for 35 days at most.
+// that use it most. It reads single events, which are kept for 35 days unless Settings says otherwise (7 to 90).
 export function commandDetail(name: string) {
   return shardlens.command(name, { range: lastDays(30) });
 }
