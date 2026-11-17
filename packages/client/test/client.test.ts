@@ -112,6 +112,15 @@ describe('options', () => {
     }
   });
 
+  it('names its own options to someone who passes the SDK’s, without repeating their values', () => {
+    const sdk = refusal({ url: undefined, key: undefined, endpoint: URL_BASE, apiKey: READ_KEY });
+    expect(sdk).toMatchObject({ code: 'invalid_options' });
+    expect(sdk.message).toBe("url is missing: the collector's address is `url` here, not `endpoint`");
+    const apiKey = refusal({ key: undefined, apiKey: READ_KEY });
+    expect(apiKey.message).toBe('key is missing: the read or activity key is `key` here, not `apiKey`');
+    expect(`${sdk.message}${apiKey.message}`).not.toContain(READ_KEY);
+  });
+
   it('asks the collector nothing until a method is called', () => {
     const { asked } = clientFor();
     expect(asked).toHaveLength(0);

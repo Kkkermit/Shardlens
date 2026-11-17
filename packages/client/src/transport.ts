@@ -71,6 +71,16 @@ function readerKey(key: unknown): string {
   return key;
 }
 
+/** The SDK's options are `endpoint` and `apiKey`: someone setting up both is told the names this client takes. */
+function sdkNames(options: (ShardlensClientOptions & { endpoint?: unknown; apiKey?: unknown }) | undefined): void {
+  if (options?.endpoint !== undefined && options.url === undefined) {
+    throw invalid("url is missing: the collector's address is `url` here, not `endpoint`");
+  }
+  if (options?.apiKey !== undefined && options.key === undefined) {
+    throw invalid('key is missing: the read or activity key is `key` here, not `apiKey`');
+  }
+}
+
 /** Makes `controller` abort when `source` does. Returns how to stop following it. */
 function follow(controller: AbortController, source: AbortSignal | undefined): () => void {
   if (!source) return () => undefined;
@@ -99,6 +109,7 @@ export interface Transport {
 
 /** Checks the options, and throws for those the client can't work with before any request is made. */
 export function createTransport(options: ShardlensClientOptions): Transport {
+  sdkNames(options);
   const base = collectorUrl(options?.url);
   const key = readerKey(options?.key);
   const asked = options.timeoutMs;

@@ -7,7 +7,7 @@ starts at 1.0.0, and its exports are covered by semantic versioning like the oth
 
 - `createShardlensClient({ url, key })` takes a read key (`slk_read_…`) or an activity key (`slk_activity_…`). An
   ingest key, or a URL that isn't HTTPS (plain HTTP is allowed to localhost only), is refused when the client is
-  created.
+  created, and so are the SDK's option names `endpoint` and `apiKey`, with a message that names `url` and `key`.
 - One method for each query the Shardlens dashboard runs, with typed answers: `overview`, `commands`, `command`,
   `series`, `top`, `heatmap`, `servers`, `server`, `growth`, `audience`, `reliability`, `gauge`, `bursts`, `premium`,
   `installs`, `events`, `eventProps`, `funnel` and `retention`. `query(spec)` runs any of them, and `lastDays(7)`
