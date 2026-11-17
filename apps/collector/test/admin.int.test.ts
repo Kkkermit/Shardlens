@@ -784,6 +784,11 @@ describe('audit mode', () => {
     expect((await withKey(key, '/v1/audit/top-users?window=24h')).json().rows[0]).toMatchObject({ userId: USER });
     // A page that refreshes asks again and again: the same read within a minute is one line of the access log.
     expect((await withKey(key, '/v1/audit/log?command=flaky&outcome=failed')).statusCode).toBe(200);
+    // Paging is not a refresh: each page read is a line of its own, however quickly the pages follow each other.
+    const first = await withKey(key, '/v1/audit/log?command=flaky&outcome=failed&limit=1');
+    const second = `/v1/audit/log?command=flaky&outcome=failed&limit=1&before=${encodeURIComponent(first.json().nextBefore)}`;
+    expect((await withKey(key, second)).json().rows).toHaveLength(1);
+    expect((await withKey(key, second)).statusCode).toBe(200);
     // One key for a whole dashboard: it runs the queries a read key runs.
     const overview = await h.app.inject({
       method: 'POST',
@@ -800,6 +805,8 @@ describe('audit mode', () => {
     expect(reads.rows).toEqual([
       { action: 'view_log', viewer_user_id: '0', label: 'my dashboard' },
       { action: 'top_users', viewer_user_id: '0', label: 'my dashboard' },
+      { action: 'view_log', viewer_user_id: '0', label: 'my dashboard' },
+      { action: 'view_log', viewer_user_id: '0', label: 'my dashboard' },
     ]);
     const shown = await h.app.inject({ method: 'GET', url: '/v1/audit/access-log', ...asAdmin() });
     expect(shown.json().rows).toEqual(

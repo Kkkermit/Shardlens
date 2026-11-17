@@ -173,20 +173,20 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
   };
 
   /**
-   * A dashboard of the owner's own asks again on every refresh. The same read by the same key is logged once a
-   * minute, so the access log says which key looked at what without growing with every poll. A person's reads are
-   * always logged.
+   * A dashboard of the owner's own asks again on every refresh, so a key repeating the same `request` (down to its
+   * page) within a minute is logged once. Any other page is another read: paging through the log is logged page by
+   * page, as a person's reads always are.
    */
   const keyReads = new Map<string, number>();
-  const logRead = async (viewer: Viewer & { appId: string }, action: string, what: object, extra: object = {}) => {
+  const logRead = async (viewer: Viewer & { appId: string }, action: string, details: object, request: object) => {
     if (viewer.keyId) {
-      const read = `${viewer.keyId} ${action} ${JSON.stringify(what)}`;
+      const read = `${viewer.keyId} ${action} ${JSON.stringify(request)}`;
       const now = Date.now();
       if (now - (keyReads.get(read) ?? 0) < 60_000) return;
       if (keyReads.size >= 5_000) keyReads.clear();
       keyReads.set(read, now);
     }
-    await logAccess(deps.db, viewer.appId, viewer, action, { ...what, ...extra });
+    await logAccess(deps.db, viewer.appId, viewer, action, details);
   };
 
   /**
@@ -289,7 +289,13 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
       // The looked-up ID is recorded as its audit lookup key, not in clear.
       user: f.user && cipher ? cipher.lookupHash(f.user).toString('hex') : null,
     };
-    await logRead(viewer, f.user ? 'lookup_user' : 'view_log', filters, { rows: rows.length });
+    const page = { from: f.from ?? null, to: f.to ?? null, before: f.before ?? null, limit: f.limit };
+    await logRead(
+      viewer,
+      f.user ? 'lookup_user' : 'view_log',
+      { ...filters, rows: rows.length },
+      { ...filters, ...page },
+    );
     const last = rows.length === f.limit ? rows.at(-1) : undefined;
     return { rows, nextBefore: last ? `${last.ts.toISOString()}~${last.interactionId}` : null };
   });
@@ -304,7 +310,7 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
         GROUP BY actor_lookup ORDER BY runs DESC LIMIT 25`,
       [viewer.appId, window === '24h' ? '24 hours' : '7 days'],
     );
-    await logRead(viewer, 'top_users', { window });
+    await logRead(viewer, 'top_users', { window }, { window });
     return {
       window,
       rows: res.rows.map((r) => ({ userId: decrypt(r.actor_enc), runs: r.runs })),
