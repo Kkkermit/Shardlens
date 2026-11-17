@@ -26,8 +26,15 @@ export async function signInProblems(db: Db, config: Config): Promise<string[]> 
       'No ingest key: the bot cannot send events. Set SHARDLENS_INGEST_KEY (npx shardlens keys makes one).',
     );
   }
-  // Without the dashboard there is nothing to open: the owner reads with keys of their own choosing.
-  if (!config.dashboard) return problems;
+  if (!config.dashboard) {
+    // Keys are created in the dashboard's Settings, so with it off only the environment can provide one.
+    if (!scopes.has('read') && !scopes.has('activity')) {
+      problems.push(
+        'No read key, and the dashboard is off: nothing can read the numbers. Set SHARDLENS_READ_KEY (npx shardlens keys --scope read makes one).',
+      );
+    }
+    return problems;
+  }
   if (!scopes.has('read') && !config.discord) {
     problems.push(
       'No way to open the dashboard: set SHARDLENS_READ_KEY, or DISCORD_CLIENT_ID and DISCORD_CLIENT_SECRET for Discord sign-in.',

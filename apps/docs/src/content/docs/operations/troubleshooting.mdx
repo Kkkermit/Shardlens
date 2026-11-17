@@ -116,6 +116,7 @@ The collector writes one JSON object per line (`docker compose logs collector`).
 | `Discord sign-in refused: …`          | warning | Someone who is not the application owner, a team member or an extra admin tried to sign in. If it says the bot has not reported yet, start the bot with Shardlens once, or add your user ID to `SHARDLENS_EXTRA_ADMINS`. |
 | `No ingest key: …`                    | warning | No ingest key exists, in the environment or created in the dashboard. Set `SHARDLENS_INGEST_KEY`.                         |
 | `No way to open the dashboard: …`     | warning | Neither a read key nor Discord sign-in is set up. Set `SHARDLENS_READ_KEY`.                                               |
+| `No read key, and the dashboard is off: …` | warning | `SHARDLENS_DASHBOARD=off` and no read or activity key exists, so neither your own dashboard nor a script can read the numbers. Set `SHARDLENS_READ_KEY`. |
 | `Discord sign-in works once …`        | warning | Only Discord sign-in is set up and the bot hasn't reported yet. Set a read key or `SHARDLENS_EXTRA_ADMINS` meanwhile.      |
 | `live update failed`                  | warning | The live tiles could not read the database. Logged once per open dashboard.                                               |
 | `slow job`                            | info    | A background job took more than 10 seconds. Frequent on a healthy database means it needs more resources.                 |

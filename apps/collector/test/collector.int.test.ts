@@ -286,6 +286,12 @@ describe('ingest', () => {
       expect.stringMatching(/^Discord sign-in works once the bot has reported/),
     ]);
     expect(await signInProblems(h.db, { ...discordOnly, extraAdmins: ['334455667788990011'] })).toHaveLength(1);
+    // Without the dashboard there is no Settings page to create a key in: a collector nothing can read is said so.
+    expect(await signInProblems(h.db, { ...discordOnly, dashboard: false })).toEqual([
+      expect.stringMatching(/^No ingest key/),
+      expect.stringMatching(/^No read key, and the dashboard is off/),
+    ]);
+    expect(await signInProblems(h.db, { ...h.config, dashboard: false })).toEqual([]);
 
     const deps = { config: discordOnly, db: h.db } as unknown as Parameters<typeof allowedUser>[0];
     expect(await allowedUser(deps, fresh.appId, '334455667788990011')).toBe('bot_not_reported');
