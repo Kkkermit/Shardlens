@@ -77,7 +77,9 @@ Every method takes `{ signal }` as its last argument to cancel the request.
 
 `live()` reads the collector's Server-Sent Events stream as an async iterable. The connection opens when the loop
 starts and closes when it ends: when the signal aborts, when you `break`, or when the collector closes the stream (a
-restart, a proxy's time limit). If the connection breaks instead, the loop throws a `ShardlensClientError` (`network`).
+restart, a proxy's time limit). If the connection breaks instead, the loop throws a `ShardlensClientError`: `network`,
+or `timeout` when the collector has sent nothing for 45 seconds. It sends a heartbeat every 15 seconds, so that only
+happens to a connection that died without either end closing it.
 Call `live()` again to reconnect.
 
 The collector keeps up to 10 live streams open per address (100 in all) and refuses more with `busy` and
@@ -127,19 +129,19 @@ try {
 }
 ```
 
-| `status` | `code`                             | Meaning                                                        |
-| -------- | ---------------------------------- | -------------------------------------------------------------- |
-| 400      | `invalid_request`, `invalid_query` | The collector refused the query; the message says which part   |
-| 401      | `unauthorized`                     | The key is wrong or revoked                                    |
-| 403      | `activity_key_required`            | The activity log was asked for with a read key                 |
-| 404      | `audit_mode_off`                   | The collector is not in audit mode                             |
-| 429      | `rate_limited`                     | Too many requests: wait `retryAfterSeconds`                    |
-| 500      | `internal`                         | The collector failed: `requestId` finds the request in its log |
-| 503      | `busy`                             | `live()` found every stream taken: wait `retryAfterSeconds`    |
-| 3xx      | `http_<status>`                    | `url` redirects elsewhere, which the client doesn't follow     |
-| 2xx      | `invalid_response`                 | The answer isn't a collector's: check `url`                    |
-| 0        | `timeout`, `network`               | No answer within `timeoutMs` (default 10 s), or none at all    |
-| 0        | `invalid_options`                  | A `url` or `key` the client can't use: every call says which   |
+| `status` | `code`                             | Meaning                                                                                   |
+| -------- | ---------------------------------- | ----------------------------------------------------------------------------------------- |
+| 400      | `invalid_request`, `invalid_query` | The collector refused the query; the message says which part                              |
+| 401      | `unauthorized`                     | The key is wrong or revoked                                                               |
+| 403      | `activity_key_required`            | The activity log was asked for with a read key                                            |
+| 404      | `audit_mode_off`                   | The collector is not in audit mode                                                        |
+| 429      | `rate_limited`                     | Too many requests: wait `retryAfterSeconds`                                               |
+| 500      | `internal`                         | The collector failed: `requestId` finds the request in its log                            |
+| 503      | `busy`                             | `live()` found every stream taken: wait `retryAfterSeconds`                               |
+| 3xx      | `http_<status>`                    | `url` redirects elsewhere, which the client doesn't follow                                |
+| 2xx      | `invalid_response`                 | The answer isn't a collector's: check `url`                                               |
+| 0        | `timeout`, `network`               | No answer within `timeoutMs` (default 10 s), or none at all; a live stream quiet for 45 s |
+| 0        | `invalid_options`                  | A `url` or `key` the client can't use: every call says which                              |
 
 A request cancelled with your own `signal` rejects with that signal's reason, as `fetch` does.
 

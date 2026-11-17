@@ -389,6 +389,29 @@ describe('live tiles stream', () => {
     }
   });
 
+  it('sends a heartbeat every 15 seconds, also while the database keeps updates from going out', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const db = { query: () => new Promise(() => undefined) } as unknown as Db;
+    const config = loadConfig({ ...base, SHARDLENS_DEMO: 'true', LOG_LEVEL: 'silent' });
+    const app = await buildServer({ config, db, keys: new KeyStore(db), live: new LiveHub(db) });
+    const address = await app.listen({ port: 0, host: '127.0.0.1' });
+    const aborted = new AbortController();
+    try {
+      const res = await fetch(`${address}/v1/live`, { signal: aborted.signal });
+      const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+      const decoder = new TextDecoder();
+      let text = decoder.decode((await reader.read()).value);
+      expect(text).not.toContain('heartbeat');
+      vi.advanceTimersByTime(15_000);
+      while (!text.includes(': heartbeat\n\n')) text += decoder.decode((await reader.read()).value);
+      expect(text).not.toContain('event: tiles');
+    } finally {
+      vi.useRealTimers();
+      aborted.abort();
+      await app.close();
+    }
+  });
+
   it(
     'ends open streams when the server closes, instead of waiting for them for ever',
     { timeout: 10_000 },

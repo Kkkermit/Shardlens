@@ -15,7 +15,8 @@ starts at 1.0.0, and its exports are covered by semantic versioning like the oth
   `installs`, `events`, `eventProps`, `funnel` and `retention`. `query(spec)` runs any of them, and `lastDays(7)`
   makes a range.
 - `meta()` reads the app's name, mode, salt period and time zone. `live()` reads the live numbers as an async
-  iterable over Server-Sent Events: it ends when its signal aborts, and closes the connection when the loop is left.
+  iterable over Server-Sent Events: it ends when its signal aborts, closes the connection when the loop is left, and
+  throws a `timeout` when the collector has sent nothing, not even its heartbeat, for 45 seconds.
 - `activity.log(filters)` and `activity.topUsers(window)` read who ran what from a collector in audit mode, with an
   activity key. The log is paged by passing each page's `nextBefore` back as `before`.
 - Every failure is a `ShardlensClientError` with the HTTP `status`, the collector's error `code`, `retryAfterSeconds`

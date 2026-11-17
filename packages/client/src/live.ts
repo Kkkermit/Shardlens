@@ -1,5 +1,12 @@
+import { ShardlensClientError } from './errors.js';
 import type { LiveUpdate } from './results.js';
 import type { OpenStream, Transport } from './transport.js';
+
+/**
+ * The collector sends a heartbeat every 15 seconds, whatever its database does. Three missed in a row mean the
+ * connection is gone without either end closing it, which otherwise leaves a reader waiting for ever.
+ */
+const LIVE_QUIET_MS = 45_000;
 
 interface ServerSentEvent {
   /** The stream's `event` field; `message` when it gave none. */
@@ -16,7 +23,7 @@ const LINE_END = /\r\n|\n|\r(?!$)/;
  * Events may arrive split across chunks at any byte.
  */
 export async function* serverSentEvents(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
+  reader: Pick<ReadableStreamDefaultReader<Uint8Array>, 'read'>,
 ): AsyncGenerator<ServerSentEvent, void, undefined> {
   const decoder = new TextDecoder();
   let buffer = '';
@@ -74,8 +81,23 @@ export async function* liveUpdates(
   const cancel = () => void reader.cancel().catch(() => undefined);
   signal?.addEventListener('abort', cancel, { once: true });
   if (signal?.aborted) cancel();
+  let quiet = false;
+  // Timed only while a read waits: a reader busy with an update leaves the next ones in the stream's buffer.
+  const watched = {
+    async read() {
+      const timer = setTimeout(() => {
+        quiet = true;
+        cancel();
+      }, LIVE_QUIET_MS);
+      try {
+        return await reader.read();
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+  };
   try {
-    for await (const event of serverSentEvents(reader)) {
+    for await (const event of serverSentEvents(watched)) {
       // The other event the collector sends, `error`, marks a second it had no numbers for: the next one follows.
       if (event.event !== 'tiles') continue;
       const update = parseUpdate(event.data);
@@ -83,10 +105,16 @@ export async function* liveUpdates(
     }
   } catch (error) {
     if (signal?.aborted) return;
-    throw transport.unreachable(error);
+    if (!quiet) throw transport.unreachable(error);
   } finally {
     signal?.removeEventListener('abort', cancel);
     cancel();
     stream.close();
+  }
+  if (quiet && !signal?.aborted) {
+    throw new ShardlensClientError(
+      `The collector's live stream sent nothing for ${LIVE_QUIET_MS / 1000} seconds: the connection is gone.`,
+      { status: 0, code: 'timeout' },
+    );
   }
 }

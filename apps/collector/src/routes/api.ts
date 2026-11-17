@@ -9,6 +9,9 @@ import { activeSalts } from '../storage/maintenance.js';
 import type { SaltPeriod } from '../storage/periods.js';
 import { requireReader } from './guard.js';
 
+/** How often a live stream sends a heartbeat. `@shardlens/client` gives up on a stream that is quiet for three. */
+const LIVE_HEARTBEAT_MS = 15_000;
+
 export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void> {
   app.get('/v1/config', { config: { rateLimit: { max: 120, timeWindow: '1 minute' } } }, async (req, reply) => {
     const auth = await deps.keys.verify(bearerToken(req), 'ingest');
@@ -137,10 +140,16 @@ export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void>
       }
     };
     const timer = setInterval(() => void send(), 1_000);
+    // Written whatever the database does, so a reader (and a proxy) can tell a quiet stream from a dead connection:
+    // updates stop while a slow refresh runs.
+    const heartbeat = setInterval(() => {
+      if (!closed) res.write(': heartbeat\n\n');
+    }, LIVE_HEARTBEAT_MS);
     void send();
     const end = () => {
       closed = true;
       clearInterval(timer);
+      clearInterval(heartbeat);
       res.end();
     };
     streams.add(end);
@@ -148,6 +157,7 @@ export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void>
       streams.delete(end);
       closed = true;
       clearInterval(timer);
+      clearInterval(heartbeat);
       connections--;
       const left = (perVisitor.get(visitor) ?? 1) - 1;
       if (left > 0) perVisitor.set(visitor, left);

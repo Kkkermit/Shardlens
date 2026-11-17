@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { type LiveUpdate, ShardlensClientError } from '../src/index.js';
 import { serverSentEvents } from '../src/live.js';
 import { type Asked, clientFor, never, READ_KEY, rejection } from './helpers.js';
@@ -269,6 +269,65 @@ describe('live', () => {
     expect(error).toBeInstanceOf(ShardlensClientError);
     expect(error).toMatchObject({ status: 200, code: 'invalid_response' });
     expect(asked[0]?.signal?.aborted).toBe(true);
+  });
+
+  describe('a connection that dies without closing', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('throws a timeout once the collector has sent nothing, not even a heartbeat, for 45 seconds', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const body = sseBody();
+      const { client } = clientFor(() => body.response());
+      const seen: number[] = [];
+      const reading = rejection(
+        (async () => {
+          for await (const u of client.live()) seen.push(u.perMinute);
+        })(),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      body.write(tiles(update(1)));
+      await vi.advanceTimersByTimeAsync(44_000);
+      expect(body.state.cancelled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1_000);
+      const error = await reading;
+      expect(seen).toEqual([1]);
+      expect(error).toBeInstanceOf(ShardlensClientError);
+      expect(error).toMatchObject({ status: 0, code: 'timeout' });
+      expect(body.state.cancelled).toBe(true);
+    });
+
+    it('keeps a stream that only sends heartbeats', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const body = sseBody();
+      const { client } = clientFor(() => body.response());
+      const iterator = client.live()[Symbol.asyncIterator]();
+      const first = iterator.next();
+      for (let i = 0; i < 6; i++) {
+        await vi.advanceTimersByTimeAsync(15_000);
+        body.write(': heartbeat\n\n');
+      }
+      body.write(tiles(update(7)));
+      expect(await first).toEqual({ done: false, value: update(7) });
+      await iterator.return?.();
+    });
+
+    it('does not time out a reader that takes long between updates', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const body = sseBody();
+      const { client } = clientFor(() => body.response());
+      const iterator = client.live()[Symbol.asyncIterator]();
+      const first = iterator.next();
+      await vi.advanceTimersByTimeAsync(0);
+      body.write(tiles(update(1)));
+      body.write(tiles(update(2)));
+      expect(await first).toEqual({ done: false, value: update(1) });
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(await iterator.next()).toEqual({ done: false, value: update(2) });
+      expect(body.state.cancelled).toBe(false);
+      await iterator.return?.();
+    });
   });
 
   it('reports a stream that breaks off as a network failure, after the updates it got', async () => {
