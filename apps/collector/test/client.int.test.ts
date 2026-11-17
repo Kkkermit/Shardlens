@@ -1013,8 +1013,9 @@ describe('@shardlens/client against a real collector', () => {
     expect(unkept).toMatchObject({ status: 400, code: 'invalid_query' });
     expect(unkept.message).toContain("rest.calls can't be grouped or filtered by command");
 
-    // An ingest key is refused before any request; an unreachable collector is a network failure.
-    expect(() => createShardlensClient({ url, key: INGEST_KEY })).toThrow(ShardlensClientError);
+    // An ingest key is refused without a request; an unreachable collector is a network failure.
+    const ingestKey = createShardlensClient({ url, key: INGEST_KEY });
+    expect(await refusal(ingestKey.overview())).toMatchObject({ status: 0, code: 'invalid_options' });
     const nowhere = createShardlensClient({ url: 'http://127.0.0.1:9', key: READ_KEY, timeoutMs: 2_000 });
     expect(await refusal(nowhere.overview())).toMatchObject({ status: 0, code: 'network' });
   });
