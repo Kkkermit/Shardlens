@@ -101,8 +101,9 @@ npx shardlens keys --scope read
 | `--scope ingest \| read \| activity` | The kind of key. Default `ingest`. An activity key reads what a read key does, and [who ran what](../../guides/audit-mode/#read-it-from-your-own-dashboard) in audit mode. |
 
 Put it in the collector's `.env` as `SHARDLENS_INGEST_KEY`, `SHARDLENS_READ_KEY` or `SHARDLENS_ACTIVITY_KEY` and
-restart the collector, which stores only a hash of it. The key it replaces keeps working until you revoke it in the dashboard under
-**Settings → API keys**, where you can also create keys instead.
+restart the collector, which stores only a hash of it. The key the variable held before stops working then, which is
+how a leaked key is replaced when the collector runs without the dashboard. To switch without a gap, create the new key
+in the dashboard under **Settings → API keys** instead, move everything to it, then revoke the old one there.
 
 ## `privacy`
 

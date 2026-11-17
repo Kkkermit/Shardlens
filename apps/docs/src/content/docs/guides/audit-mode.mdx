@@ -95,7 +95,9 @@ change settings or sign in to the Shardlens dashboard, and it is answered with `
 hashed.
 
 Treat it like a password to personal data: keep it on a server, behind a sign-in of your own for your own staff, and
-revoke it in **Settings → API keys** when it is no longer needed.
+revoke it in **Settings → API keys** when it is no longer needed. Without the dashboard, put a new key in
+`SHARDLENS_ACTIVITY_KEY` and restart the collector: the old one stops working. To stop reading the log altogether,
+switch audit mode off (`SHARDLENS_MODE=privacy`).
 
 ## Guardrails
 

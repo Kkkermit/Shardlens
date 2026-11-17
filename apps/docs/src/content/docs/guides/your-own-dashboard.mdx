@@ -154,7 +154,9 @@ everything else.
 - **Limits.** `/v1/query` allows 600 requests a minute per address and answers `429` with `Retry-After` past that.
   `/v1/live` keeps up to 10 streams open per address (100 in all) and answers `503` with `{ "error": "busy" }` past
   that: share one `live()` between your visitors instead of opening one each.
-- **Rotate** the key from **Settings → API keys** if it ever leaks: create a new one, deploy it, revoke the old one.
+- **Replace** the key if it ever leaks: put a new one (`npx shardlens keys --scope read`) in the collector's `.env` as
+  `SHARDLENS_READ_KEY` and restart the collector. The old one stops working then. With the Shardlens dashboard on, you
+  can instead create a new key in **Settings → API keys**, deploy it, then revoke the old one, with no gap.
 
 ## Other ways to get the numbers out
 

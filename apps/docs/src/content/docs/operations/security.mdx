@@ -69,5 +69,6 @@ lists what to rotate and who to tell.
 
 <Aside type="tip">
   Rotate keys from the dashboard (**Settings → API keys**): create the new key, deploy it to your bot, then revoke the
-  old one.
+  old one. Without the dashboard, put a new key in the collector's `.env` (or delete its line from an embedded
+  collector's `secrets.json`) and restart the collector: the key it replaces stops working.
 </Aside>

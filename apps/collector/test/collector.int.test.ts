@@ -11,7 +11,7 @@ import { evaluateMetric } from '../src/jobs/alerts.js';
 import { backfillRollups, runRollups, runUniques } from '../src/jobs/rollups.js';
 import { runRetention, runSalts } from '../src/jobs/scheduler.js';
 import { allowedUser } from '../src/routes/auth.js';
-import { KeyStore } from '../src/security/auth.js';
+import { KeyStore, seedKey } from '../src/security/auth.js';
 import { buildServer } from '../src/server.js';
 import { activeSalts } from '../src/storage/maintenance.js';
 import { periodIdent } from '../src/storage/periods.js';
@@ -1336,6 +1336,44 @@ describe('abuse limits', () => {
     expect((await get('/v1/no-such-route', scanner)).statusCode).toBe(404);
     await Promise.all(Array.from({ length: 1_200 }, () => get('/v1/no-such-route', scanner)));
     expect((await get('/v1/no-such-route', scanner)).statusCode).toBe(429);
+  });
+});
+
+describe('keys from the environment', () => {
+  it('revokes the key a variable held before, and only when a new value arrives', async () => {
+    const [first, second] = ['E', 'F'].map((c) => `slk_read_${c.repeat(43)}`) as [string, string];
+    const reads = async (key: string) =>
+      (await h.app.inject({ method: 'GET', url: '/v1/meta', headers: { authorization: `Bearer ${key}` } })).statusCode;
+    await seedKey(h.db, APP_ID, first, 'SHARDLENS_READ_KEY');
+    const session = await h.app.inject({
+      method: 'POST',
+      url: '/auth/read-key',
+      headers: { 'x-shardlens-csrf': '1' },
+      payload: { key: first },
+    });
+    expect(session.statusCode).toBe(200);
+    expect(await reads(first)).toBe(200);
+
+    // The owner replaces a leaked key in .env and restarts.
+    await seedKey(h.db, APP_ID, second, 'SHARDLENS_READ_KEY');
+    const keys = new KeyStore(h.db);
+    expect(await keys.verify(first, 'read')).toBeUndefined();
+    expect(await keys.verify(second, 'read')).toBeDefined();
+    const signedIn = await h.db.query<{ n: number }>(
+      'SELECT count(*)::int AS n FROM sessions s JOIN api_keys k ON k.id = s.key_id WHERE k.revoked_at IS NOT NULL',
+    );
+    expect(signedIn.rows[0]?.n).toBe(0);
+    const audit = await h.db.query<{ details: { by: string; variable: string } }>(
+      "SELECT details FROM admin_audit WHERE action = 'key_revoke' AND details->>'by' = 'environment'",
+    );
+    expect(audit.rows.map((r) => r.details)).toEqual([expect.objectContaining({ variable: 'SHARDLENS_READ_KEY' })]);
+
+    // An instance still started with the old value can't take the new one away, nor bring the old one back.
+    await seedKey(h.db, APP_ID, first, 'SHARDLENS_READ_KEY');
+    expect(await new KeyStore(h.db).verify(first, 'read')).toBeUndefined();
+    expect(await new KeyStore(h.db).verify(second, 'read')).toBeDefined();
+    // Keys of other variables, and keys made in Settings, are left alone.
+    expect(await reads(READ_KEY)).toBe(200);
   });
 });
 

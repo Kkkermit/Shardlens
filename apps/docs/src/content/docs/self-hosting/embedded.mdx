@@ -48,7 +48,9 @@ On shutdown, call `lens.shutdown()` first, so queued events reach the collector,
   - secrets.json session secret, settings key, ingest, read and activity keys; generated on first start
 </FileTree>
 
-Back the folder up while the bot is stopped, and keep it private: `secrets.json` holds your keys. On Linux and macOS
+Back the folder up while the bot is stopped, and keep it private: `secrets.json` holds your keys. To replace a key
+that leaked, delete its line from `secrets.json` and restart the bot: a new one is generated, and the old one stops
+working. On Linux and macOS
 the folder and the file are created readable by your bot's user only. Windows has no such file mode, so there the
 folder inherits the permissions of the folder it is in: put it somewhere other users can't read.
 

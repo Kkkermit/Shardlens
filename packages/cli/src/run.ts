@@ -193,7 +193,7 @@ function keysCommand(scope = 'ingest'): number {
   const name = `SHARDLENS_${scope.toUpperCase()}_KEY`;
   console.error(
     `Set it as ${name} in the collector's .env and restart the collector, which stores only its hash. The key it\n` +
-      'replaces keeps working until you revoke it in Settings → API keys, where you can also create keys.',
+      'replaces stops working then. To switch without a gap, create the new key in Settings → API keys instead.',
   );
   return 0;
 }

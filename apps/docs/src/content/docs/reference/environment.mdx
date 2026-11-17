@@ -27,8 +27,10 @@ Empty values count as unset.
 | `SHARDLENS_READ_KEY`   | A read key (`slk_read_` and 43 characters) for read-only dashboard access, scripts and [a dashboard of your own](../../guides/your-own-dashboard/). |
 | `SHARDLENS_ACTIVITY_KEY` | Optional. An activity key (`slk_activity_` and 43 characters): reads everything a read key does, and [who ran what](../../guides/audit-mode/#read-it-from-your-own-dashboard) while the collector is in audit mode. For the server side of your own dashboard only. |
 
-Set both on a first install ([`npx shardlens init`](../cli/#init) does). More keys can be created and revoked in the
-dashboard (**Settings → API keys**), but Settings needs Discord sign-in, and Discord sign-in only knows your owner and
+Set both on a first install ([`npx shardlens init`](../cli/#init) does). Each is registered when the collector starts;
+a new value revokes the key the variable held before, so replacing one in `.env` and restarting is how a leaked key is
+replaced, with or without the dashboard. A replaced key can't be brought back: generate a new one. More keys can be
+created and revoked in the dashboard (**Settings → API keys**), but Settings needs Discord sign-in, and Discord sign-in only knows your owner and
 team once the bot has reported them, so a collector with neither key and no `SHARDLENS_EXTRA_ADMINS` can't be opened.
 The collector logs a warning at start-up when the bot or you would have no way in. Generate keys with
 [`npx shardlens keys`](../cli/#keys).
