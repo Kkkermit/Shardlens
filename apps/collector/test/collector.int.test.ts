@@ -666,7 +666,10 @@ describe('rollups, uniques and queries', () => {
     expect(reliability.totals).toMatchObject({ runs: 105, missedDeadlines: 5, noResponse: 3 });
     expect(await evaluateMetric(h.db, APP_ID, 'missed_deadline_rate', 3_600)).toBeCloseTo((100 * 5) / 105);
     const detail = (await query(h.app, { kind: 'command', name: 'ping', range: range() })).json();
-    expect(detail.totals).toMatchObject({ runs: 5 });
+    // None succeeded, failed or deferred: that is 0, not unknown.
+    expect(detail.totals).toMatchObject({ runs: 5, ok: 0, error: 0, timeout: 2, noResponse: 3, deferRate: 0 });
+    const never = (await query(h.app, { kind: 'command', name: 'never-ran', range: range() })).json();
+    expect(never.totals).toMatchObject({ runs: null, ok: null, error: null, deferRate: null });
     expect(detail.subcommands).toEqual([]);
   });
 

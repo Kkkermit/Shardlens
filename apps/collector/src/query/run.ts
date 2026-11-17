@@ -18,6 +18,7 @@ import { gaugeSamples } from './gauge-samples.js';
 import { installs, premium, reliability } from './reports.js';
 import { rawFrom, rollupSource } from './rollup-source.js';
 import type { Filter, QuerySpec } from './spec.js';
+import { countWhenRan, share } from './totals-sql.js';
 
 /** A query the spec allows but the data can't answer (for example a minute series over a month). */
 export class QueryError extends Error {}
@@ -325,14 +326,14 @@ async function command(db: Db, appId: string, spec: Spec<'command'>, now: Date) 
   ] = await Promise.all([
     db.query(
       `SELECT sum(weight)::float8 AS runs,
-                sum(weight) FILTER (WHERE outcome = 0)::float8 AS ok,
-                sum(weight) FILTER (WHERE outcome = 1)::float8 AS error,
-                sum(weight) FILTER (WHERE outcome = 2)::float8 AS timeout,
-                sum(weight) FILTER (WHERE outcome = 3)::float8 AS "noResponse",
-                (sum(weight) FILTER (WHERE deferred) / nullif(sum(weight) FILTER (WHERE ${INTERACTIONS_ONLY_SQL}), 0))::float8 AS "deferRate",
-                (sum(weight) FILTER (WHERE ephemeral) / nullif(sum(weight) FILTER (WHERE ${INTERACTIONS_ONLY_SQL}), 0))::float8 AS "ephemeralRate",
-                (sum(weight) FILTER (WHERE premium) / nullif(sum(weight) FILTER (WHERE ${INTERACTIONS_ONLY_SQL}), 0))::float8 AS "premiumShare",
-                (sum(weight) FILTER (WHERE ack_ms > 3000) / nullif(sum(weight) FILTER (WHERE ack_ms IS NOT NULL), 0))::float8 AS "over3sRate",
+                ${countWhenRan('outcome = 0')} AS ok,
+                ${countWhenRan('outcome = 1')} AS error,
+                ${countWhenRan('outcome = 2')} AS timeout,
+                ${countWhenRan('outcome = 3')} AS "noResponse",
+                ${share('deferred', INTERACTIONS_ONLY_SQL)} AS "deferRate",
+                ${share('ephemeral', INTERACTIONS_ONLY_SQL)} AS "ephemeralRate",
+                ${share('premium', INTERACTIONS_ONLY_SQL)} AS "premiumShare",
+                ${share('ack_ms > 3000', 'ack_ms IS NOT NULL')} AS "over3sRate",
                 shardlens_hist_sum(shardlens_hist_one(ack_ms, weight)) AS latency,
                 shardlens_hist_quantile(shardlens_hist_sum(shardlens_hist_one(handler_ms, weight)), 0.95)::float8 AS "handlerP95Ms",
                 min(ts) AS "firstSeen", max(ts) AS "lastSeen"

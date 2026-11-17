@@ -2,6 +2,7 @@ import type { Db } from '../db.js';
 import { INTERACTIONS_ONLY_SQL } from '../ingest/codes.js';
 import { gaugeSamples } from './gauge-samples.js';
 import { rawFrom, rollupSource } from './rollup-source.js';
+import { countWhenRan, share } from './totals-sql.js';
 
 /**
  * Reliability page: deadlines, errors, REST, rate limits, budgets, shards, process and SDK health. Interactions only:
@@ -15,10 +16,10 @@ export async function reliability(db: Db, appId: string, range: { from: string; 
   const [totals, codes, routes, limits, budget, info, shards, events, process, sdks] = await Promise.all([
     db.query(
       `SELECT sum(weight)::float8 AS runs,
-              sum(weight) FILTER (WHERE outcome IN (2, 3))::float8 AS "missedDeadlines",
-              sum(weight) FILTER (WHERE outcome = 3)::float8 AS "noResponse",
-              sum(weight) FILTER (WHERE outcome = 1)::float8 AS errors,
-              (sum(weight) FILTER (WHERE ack_ms > 3000) / nullif(sum(weight) FILTER (WHERE ack_ms IS NOT NULL), 0))::float8 AS "over3sRate",
+              ${countWhenRan('outcome IN (2, 3)')} AS "missedDeadlines",
+              ${countWhenRan('outcome = 3')} AS "noResponse",
+              ${countWhenRan('outcome = 1')} AS errors,
+              ${share('ack_ms > 3000', 'ack_ms IS NOT NULL')} AS "over3sRate",
               shardlens_hist_quantile(shardlens_hist_sum(shardlens_hist_one(ack_ms, weight)), 0.5)::float8 AS "p50Ms",
               shardlens_hist_quantile(shardlens_hist_sum(shardlens_hist_one(ack_ms, weight)), 0.95)::float8 AS "p95Ms",
               shardlens_hist_quantile(shardlens_hist_sum(shardlens_hist_one(ack_ms, weight)), 0.99)::float8 AS "p99Ms"
