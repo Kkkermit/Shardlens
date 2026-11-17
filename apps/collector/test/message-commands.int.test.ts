@@ -99,7 +99,8 @@ describe('message (prefix) commands', () => {
     expect(await evaluateMetric(h.db, APP_ID, 'error_rate', 3_600)).toBeCloseTo(40);
 
     const detail = (await query(h.app, { kind: 'command', name: 'ban', range: range() })).json();
-    expect(detail.totals).toMatchObject({ runs: 5, deferRate: 0.5, premiumShare: null });
+    // Shares count the 2 interactions only: 1 deferred, neither by a premium user.
+    expect(detail.totals).toMatchObject({ runs: 5, deferRate: 0.5, premiumShare: 0 });
     expect(detail.kinds).toEqual([
       { key: 'message_command', value: 3 },
       { key: 'chat_input', value: 2 },
