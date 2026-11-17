@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { doctor } from './doctor.js';
 import { readEnvFile } from './env-file.js';
-import { DASHBOARD_CHOICES, type DashboardChoice, init, UsageError } from './init.js';
+import { type DashboardChoice, init, isDashboardChoice, UsageError } from './init.js';
 import { newKey } from './keys.js';
 import { list } from './list.js';
 import { privacyParagraph } from './privacy.js';
@@ -137,11 +137,11 @@ async function initCommand(values: Values): Promise<number> {
   const missing = (['domain', 'app-id'] as const).filter((name) => !values[name]).map((name) => `--${name}`);
   if (missing.length > 0) return usage(`init needs ${list(missing)}.`);
   const dashboard = values.dashboard;
-  if (dashboard !== undefined && !DASHBOARD_CHOICES.includes(dashboard)) {
+  if (dashboard !== undefined && !isDashboardChoice(dashboard)) {
     return usage('--dashboard must be shardlens, own or none.');
   }
   const result = await init({
-    ...(dashboard !== undefined ? { dashboard: dashboard as DashboardChoice } : {}),
+    ...(dashboard !== undefined ? { dashboard } : {}),
     dir: values.dir ?? 'shardlens',
     domain: values.domain ?? '',
     appId: values['app-id'] ?? '',

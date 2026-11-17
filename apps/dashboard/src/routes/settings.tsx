@@ -17,11 +17,9 @@ interface Settings {
   skuPrices: Record<string, { amount: number; currency: string }>;
   badges: string[];
   auditKeyConfigured: boolean;
-  /** The collector's own configuration decides the mode; Settings can't change it. */
   modeSetByEnvironment: boolean;
 }
 
-/** The label suggested for a new key of each scope. */
 const KEY_LABELS = { ingest: 'bot', read: 'scripts', activity: 'my dashboard' };
 
 interface Key {

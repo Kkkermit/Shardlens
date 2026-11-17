@@ -323,10 +323,11 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
       } catch {
         return reply.code(502).send({ error: 'webhook_failed', message: UNREADABLE_WEBHOOK });
       }
+      const dashboard = dashboardUrl(deps.config);
       const result = await postToDiscordWebhook(url, {
         title: `Test: ${row.name}`,
         body: 'This is a test message from Shardlens. Alerts for this rule will look like this.',
-        link: dashboardUrl(deps.config) && new URL('/reliability', deps.config.publicUrl).toString(),
+        link: dashboard && new URL('/reliability', dashboard).toString(),
         critical: false,
       });
       return result.ok ? { ok: true } : reply.code(502).send({ error: 'webhook_failed', message: result.error });

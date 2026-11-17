@@ -61,6 +61,7 @@ export interface EmbeddedCollectorOptions {
 export interface EmbeddedCollector {
   /** Where the SDK sends events: pass it as `endpoint` to `createShardlens`. */
   readonly url: string;
+  /** `publicUrl`, or `http://localhost:<port>`. With `dashboard: false` only the API answers there. */
   readonly dashboardUrl: string;
   /** Ingest key for the SDK (generated on first start, kept in `dataDir`). */
   readonly ingestKey: string;

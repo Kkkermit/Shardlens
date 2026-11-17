@@ -15,7 +15,9 @@ export class UsageError extends Error {}
  * collector is an API for it), or nowhere (an API for scripts, with reports, alerts and copies to a database).
  */
 export type DashboardChoice = 'shardlens' | 'own' | 'none';
-export const DASHBOARD_CHOICES: readonly string[] = ['shardlens', 'own', 'none'] satisfies DashboardChoice[];
+const DASHBOARD_CHOICES: readonly string[] = ['shardlens', 'own', 'none'] satisfies DashboardChoice[];
+
+export const isDashboardChoice = (value: string): value is DashboardChoice => DASHBOARD_CHOICES.includes(value);
 
 const FILES = ['docker-compose.yml', 'Caddyfile', '.env', 'bot.env'];
 const HOSTNAME = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
