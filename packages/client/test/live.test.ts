@@ -120,6 +120,7 @@ describe('live', () => {
     expect(asked[0]).toMatchObject({ method: 'GET', path: '/v1/live', body: undefined });
     expect(asked[0]?.headers.get('authorization')).toBe(`Bearer ${READ_KEY}`);
     expect(asked[0]?.headers.get('accept')).toBe('text/event-stream');
+    expect(asked[0]?.redirect).toBe('manual');
   });
 
   it('connects when iteration starts, not when live() is called', async () => {

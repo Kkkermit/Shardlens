@@ -128,6 +128,7 @@ try {
 | 404      | `audit_mode_off`                   | The collector is not in audit mode                             |
 | 429      | `rate_limited`                     | Too many requests: wait `retryAfterSeconds`                    |
 | 500      | `internal`                         | The collector failed: `requestId` finds the request in its log |
+| 3xx      | `http_<status>`                    | `url` redirects elsewhere, which the client doesn't follow     |
 | 2xx      | `invalid_response`                 | The answer isn't a collector's: check `url`                    |
 | 0        | `timeout`, `network`               | No answer within `timeoutMs` (default 10 s), or none at all    |
 | 0        | `invalid_options`                  | A `url` or `key` the client can't use, thrown when it is made  |

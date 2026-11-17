@@ -16,6 +16,7 @@ export interface Asked {
   headers: Headers;
   /** The parsed JSON body, if one was sent. */
   body: unknown;
+  redirect: RequestRedirect | undefined;
   signal: AbortSignal | undefined;
 }
 
@@ -30,6 +31,7 @@ export function fakeCollector(answer: (asked: Asked) => Response | Promise<Respo
       path: url.pathname + url.search,
       headers: new Headers(init?.headers),
       body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
+      redirect: init?.redirect,
       signal: init?.signal ?? undefined,
     };
     asked.push(request);

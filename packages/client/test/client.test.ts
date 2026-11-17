@@ -378,6 +378,19 @@ describe('failures', () => {
     expect(empty).toMatchObject({ status: 404, code: 'http_404' });
   });
 
+  it('follows no redirect, and says the address redirects', async () => {
+    const moved = () =>
+      new Response(null, { status: 301, headers: { location: 'https://www.stats.example.com/v1/query' } });
+    const { client, asked } = clientFor(moved);
+    const error = await rejection(client.commands({ range: RANGE }));
+    expect(asked[0]?.redirect).toBe('manual');
+    expect(error).toBeInstanceOf(ShardlensClientError);
+    expect(error).toMatchObject({ status: 301, code: 'http_301' });
+    expect((error as Error).message).toContain("a redirect, which the client doesn't follow");
+    await client.meta().catch(() => undefined);
+    expect(asked[1]?.redirect).toBe('manual');
+  });
+
   it('refuses a 2xx answer that is not JSON', async () => {
     const page = () => new Response('<html>Sign in</html>', { status: 200, headers: { 'content-type': 'text/html' } });
     const error = await rejection(clientFor(page).client.overview());

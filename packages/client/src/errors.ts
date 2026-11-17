@@ -83,7 +83,9 @@ export async function answerError(res: Response): Promise<ShardlensClientError> 
   if (typeof body?.message === 'string') message = body.message;
   else if (issues) message = `The collector refused the request (${code}): ${issues}`;
   else if (Object.hasOwn(EXPLAINED, code)) message = EXPLAINED[code] as string;
-  else message = `The collector answered ${res.status} (${code}).`;
+  else if (res.status >= 300 && res.status < 400) {
+    message = `The collector answered ${res.status}, a redirect, which the client doesn't follow: set url to the collector's own address.`;
+  } else message = `The collector answered ${res.status} (${code}).`;
   if (requestId) message += ` Request ID: ${requestId}`;
   return new ShardlensClientError(message, {
     status: res.status,

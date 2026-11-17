@@ -18,6 +18,7 @@ starts at 1.0.0, and its exports are covered by semantic versioning like the oth
   activity key. The log is paged with `nextBefore`.
 - Every failure is a `ShardlensClientError` with the HTTP `status`, the collector's error `code`, `retryAfterSeconds`
   after a 429 and the `requestId` of a 500. A timeout (10 seconds unless `timeoutMs` says otherwise) or an unreachable
-  collector has status 0. The key is never part of a message.
+  collector has status 0. The key is never part of a message, and redirects are not followed, so the key goes to
+  the collector's address only.
 - No dependencies, and Web-standard APIs only: it runs on Node.js 20 and later, Bun, Deno, Cloudflare Workers and in
   Next.js route handlers.
