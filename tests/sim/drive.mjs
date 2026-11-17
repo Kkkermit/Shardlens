@@ -72,10 +72,6 @@ function compare(expected, actual) {
 }
 
 /**
- * Runs `bot`, installed in `dir`. Resolves with what failed, how many events were sent, and the secrets and
- * identities the leak check must not find.
- */
-/**
  * An owner's own dashboard: the packed client, loaded as an ES module and as CommonJS, must read what the collector's
  * API gives directly. Compared by runs per command, which no longer change once the bot is idle.
  */
@@ -111,6 +107,10 @@ async function panelMismatches({ panel, url, readKey, range, appId, query }) {
   return failures;
 }
 
+/**
+ * Runs `bot`, installed in `dir`. Resolves with what failed, how many events were sent, and the secrets and
+ * identities the leak check must not find.
+ */
 export async function drive(bot, { dir, logs, databases, collectorMain, panel }) {
   const config = BOTS[bot];
   const { appId } = scenarios[bot];
