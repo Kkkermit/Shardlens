@@ -296,8 +296,8 @@ Opt-outs are held in memory, so the command's "no longer recorded" reply stops b
 import { createShardlensClient, lastDays } from '@shardlens/client';
 
 const shardlens = createShardlensClient({
-  url: process.env.SHARDLENS_URL!,
-  key: process.env.SHARDLENS_READ_KEY!,
+  endpoint: process.env.SHARDLENS_URL!,
+  apiKey: process.env.SHARDLENS_READ_KEY!,
 });
 
 const { rows } = await shardlens.commands({ range: lastDays(7) }); // every command: runs, failures, p95, servers
@@ -316,7 +316,7 @@ const failing = await shardlens.top({
 - There is one method per kind of answer (`overview`, `commands`, `command`, `series`, `top`, `heatmap`, `servers`, `server`, `growth`, `audience`, `reliability`, `gauge`, `bursts`, `premium`, `installs`, `events`, `eventProps`, `funnel`, `retention`), `meta()`, and `live()` for the live numbers. Answers are typed; a failed request throws `ShardlensClientError`. Cache answers for a minute: the collector rolls numbers up once a minute.
 - It needs two settings where the panel's server runs, `SHARDLENS_URL` (the collector's address, with no path) and `SHARDLENS_READ_KEY` (a read key, `slk_read_…`, not the bot's ingest key). Document them the way step 6 documents the bot's two, and don't make the panel fail to start without them: making the client never throws, and without its settings each call rejects with `invalid_options`, so show "not set up" on those pages instead.
 - Follow the panel's existing patterns for routes, data loading and sign-in, and add pages only for what I asked to see.
-- Who ran what is separate. Only if I asked for audit mode: `shardlens.activity.log({ guild, command, user, outcome: 'failed', before })` (newest first, 50 rows a page; pass a page's `nextBefore` as `before` for the next) and `shardlens.activity.topUsers('7d')` read it, with `SHARDLENS_ACTIVITY_KEY` (an activity key, `slk_activity_…`) as the client's `key`, on pages only my own staff can open. Never put a user ID in a URL a browser's address bar shows, and add no page that profiles one user beyond that exact-ID lookup.
+- Who ran what is separate. Only if I asked for audit mode: `shardlens.activity.log({ guild, command, user, outcome: 'failed', before })` (newest first, 50 rows a page; pass a page's `nextBefore` as `before` for the next) and `shardlens.activity.topUsers('7d')` read it, with `SHARDLENS_ACTIVITY_KEY` (an activity key, `slk_activity_…`) as the client's `apiKey`, on pages only my own staff can open. Never put a user ID in a URL a browser's address bar shows, and add no page that profiles one user beyond that exact-ID lookup.
 - Tell me to set the collector up with `npx shardlens init … --dashboard own` (add `--identify-users` for who ran what): it turns the Shardlens dashboard off and writes `dashboard.env` with these settings. Guide: https://kkkermit.github.io/Shardlens/guides/your-own-dashboard/
 
 **Embedded mode**, for a small bot on one host with no separate collector: the collector and its dashboard run inside the bot process, with their data in one folder.
@@ -326,7 +326,7 @@ const failing = await shardlens.top({
 - Install `@shardlens/collector` and `@electric-sql/pglite` as well as the SDK. In CommonJS, `require('@shardlens/collector/embedded')` works on Node.js 24.
 - It needs the application ID (from the Developer Portal). Use the setting the project already has for it (often `CLIENT_ID`, `APPLICATION_ID` or a `clientId` in its config); only if it has none, add `DISCORD_APP_ID` next to the bot's other settings.
 - The dashboard listens on port 8080 of this machine. Pick another port if the project already uses 8080.
-- If I said I want my own dashboard or none, pass `dashboard: false`: the collector then serves its API only, and `collector.readKey` is the key `@shardlens/client` needs (with `url: collector.url`).
+- If I said I want my own dashboard or none, pass `dashboard: false`: the collector then serves its API only, and `collector.readKey` is the key `@shardlens/client` needs (with `endpoint: collector.url`).
 - Add the data folder (`shardlens-data` below) to `.gitignore`. Skip step 6: the collector's own address and key replace the two settings.
 
 The collector has to start before `createShardlens`, because the SDK needs its address and key:

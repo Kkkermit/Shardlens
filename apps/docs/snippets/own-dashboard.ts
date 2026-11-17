@@ -2,8 +2,8 @@
 import { createShardlensClient, lastDays } from '@shardlens/client';
 
 const shardlens = createShardlensClient({
-  url: process.env.SHARDLENS_URL!, // https://stats.example.com
-  key: process.env.SHARDLENS_READ_KEY!, // slk_read_…
+  endpoint: process.env.SHARDLENS_URL!, // https://stats.example.com
+  apiKey: process.env.SHARDLENS_READ_KEY!, // slk_read_…
 });
 
 // A route on your own backend, for example GET /api/stats/commands. This is a Web-standard handler, so it works as a

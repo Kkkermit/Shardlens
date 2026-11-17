@@ -672,7 +672,7 @@ beforeAll(async () => {
   });
   await h.app.listen({ port: 0, host: '127.0.0.1' });
   url = `http://127.0.0.1:${(h.app.server.address() as AddressInfo).port}`;
-  client = createShardlensClient({ url, key: READ_KEY });
+  client = createShardlensClient({ endpoint: url, apiKey: READ_KEY });
   await seed();
 });
 
@@ -993,7 +993,7 @@ describe('@shardlens/client against a real collector', () => {
       expect(error).toBeInstanceOf(ShardlensClientError);
       return error as ShardlensClientError;
     };
-    const unknownKey = createShardlensClient({ url, key: `slk_read_${'x'.repeat(43)}` });
+    const unknownKey = createShardlensClient({ endpoint: url, apiKey: `slk_read_${'x'.repeat(43)}` });
     expect(await refusal(unknownKey.overview())).toMatchObject({ status: 401, code: 'unauthorized' });
     expect(await refusal(unknownKey.meta())).toMatchObject({ status: 401, code: 'unauthorized' });
 
@@ -1014,9 +1014,9 @@ describe('@shardlens/client against a real collector', () => {
     expect(unkept.message).toContain("rest.calls can't be grouped or filtered by command");
 
     // An ingest key is refused without a request; an unreachable collector is a network failure.
-    const ingestKey = createShardlensClient({ url, key: INGEST_KEY });
+    const ingestKey = createShardlensClient({ endpoint: url, apiKey: INGEST_KEY });
     expect(await refusal(ingestKey.overview())).toMatchObject({ status: 0, code: 'invalid_options' });
-    const nowhere = createShardlensClient({ url: 'http://127.0.0.1:9', key: READ_KEY, timeoutMs: 2_000 });
+    const nowhere = createShardlensClient({ endpoint: 'http://127.0.0.1:9', apiKey: READ_KEY, timeoutMs: 2_000 });
     expect(await refusal(nowhere.overview())).toMatchObject({ status: 0, code: 'network' });
   });
 });

@@ -2,8 +2,8 @@
 import { createShardlensClient } from '@shardlens/client';
 
 const shardlens = createShardlensClient({
-  url: process.env.SHARDLENS_URL!,
-  key: process.env.SHARDLENS_ACTIVITY_KEY!, // slk_activity_…: who ran what, and everything a read key reads
+  endpoint: process.env.SHARDLENS_URL!,
+  apiKey: process.env.SHARDLENS_ACTIVITY_KEY!, // slk_activity_…: who ran what, and everything a read key reads
 });
 
 // The latest failed runs in one server, with who ran each. Pass `nextBefore` back as `before` for the next page.

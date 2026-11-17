@@ -122,7 +122,7 @@ export interface ShardlensClient {
 }
 
 /**
- * A client for one collector. Making one never throws and sends nothing: with a `url` or `key` it can't use, every
+ * A client for one collector. Making one never throws and sends nothing: with an `endpoint` or `apiKey` it can't use, every
  * call rejects with a {@link ShardlensClientError} (`invalid_options`) saying why.
  */
 export function createShardlensClient(options: ShardlensClientOptions): ShardlensClient {

@@ -969,10 +969,10 @@ export class ShardlensClientError extends Error {
 
 // @public
 export interface ShardlensClientOptions {
+    apiKey: string;
+    endpoint: string;
     fetch?: typeof fetch | undefined;
-    key: string;
     timeoutMs?: number | undefined;
-    url: string;
 }
 
 // @public

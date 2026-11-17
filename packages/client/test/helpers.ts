@@ -46,7 +46,7 @@ export function clientFor(
   options: Partial<ShardlensClientOptions> = {},
 ) {
   const collector = fakeCollector(answer);
-  const client = createShardlensClient({ url: URL_BASE, key: READ_KEY, fetch: collector.fetch, ...options });
+  const client = createShardlensClient({ endpoint: URL_BASE, apiKey: READ_KEY, fetch: collector.fetch, ...options });
   return { client, asked: collector.asked };
 }
 

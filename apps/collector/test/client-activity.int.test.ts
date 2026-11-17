@@ -41,7 +41,7 @@ const [ALICE, BOB] = ['300000000000000001', '300000000000000002'] as const;
 
 let h: Harness;
 let url: string;
-const withKey = (key: string) => createShardlensClient({ url, key });
+const withKey = (key: string) => createShardlensClient({ endpoint: url, apiKey: key });
 
 async function refusal(call: Promise<unknown>): Promise<ShardlensClientError> {
   const error = await call.then(

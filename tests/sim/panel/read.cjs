@@ -1,7 +1,10 @@
 // The same as read.mjs, from a CommonJS project.
 const { createShardlensClient } = require('@shardlens/client');
 
-const shardlens = createShardlensClient({ url: process.env.SHARDLENS_URL, key: process.env.SHARDLENS_READ_KEY });
+const shardlens = createShardlensClient({
+  endpoint: process.env.SHARDLENS_URL,
+  apiKey: process.env.SHARDLENS_READ_KEY,
+});
 const range = JSON.parse(process.env.SIM_RANGE);
 Promise.all([
   shardlens.meta(),

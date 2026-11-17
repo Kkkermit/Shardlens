@@ -26,7 +26,7 @@ function row(n: number): ActivityRow {
 describe('activity.log', () => {
   it('reads /v1/audit/log with a GET and the key as a bearer token', async () => {
     const page = { rows: [row(1)], nextBefore: null };
-    const { client, asked } = clientFor(() => Response.json(page), { key: ACTIVITY_KEY });
+    const { client, asked } = clientFor(() => Response.json(page), { apiKey: ACTIVITY_KEY });
     await expect(client.activity.log()).resolves.toEqual(page);
     expect(asked[0]).toMatchObject({ method: 'GET', path: '/v1/audit/log', body: undefined });
     expect(asked[0]?.headers.get('authorization')).toBe(`Bearer ${ACTIVITY_KEY}`);

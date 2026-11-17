@@ -2,13 +2,16 @@ import { answerError, ShardlensClientError } from './errors.js';
 
 /** Options of {@link createShardlensClient}. */
 export interface ShardlensClientOptions {
-  /** Your collector's address, such as `https://stats.example.com`. HTTPS, or HTTP to localhost only, and no path. */
-  url: string;
+  /**
+   * Your collector's address, such as `https://stats.example.com`: the SDK's `endpoint` (`SHARDLENS_URL`). HTTPS, or
+   * HTTP to localhost only, and no path.
+   */
+  endpoint: string;
   /**
    * A read key (`slk_read_…`) or, to read the activity log as well, an activity key (`slk_activity_…`). Keep it on
    * your server: a key in a browser can be read by every visitor.
    */
-  key: string;
+  apiKey: string;
   /** How long a request may take, and how long a live stream may take to connect, in milliseconds. Default 10,000. */
   timeoutMs?: number | undefined;
   /** The `fetch` to send requests with. Default: the global one. */
@@ -38,54 +41,46 @@ function invalid(message: string): ShardlensClientError {
 
 /**
  * The collector's address, under the SDK's rule for `endpoint`. Messages never repeat the value: a key pasted into
- * `url` by mistake must not end up in a log.
+ * `endpoint` by mistake must not end up in a log.
  */
-function collectorUrl(url: unknown): URL {
-  if (url === undefined || url === null || url === '') {
-    throw invalid("url is missing: pass your collector's address, such as https://stats.example.com");
+function collectorUrl(endpoint: unknown): URL {
+  if (endpoint === undefined || endpoint === null || endpoint === '') {
+    throw invalid("endpoint is missing: pass your collector's address, such as https://stats.example.com");
   }
   let parsed: URL | undefined;
   try {
-    parsed = new URL(String(url));
+    parsed = new URL(String(endpoint));
   } catch {
     // reported below, with every other value that isn't a collector's address
   }
-  if (parsed && (parsed.username || parsed.password)) throw invalid('url must not contain a user name or password');
+  if (parsed && (parsed.username || parsed.password)) {
+    throw invalid('endpoint must not contain a user name or password');
+  }
   const allowed =
     parsed?.protocol === 'https:' || (parsed?.protocol === 'http:' && LOOPBACK_HOSTS.has(parsed.hostname));
-  if (!parsed || !allowed) throw invalid('url must be https:// (or http://localhost)');
+  if (!parsed || !allowed) throw invalid('endpoint must be https:// (or http://localhost)');
   // The collector answers at the root of its address, as it does for the SDK: a path would be dropped without a word.
   if (parsed.pathname !== '/' || parsed.search || parsed.hash) {
-    throw invalid("url must be the collector's address without a path, such as https://stats.example.com");
+    throw invalid("endpoint must be the collector's address without a path, such as https://stats.example.com");
   }
   return parsed;
 }
 
-function readerKey(key: unknown): string {
-  if (typeof key !== 'string' || key === '') {
-    throw invalid('key is missing: pass a read key (slk_read_…) or an activity key (slk_activity_…)');
+function readerKey(apiKey: unknown): string {
+  if (typeof apiKey !== 'string' || apiKey === '') {
+    throw invalid('apiKey is missing: pass a read key (slk_read_…) or an activity key (slk_activity_…)');
   }
-  if (key.startsWith('slk_ingest_')) {
+  if (apiKey.startsWith('slk_ingest_')) {
     throw invalid(
-      'key is an ingest key, which can only send events: use a read key (slk_read_…) or an activity key (slk_activity_…)',
+      "apiKey is the bot's ingest key, which can only send events: use a read key (slk_read_…) or an activity key (slk_activity_…)",
     );
   }
-  if (!READER_KEY.test(key)) {
+  if (!READER_KEY.test(apiKey)) {
     throw invalid(
-      'key must be a read key (slk_read_ and 43 more characters) or an activity key (slk_activity_ and 43 more characters)',
+      'apiKey must be a read key (slk_read_ and 43 more characters) or an activity key (slk_activity_ and 43 more characters)',
     );
   }
-  return key;
-}
-
-/** The SDK's options are `endpoint` and `apiKey`: someone setting up both is told the names this client takes. */
-function sdkNames(options: (ShardlensClientOptions & { endpoint?: unknown; apiKey?: unknown }) | undefined): void {
-  if (options?.endpoint !== undefined && options.url === undefined) {
-    throw invalid("url is missing: the collector's address is `url` here, not `endpoint`");
-  }
-  if (options?.apiKey !== undefined && options.key === undefined) {
-    throw invalid('key is missing: the read or activity key is `key` here, not `apiKey`');
-  }
+  return apiKey;
 }
 
 /** Makes `controller` abort when `source` does. Returns how to stop following it. */
@@ -132,9 +127,8 @@ export function createTransport(options: ShardlensClientOptions): Transport {
 }
 
 function checkedTransport(options: ShardlensClientOptions): Transport {
-  sdkNames(options);
-  const base = collectorUrl(options?.url);
-  const key = readerKey(options?.key);
+  const base = collectorUrl(options?.endpoint);
+  const key = readerKey(options?.apiKey);
   const asked = options.timeoutMs;
   const timeoutMs =
     typeof asked === 'number' && asked > 0 ? Math.min(Math.ceil(asked), MAX_TIMEOUT_MS) : DEFAULT_TIMEOUT_MS;
@@ -154,7 +148,7 @@ function checkedTransport(options: ShardlensClientOptions): Transport {
           cause,
         })
       : unreachable(cause);
-  // A 2xx answer of another kind: `url` points at a website or a proxy's sign-in page, not at the collector.
+  // A 2xx answer of another kind: `endpoint` points at a website or a proxy's sign-in page, not at the collector.
   const notCollector = (status: number) =>
     new ShardlensClientError(`The answer from ${base.origin} is not a Shardlens collector's.`, {
       status,

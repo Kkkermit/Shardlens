@@ -5,11 +5,11 @@
 New package: `@shardlens/client`, a typed client for reading a collector from your own dashboard or scripts. It
 starts at 1.0.0, and its exports are covered by semantic versioning like the other packages'.
 
-- `createShardlensClient({ url, key })` takes the collector's address and a read key (`slk_read_…`) or an activity
-  key (`slk_activity_…`). Making a client never throws, so a module that makes one still loads without its settings
-  (a build, a test run); each call then rejects with `invalid_options` and says what is wrong: a missing setting, an
-  ingest key, a URL that isn't HTTPS (plain HTTP is allowed to localhost only) or has a path, or the SDK's option
-  names `endpoint` and `apiKey` in place of `url` and `key`.
+- `createShardlensClient({ endpoint, apiKey })` takes the collector's address and a read key (`slk_read_…`) or an
+  activity key (`slk_activity_…`), under the same option names as the SDK. Making a client never throws, so a module
+  that makes one still loads without its settings (a build, a test run); each call then rejects with
+  `invalid_options` and says what is wrong: a missing setting, an ingest key, or an address that isn't HTTPS (plain
+  HTTP is allowed to localhost only) or has a path.
 - One method for each query the Shardlens dashboard runs, with typed answers: `overview`, `commands`, `command`,
   `series`, `top`, `heatmap`, `servers`, `server`, `growth`, `audience`, `reliability`, `gauge`, `bursts`, `premium`,
   `installs`, `events`, `eventProps`, `funnel` and `retention`. `query(spec)` runs any of them, and `lastDays(7)`

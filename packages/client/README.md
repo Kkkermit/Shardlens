@@ -17,8 +17,8 @@ npm install @shardlens/client
 import { createShardlensClient, lastDays } from '@shardlens/client';
 
 const shardlens = createShardlensClient({
-  url: process.env.SHARDLENS_URL!, // https://stats.example.com
-  key: process.env.SHARDLENS_READ_KEY!, // slk_read_…
+  endpoint: process.env.SHARDLENS_URL!, // https://stats.example.com
+  apiKey: process.env.SHARDLENS_READ_KEY!, // slk_read_…
 });
 
 // A route on your own backend: a Next.js route handler, Hono, a Worker, Bun.
@@ -100,7 +100,7 @@ everything a read key can. The collector records every read in its access log.
 pages your own staff can open.
 
 ```ts
-const shardlens = createShardlensClient({ url, key: process.env.SHARDLENS_ACTIVITY_KEY! });
+const shardlens = createShardlensClient({ endpoint, apiKey: process.env.SHARDLENS_ACTIVITY_KEY! });
 
 // Who ran into a failure in this server? Page back with `nextBefore`.
 let before: string | null = null;
@@ -138,10 +138,10 @@ try {
 | 429      | `rate_limited`                     | Too many requests: wait `retryAfterSeconds`                                               |
 | 500      | `internal`                         | The collector failed: `requestId` finds the request in its log                            |
 | 503      | `busy`                             | `live()` found every stream taken: wait `retryAfterSeconds`                               |
-| 3xx      | `http_<status>`                    | `url` redirects elsewhere, which the client doesn't follow                                |
-| 2xx      | `invalid_response`                 | The answer isn't a collector's: check `url`                                               |
+| 3xx      | `http_<status>`                    | `endpoint` redirects elsewhere, which the client doesn't follow                           |
+| 2xx      | `invalid_response`                 | The answer isn't a collector's: check `endpoint`                                          |
 | 0        | `timeout`, `network`               | No answer within `timeoutMs` (default 10 s), or none at all; a live stream quiet for 45 s |
-| 0        | `invalid_options`                  | A `url` or `key` the client can't use: every call says which                              |
+| 0        | `invalid_options`                  | An `endpoint` or `apiKey` the client can't use: every call says which                     |
 
 A request cancelled with your own `signal` rejects with that signal's reason, as `fetch` does.
 

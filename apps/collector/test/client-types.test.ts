@@ -31,7 +31,10 @@ describe('@shardlens/client stays in step with the query schema', () => {
   it('has a method for every kind', () => {
     const kinds = QuerySpec.options.map((option) => option.shape.kind.value);
     expect(kinds).toHaveLength(19);
-    const client = createShardlensClient({ url: 'https://stats.example.com', key: `slk_read_${'x'.repeat(43)}` });
+    const client = createShardlensClient({
+      endpoint: 'https://stats.example.com',
+      apiKey: `slk_read_${'x'.repeat(43)}`,
+    });
     for (const kind of kinds) expect(client[kind], kind).toBeTypeOf('function');
   });
 });

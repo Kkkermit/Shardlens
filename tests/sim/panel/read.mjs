@@ -2,7 +2,10 @@
 // answers as JSON, for the sim to compare with what the collector's API gives directly.
 import { createShardlensClient } from '@shardlens/client';
 
-const shardlens = createShardlensClient({ url: process.env.SHARDLENS_URL, key: process.env.SHARDLENS_READ_KEY });
+const shardlens = createShardlensClient({
+  endpoint: process.env.SHARDLENS_URL,
+  apiKey: process.env.SHARDLENS_READ_KEY,
+});
 const range = JSON.parse(process.env.SIM_RANGE);
 const [meta, commands, top] = await Promise.all([
   shardlens.meta(),

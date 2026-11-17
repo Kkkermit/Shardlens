@@ -2,8 +2,8 @@
 import { createShardlensClient, lastDays } from '@shardlens/client';
 
 const shardlens = createShardlensClient({
-  url: process.env.SHARDLENS_URL!, // https://stats.example.com
-  key: process.env.SHARDLENS_READ_KEY!, // slk_read_…
+  endpoint: process.env.SHARDLENS_URL!, // https://stats.example.com
+  apiKey: process.env.SHARDLENS_READ_KEY!, // slk_read_…
 });
 
 const { rows } = await shardlens.commands({ range: lastDays(7) });
