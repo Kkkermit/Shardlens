@@ -205,7 +205,8 @@ export async function init(opts: {
   const identifyUsers = opts.identifyUsers ?? false;
   try {
     await mkdir(dir, { recursive: true });
-    const files = opts.dashboard === 'own' ? [...FILES, 'dashboard.env'] : FILES;
+    const ownDashboard = existsSync(join(dir, 'dashboard.env'));
+    const files = opts.dashboard === 'own' || ownDashboard ? [...FILES, 'dashboard.env'] : FILES;
     const there = files.filter((name) => existsSync(join(dir, name)));
     if (there.length > 0 && !opts.force) {
       const kept = there.includes('.env') ? ' (.env keeps its secrets and settings)' : '';
@@ -241,12 +242,14 @@ export async function init(opts: {
     }
     await writeSecret(join(dir, 'bot.env'), botEnvFile(url, values.SHARDLENS_INGEST_KEY ?? ''));
     written.push('bot.env');
-    if (opts.dashboard === 'own') {
+    // Without the option the folder keeps its choice. `.env` only says the dashboard is off; dashboard.env is there
+    // when it was turned off for a dashboard of the owner's own, and gets the keys added since.
+    const dashboard =
+      opts.dashboard ?? (values.SHARDLENS_DASHBOARD === 'off' ? (ownDashboard ? 'own' : 'none') : 'shardlens');
+    if (dashboard === 'own') {
       await writeSecret(join(dir, 'dashboard.env'), dashboardEnvFile(url, values));
       written.push('dashboard.env');
     }
-    // Without the option, an `.env` with the dashboard off doesn't say which of the two it was turned off for.
-    const dashboard = opts.dashboard ?? (values.SHARDLENS_DASHBOARD === 'off' ? 'none' : 'shardlens');
     return { dir, url, written, ...(updated ? { updated } : {}), dashboard, audit: values.SHARDLENS_MODE === 'audit' };
   } catch (error) {
     throw explain(error);

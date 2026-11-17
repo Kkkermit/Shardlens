@@ -226,6 +226,17 @@ describe('init', () => {
     expect(usual).not.toHaveProperty('SHARDLENS_ACTIVITY_KEY');
   });
 
+  it('keeps a dashboard of your own when run again without the option, and gives it the keys added since', async () => {
+    const dir = await tempDir();
+    await init({ ...options, dir, dashboard: 'own' });
+    const again = await init({ ...options, dir, force: true, identifyUsers: true });
+    expect(again).toMatchObject({ dashboard: 'own', written: expect.arrayContaining(['dashboard.env']) });
+    const settings = await env(dir);
+    expect(settings).toMatchObject({ SHARDLENS_DASHBOARD: 'off', SHARDLENS_MODE: 'audit' });
+    expect((await env(dir, 'dashboard.env')).SHARDLENS_ACTIVITY_KEY).toBe(settings.SHARDLENS_ACTIVITY_KEY);
+    await expect(init({ ...options, dir })).rejects.toThrow(/dashboard\.env/);
+  });
+
   it('changes the dashboard choice of an existing .env only when asked', async () => {
     const dir = await tempDir();
     await init({ ...options, dir, dashboard: 'none' });
