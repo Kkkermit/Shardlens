@@ -23,6 +23,7 @@ export interface ActivityLogFilters {
 
 /** One interaction in the activity log: who ran what, where, and how it ended. */
 export interface ActivityRow {
+  /** Shardlens' own ID of the event (a UUIDv7), not Discord's interaction ID. Unique, and the order rows are paged in. */
   interactionId: string;
   ts: string;
   guildId: string | null;

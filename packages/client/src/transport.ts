@@ -2,7 +2,7 @@ import { answerError, ShardlensClientError } from './errors.js';
 
 /** Options of {@link createShardlensClient}. */
 export interface ShardlensClientOptions {
-  /** Your collector's URL. HTTPS, or HTTP to localhost only. */
+  /** Your collector's address, such as `https://stats.example.com`. HTTPS, or HTTP to localhost only, and no path. */
   url: string;
   /**
    * A read key (`slk_read_…`) or, to read the activity log as well, an activity key (`slk_activity_…`). Keep it on
@@ -41,6 +41,9 @@ function invalid(message: string): ShardlensClientError {
  * `url` by mistake must not end up in a log.
  */
 function collectorUrl(url: unknown): URL {
+  if (url === undefined || url === null || url === '') {
+    throw invalid("url is missing: pass your collector's address, such as https://stats.example.com");
+  }
   let parsed: URL | undefined;
   try {
     parsed = new URL(String(url));
@@ -51,6 +54,10 @@ function collectorUrl(url: unknown): URL {
   const allowed =
     parsed?.protocol === 'https:' || (parsed?.protocol === 'http:' && LOOPBACK_HOSTS.has(parsed.hostname));
   if (!parsed || !allowed) throw invalid('url must be https:// (or http://localhost)');
+  // The collector answers at the root of its address, as it does for the SDK: a path would be dropped without a word.
+  if (parsed.pathname !== '/' || parsed.search || parsed.hash) {
+    throw invalid("url must be the collector's address without a path, such as https://stats.example.com");
+  }
   return parsed;
 }
 
@@ -107,8 +114,24 @@ export interface Transport {
   unreachable(cause: unknown): ShardlensClientError;
 }
 
-/** Checks the options, and throws for those the client can't work with before any request is made. */
+/**
+ * Requests to the collector the options name. Options it can't work with don't throw here: a client is often made when
+ * a module loads, where a missing setting would break a build or keep a server from starting. Every call rejects
+ * with the reason instead.
+ */
 export function createTransport(options: ShardlensClientOptions): Transport {
+  try {
+    return checkedTransport(options);
+  } catch (error) {
+    if (!(error instanceof ShardlensClientError)) throw error;
+    const refuse = async (): Promise<never> => {
+      throw invalid(error.message);
+    };
+    return { request: refuse, open: refuse, unreachable: () => invalid(error.message) };
+  }
+}
+
+function checkedTransport(options: ShardlensClientOptions): Transport {
   sdkNames(options);
   const base = collectorUrl(options?.url);
   const key = readerKey(options?.key);

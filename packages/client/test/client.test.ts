@@ -30,16 +30,43 @@ afterEach(() => {
 describe('options', () => {
   const create = (options: Record<string, unknown>) =>
     createShardlensClient({ url: URL_BASE, key: READ_KEY, ...options } as never);
-  const refusal = (options: Record<string, unknown>) => {
-    try {
-      create(options);
-    } catch (error) {
-      return error as ShardlensClientError;
-    }
-    throw new Error('expected the options to be refused');
+  /** What a call answers with these options, from a collector that answers every request. */
+  const outcome = async (options: Record<string, unknown>) => {
+    const { fetch } = fakeCollector(() => Response.json({ appId: '1' }));
+    return create({ fetch, ...options })
+      .meta()
+      .then(
+        () => 'accepted' as const,
+        (error: unknown) => error,
+      );
+  };
+  const refusal = async (options: Record<string, unknown>) => {
+    const error = await outcome(options);
+    if (!(error instanceof ShardlensClientError)) throw new Error('expected the options to be refused');
+    return error;
   };
 
-  it('takes HTTPS anywhere, and HTTP only to this machine, as the SDK does', () => {
+  it('never throws when made, so a module that makes one loads without its settings', async () => {
+    const { fetch, asked } = fakeCollector();
+    expect(() => createShardlensClient({ url: undefined, key: undefined, fetch } as never)).not.toThrow();
+    const client = createShardlensClient({ url: '', key: '', fetch } as never);
+    expect(await refusal({ url: '', key: '' })).toMatchObject({ status: 0, code: 'invalid_options' });
+    await expect(client.commands({ range: RANGE })).rejects.toMatchObject({ code: 'invalid_options' });
+    await expect(client.activity.log()).rejects.toMatchObject({ code: 'invalid_options' });
+    const live = client.live()[Symbol.asyncIterator]();
+    await expect(live.next()).rejects.toMatchObject({ code: 'invalid_options' });
+    expect(asked).toHaveLength(0);
+  });
+
+  it('says a missing URL is missing', async () => {
+    for (const url of [undefined, null, '']) {
+      expect((await refusal({ url })).message, String(url)).toBe(
+        "url is missing: pass your collector's address, such as https://stats.example.com",
+      );
+    }
+  });
+
+  it('takes HTTPS anywhere, and HTTP only to this machine, as the SDK does', async () => {
     for (const url of [
       'https://stats.example.com',
       'https://stats.example.com/',
@@ -47,43 +74,52 @@ describe('options', () => {
       'http://127.0.0.1:8080',
       'http://[::1]:8080',
     ]) {
-      expect(() => create({ url }), url).not.toThrow();
+      expect(await outcome({ url }), url).toBe('accepted');
     }
     for (const url of [
       'http://stats.example.com',
       'http://localhost.example.com',
       'ftp://stats.example.com',
-      'stats.example.com',
-      '',
-      undefined,
+      'stats',
     ]) {
-      const error = refusal({ url });
-      expect(error, String(url)).toBeInstanceOf(ShardlensClientError);
+      const error = await refusal({ url });
       expect(error).toMatchObject({ status: 0, code: 'invalid_options' });
-      expect(error.message).toBe('url must be https:// (or http://localhost)');
+      expect(error.message, url).toBe('url must be https:// (or http://localhost)');
     }
   });
 
-  it('refuses a URL that carries a user name or password, without repeating it', () => {
-    const error = refusal({ url: 'https://admin:hunter2@stats.example.com' });
+  it('refuses a URL with a path, which the collector would never see', async () => {
+    for (const url of [
+      'https://stats.example.com/shardlens/',
+      'https://stats.example.com/v1',
+      'https://x.example/?a=1',
+    ]) {
+      expect((await refusal({ url })).message, url).toBe(
+        "url must be the collector's address without a path, such as https://stats.example.com",
+      );
+    }
+  });
+
+  it('refuses a URL that carries a user name or password, without repeating it', async () => {
+    const error = await refusal({ url: 'https://admin:hunter2@stats.example.com' });
     expect(error.message).toBe('url must not contain a user name or password');
     expect(error.message).not.toContain('hunter2');
   });
 
-  it('takes a read key or an activity key', () => {
-    expect(() => create({ key: READ_KEY })).not.toThrow();
-    expect(() => create({ key: ACTIVITY_KEY })).not.toThrow();
+  it('takes a read key or an activity key', async () => {
+    expect(await outcome({ key: READ_KEY })).toBe('accepted');
+    expect(await outcome({ key: ACTIVITY_KEY })).toBe('accepted');
   });
 
-  it('says an ingest key can only send events', () => {
-    const error = refusal({ key: INGEST_KEY });
+  it('says an ingest key can only send events', async () => {
+    const error = await refusal({ key: INGEST_KEY });
     expect(error).toMatchObject({ status: 0, code: 'invalid_options' });
     expect(error.message).toContain('ingest key, which can only send events');
     expect(error.message).toContain('slk_read_…');
     expect(error.message).toContain('slk_activity_…');
   });
 
-  it('refuses anything else that is not a read or activity key', () => {
+  it('refuses anything else that is not a read or activity key', async () => {
     for (const key of [
       '',
       undefined,
@@ -94,29 +130,30 @@ describe('options', () => {
       `"${READ_KEY}"`,
       `slk_write_${'w'.repeat(43)}`,
     ]) {
-      expect(refusal({ key }), String(key)).toMatchObject({ status: 0, code: 'invalid_options' });
+      expect(await refusal({ key }), String(key)).toMatchObject({ status: 0, code: 'invalid_options' });
     }
   });
 
-  it('never repeats the key, even when it was put where the URL goes', () => {
-    const refused = [
+  it('never repeats the key, even when it was put where the URL goes', async () => {
+    const refused = await Promise.all([
       refusal({ key: INGEST_KEY }),
       refusal({ key: `${READ_KEY}x` }),
       refusal({ url: READ_KEY }),
       refusal({ url: `https://${READ_KEY}@stats.example.com` }),
       refusal({ url: `http://stats.example.com/?key=${READ_KEY}` }),
-    ];
+      refusal({ url: `https://stats.example.com/?key=${READ_KEY}` }),
+    ]);
     for (const error of refused) {
       expect(`${error.message}\n${error.stack}`).not.toContain(READ_KEY);
       expect(`${error.message}\n${error.stack}`).not.toContain(INGEST_KEY);
     }
   });
 
-  it('names its own options to someone who passes the SDK’s, without repeating their values', () => {
-    const sdk = refusal({ url: undefined, key: undefined, endpoint: URL_BASE, apiKey: READ_KEY });
+  it('names its own options to someone who passes the SDK’s, without repeating their values', async () => {
+    const sdk = await refusal({ url: undefined, key: undefined, endpoint: URL_BASE, apiKey: READ_KEY });
     expect(sdk).toMatchObject({ code: 'invalid_options' });
     expect(sdk.message).toBe("url is missing: the collector's address is `url` here, not `endpoint`");
-    const apiKey = refusal({ key: undefined, apiKey: READ_KEY });
+    const apiKey = await refusal({ key: undefined, apiKey: READ_KEY });
     expect(apiKey.message).toBe('key is missing: the read or activity key is `key` here, not `apiKey`');
     expect(`${sdk.message}${apiKey.message}`).not.toContain(READ_KEY);
   });
@@ -162,12 +199,6 @@ describe('queries', () => {
     expect(request?.headers.get('content-type')).toBe('application/json');
     expect(request?.body).toEqual({ kind: 'commands', range: RANGE });
     expect(request?.signal).toBeInstanceOf(AbortSignal);
-  });
-
-  it('asks the collector at its root, whatever path the URL came with', async () => {
-    const { client, asked } = clientFor(undefined, { url: 'http://localhost:8080/dashboard/' });
-    await client.overview();
-    expect(asked[0]?.url.href).toBe('http://localhost:8080/v1/query');
   });
 
   it('builds the spec of the methods that take more than a spec', async () => {

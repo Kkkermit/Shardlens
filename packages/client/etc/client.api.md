@@ -37,7 +37,6 @@ export interface ActivityRow {
     // (undocumented)
     guildId: string | null;
     guildName: string | null;
-    // (undocumented)
     interactionId: string;
     kind: string;
     // (undocumented)

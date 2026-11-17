@@ -32,7 +32,7 @@ Stop and tell me, instead of continuing, if:
 
 ## 2. Install the SDK
 
-Install `@shardlens/discordjs` with the project's own package manager. Don't add any other dependency (embedded mode, below, adds two more only if I asked for it).
+Install `@shardlens/discordjs` with the project's own package manager. Don't add any other dependency (embedded mode, below, adds two more, and my own dashboard adds `@shardlens/client`, only if I asked for them).
 
 If the registry answers that the package doesn't exist, stop and tell me: Shardlens may not be published yet. Never install it from a tarball, a fork or a similarly named package.
 
@@ -290,7 +290,7 @@ if (interaction.isChatInputCommand() && (await privacy.handle(interaction))) {
 
 Opt-outs are held in memory, so the command's "no longer recorded" reply stops being true at the next restart unless they are saved. If the project has a database, save them there: pass the saved IDs as `optedOut` and save changes in `onOptOutChange` (both options of `createShardlens`; the callback may be `async`, and a failed save is counted, never thrown). If it has none, tell me instead of choosing a store yourself. Also tell me to register the command with Discord if the project registers commands in a separate deploy script.
 
-**My own dashboard.** To show Shardlens numbers in a dashboard or admin panel I already have, install `@shardlens/client` on that panel's server side and ask the collector there. It has no dependencies and uses `fetch`. Never call it from code that runs in a browser: the key would be readable by whoever opens the page.
+**My own dashboard.** To show Shardlens numbers in a dashboard or admin panel I already have, install `@shardlens/client` on that panel's server side and ask the collector there. It has no dependencies and uses `fetch`. Never call it from code that runs in a browser: the key would be readable by whoever opens the page. If the panel is a project of its own, without the bot in it, do only this section there: steps 1 to 6 are for the bot.
 
 ```ts
 import { createShardlensClient, lastDays } from '@shardlens/client';
@@ -314,9 +314,9 @@ const failing = await shardlens.top({
 ```
 
 - There is one method per kind of answer (`overview`, `commands`, `command`, `series`, `top`, `heatmap`, `servers`, `server`, `growth`, `audience`, `reliability`, `gauge`, `bursts`, `premium`, `installs`, `events`, `eventProps`, `funnel`, `retention`), `meta()`, and `live()` for the live numbers. Answers are typed; a failed request throws `ShardlensClientError`. Cache answers for a minute: the collector rolls numbers up once a minute.
-- It needs two settings where the panel's server runs, `SHARDLENS_URL` and `SHARDLENS_READ_KEY` (a read key, `slk_read_…`, not the bot's ingest key). Document them the way step 6 documents the bot's two, and don't make the panel fail to start without them.
+- It needs two settings where the panel's server runs, `SHARDLENS_URL` (the collector's address, with no path) and `SHARDLENS_READ_KEY` (a read key, `slk_read_…`, not the bot's ingest key). Document them the way step 6 documents the bot's two, and don't make the panel fail to start without them: making the client never throws, and without its settings each call rejects with `invalid_options`, so show "not set up" on those pages instead.
 - Follow the panel's existing patterns for routes, data loading and sign-in, and add pages only for what I asked to see.
-- Who ran what is separate. Only if I asked for audit mode: `shardlens.activity.log({ guild, command, user, outcome: 'failed' })` and `shardlens.activity.topUsers('7d')` read it, with `SHARDLENS_ACTIVITY_KEY` (an activity key, `slk_activity_…`) as the client's `key`, on pages only my own staff can open. Never put a user ID in a URL a browser's address bar shows, and add no page that profiles one user beyond that exact-ID lookup.
+- Who ran what is separate. Only if I asked for audit mode: `shardlens.activity.log({ guild, command, user, outcome: 'failed', before })` (newest first, 50 rows a page; pass a page's `nextBefore` as `before` for the next) and `shardlens.activity.topUsers('7d')` read it, with `SHARDLENS_ACTIVITY_KEY` (an activity key, `slk_activity_…`) as the client's `key`, on pages only my own staff can open. Never put a user ID in a URL a browser's address bar shows, and add no page that profiles one user beyond that exact-ID lookup.
 - Tell me to set the collector up with `npx shardlens init … --dashboard own` (add `--identify-users` for who ran what): it turns the Shardlens dashboard off and writes `dashboard.env` with these settings. Guide: https://kkkermit.github.io/Shardlens/guides/your-own-dashboard/
 
 **Embedded mode**, for a small bot on one host with no separate collector: the collector and its dashboard run inside the bot process, with their data in one folder.
