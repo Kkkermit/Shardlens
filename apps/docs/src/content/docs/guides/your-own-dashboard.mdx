@@ -152,6 +152,8 @@ everything else.
 
 - **Cache.** Numbers are rolled up once a minute, so caching a response for 60 seconds loses nothing.
 - **Limits.** `/v1/query` allows 600 requests a minute per address and answers `429` with `Retry-After` past that.
+  `/v1/live` keeps up to 10 streams open per address (100 in all) and answers `503` with `{ "error": "busy" }` past
+  that: share one `live()` between your visitors instead of opening one each.
 - **Rotate** the key from **Settings → API keys** if it ever leaks: create a new one, deploy it, revoke the old one.
 
 ## Other ways to get the numbers out

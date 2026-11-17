@@ -79,6 +79,9 @@ Every method takes `{ signal }` as its last argument to cancel the request.
 starts and closes when it ends: when the signal aborts, when you `break`, or when the collector closes the stream (a
 restart, a proxy's time limit). Call `live()` again to reconnect.
 
+The collector keeps up to 10 live streams open per address (100 in all) and refuses more with `busy` and
+`retryAfterSeconds`, so a backend that passes the numbers on to its visitors should share one stream between them.
+
 ```ts
 for await (const update of shardlens.live({ signal })) {
   console.log(update.perMinute, 'commands in the last minute', update.servers, 'servers');
@@ -128,6 +131,7 @@ try {
 | 404      | `audit_mode_off`                   | The collector is not in audit mode                             |
 | 429      | `rate_limited`                     | Too many requests: wait `retryAfterSeconds`                    |
 | 500      | `internal`                         | The collector failed: `requestId` finds the request in its log |
+| 503      | `busy`                             | `live()` found every stream taken: wait `retryAfterSeconds`    |
 | 3xx      | `http_<status>`                    | `url` redirects elsewhere, which the client doesn't follow     |
 | 2xx      | `invalid_response`                 | The answer isn't a collector's: check `url`                    |
 | 0        | `timeout`, `network`               | No answer within `timeoutMs` (default 10 s), or none at all    |
