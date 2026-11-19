@@ -609,9 +609,8 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
 
   if (commandTimes.size > 0) {
     const ids = [...commandTimes.keys()];
-    // Commands run before the bot was removed count, also when the removal is in the same batch (a short-lived
-    // install, or a replay after an outage): by time, because a batch isn't in the order things happened. Commands
-    // after it are a user install being used in a server the bot has left, which isn't that server using the bot.
+    // Compared by time, as a batch isn't in event order: commands before a removal in the same batch count, later
+    // ones are a user install used in a server the bot has left.
     const whileInstalled = 'CASE WHEN g.left_at IS NULL OR v.last <= g.left_at THEN v.last ELSE v.first END';
     await tx.query(
       `UPDATE guilds g SET

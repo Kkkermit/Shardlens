@@ -66,8 +66,7 @@ export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void>
   // Open streams in all and per visitor, so one visitor (anyone, in demo mode) can't take every slot.
   let connections = 0;
   const perVisitor = new Map<string, number>();
-  // A stream never ends on its own, and closing the server waits for every open request: they are ended on shutdown,
-  // or a collector (and a bot running an embedded one) with a live page open never stops.
+  // Closing the server waits for open requests, and a stream never ends on its own.
   const streams = new Set<() => void>();
   app.addHook('preClose', async () => {
     for (const end of streams) end();
@@ -140,8 +139,7 @@ export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void>
       }
     };
     const timer = setInterval(() => void send(), 1_000);
-    // Written whatever the database does, so a reader (and a proxy) can tell a quiet stream from a dead connection:
-    // updates stop while a slow refresh runs.
+    // On its own timer, so a reader or proxy can tell a slow refresh from a dead connection.
     const heartbeat = setInterval(() => {
       if (!closed) res.write(': heartbeat\n\n');
     }, LIVE_HEARTBEAT_MS);

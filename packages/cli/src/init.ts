@@ -242,8 +242,7 @@ export async function init(opts: {
     }
     await writeSecret(join(dir, 'bot.env'), botEnvFile(url, values.SHARDLENS_INGEST_KEY ?? ''));
     written.push('bot.env');
-    // Without the option the folder keeps its choice. `.env` only says the dashboard is off; dashboard.env is there
-    // when it was turned off for a dashboard of the owner's own, and gets the keys added since.
+    // Without the option the folder keeps its choice: dashboard.env exists only for a dashboard of the owner's own.
     const dashboard =
       opts.dashboard ?? (values.SHARDLENS_DASHBOARD === 'off' ? (ownDashboard ? 'own' : 'none') : 'shardlens');
     if (dashboard === 'own') {

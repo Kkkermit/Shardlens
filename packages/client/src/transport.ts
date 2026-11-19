@@ -135,8 +135,7 @@ function checkedTransport(options: ShardlensClientOptions): Transport {
   // Looked up on every call, so a `fetch` patched in later (a test, an instrumentation library) is the one used.
   const send: typeof fetch = options.fetch ?? ((input, init) => fetch(input, init));
   const authorization = `Bearer ${key}`;
-  // Redirects aren't followed: the collector never sends one, and a followed one drops the key (or, on some runtimes,
-  // hands it to another host) and turns a query into a GET without its body, which reads as a refused key or a 404.
+  // Redirects aren't followed: one drops the key or, on some runtimes, hands it to another host.
 
   const unreachable = (cause: unknown) =>
     new ShardlensClientError(`Could not reach the collector at ${base.origin}.`, { status: 0, code: 'network', cause });

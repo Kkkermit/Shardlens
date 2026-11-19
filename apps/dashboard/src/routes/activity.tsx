@@ -45,8 +45,7 @@ export function ActivityPage() {
     outcome: outcome ?? '',
     user: '',
   });
-  // What the log is asked for: the address's filters and the user ID, which is kept out of the address (see
-  // `ActivitySearch`). One value, so that Apply changes both at once and no lookup goes out with half of each.
+  // The address's filters plus the user ID, which stays out of the address: one value, so Apply changes both at once.
   const [applied, setApplied] = useState<ActivitySearch & { user?: string }>(() =>
     parseActivitySearch({ command, guild, outcome }),
   );
@@ -56,8 +55,7 @@ export function ActivityPage() {
     setApplied((was) => withUser(parseActivitySearch({ command, guild, outcome }), was.user ?? ''));
   }, [command, guild, outcome]);
   const appliedKey = JSON.stringify(applied);
-  // Cursors of the pages shown so far: `nextBefore` of each, newest page first. Empty on the newest page, and they
-  // belong to one set of filters: under other filters the log starts at its newest page again.
+  // `nextBefore` of each page shown so far, for these filters only: new filters start at the newest page.
   const [paging, setPaging] = useState<{ filters: string; cursors: string[] }>({ filters: appliedKey, cursors: [] });
   const pages = paging.filters === appliedKey ? paging.cursors : [];
   const setPages = (cursors: string[]) => setPaging({ filters: appliedKey, cursors });
