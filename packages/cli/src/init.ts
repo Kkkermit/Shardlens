@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { envValues, setEnvVariables } from './env-file.js';
@@ -257,8 +257,16 @@ export async function init(opts: {
 
 /** Writes a file only its owner can read. `mode` applies only to new files, so a replaced one is tightened too. */
 async function writeSecret(path: string, content: string): Promise<void> {
-  await writeFile(path, content, { mode: 0o600 });
-  await chmod(path, 0o600);
+  // Renamed into place, so an interrupted run never leaves an existing .env half written.
+  const temporary = `${path}.${randomBytes(6).toString('hex')}.tmp`;
+  try {
+    await writeFile(temporary, content, { mode: 0o600, flag: 'wx' });
+    await chmod(temporary, 0o600);
+    await rename(temporary, path);
+  } catch (error) {
+    await rm(temporary, { force: true });
+    throw error;
+  }
 }
 
 const FS_REASONS: Record<string, string> = {

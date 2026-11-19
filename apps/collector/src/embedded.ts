@@ -5,7 +5,17 @@
  * optional: with `dashboard: false` it is an API for `@shardlens/client` only.
  */
 import { randomBytes } from 'node:crypto';
-import { closeSync, fchmodSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  fchmodSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join, resolve } from 'node:path';
 import { startCollector } from './app.js';
 import type { Config } from './env.js';
@@ -110,8 +120,9 @@ function loadSecrets(dataDir: string): Secrets {
     activityKey: stored.activityKey ?? newKey('activity'),
   };
   if (Object.keys(secrets).every((name) => name in stored)) return secrets;
-  // Through one descriptor, so the file made private is the file written, even if the path is swapped meanwhile.
-  const fd = openSync(file, 'w', 0o600);
+  // Written beside it and renamed over it: a start cut short mid-write must not leave the settings key half written.
+  const temporary = `${file}.${randomBytes(6).toString('hex')}.tmp`;
+  const fd = openSync(temporary, 'wx', 0o600);
   try {
     try {
       fchmodSync(fd, 0o600);
@@ -119,9 +130,14 @@ function loadSecrets(dataDir: string): Secrets {
       // not supported on every platform
     }
     writeFileSync(fd, `${JSON.stringify(secrets, null, 2)}\n`);
-  } finally {
+    fsyncSync(fd);
+  } catch (error) {
     closeSync(fd);
+    rmSync(temporary, { force: true });
+    throw error;
   }
+  closeSync(fd);
+  renameSync(temporary, file);
   return secrets;
 }
 

@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseEnv } from 'node:util';
@@ -231,6 +231,7 @@ describe('init', () => {
     await init({ ...options, dir, dashboard: 'own' });
     const again = await init({ ...options, dir, force: true, identifyUsers: true });
     expect(again).toMatchObject({ dashboard: 'own', written: expect.arrayContaining(['dashboard.env']) });
+    expect((await readdir(dir)).filter((name) => name.endsWith('.tmp'))).toEqual([]);
     const settings = await env(dir);
     expect(settings).toMatchObject({ SHARDLENS_DASHBOARD: 'off', SHARDLENS_MODE: 'audit' });
     expect((await env(dir, 'dashboard.env')).SHARDLENS_ACTIVITY_KEY).toBe(settings.SHARDLENS_ACTIVITY_KEY);

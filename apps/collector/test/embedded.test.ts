@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { type AddressInfo, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -75,6 +75,7 @@ describe('embedded collector (PGlite)', () => {
       const file = join(own, 'secrets.json');
       expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ ...older, activityKey: upgraded.activityKey });
       expect(privateFile(file)).toBe(true);
+      expect(readdirSync(own).filter((name) => name.endsWith('.tmp'))).toEqual([]);
     } finally {
       await upgraded.close();
       rmSync(own, { recursive: true, force: true });
