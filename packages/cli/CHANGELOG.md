@@ -1,5 +1,34 @@
 # shardlens
 
+## 1.2.0
+
+### Minor Changes
+
+- e761c8c: Choose where you look at the numbers when you set up a collector.
+
+  - `shardlens init --dashboard shardlens | own | none`. `own` turns the Shardlens dashboard off and writes
+    `dashboard.env`, the settings the server of your own dashboard needs to read the numbers with `@shardlens/client`.
+    `none` runs the collector as an API only. The default is the Shardlens dashboard, as before, and running `init`
+    again changes the choice only when the option is given.
+  - With `own` or `none`, `--identify-users` also writes `SHARDLENS_MODE=audit` and an activity key, because there is
+    no Settings page to switch audit mode on in. The next steps then say to switch the bot to audit mode too.
+  - `shardlens keys --scope activity` prints an activity key.
+
+### Patch Changes
+
+- e761c8c: A key set in the collector's environment replaces the one the same variable held before. When `SHARDLENS_INGEST_KEY`,
+  `SHARDLENS_READ_KEY` or `SHARDLENS_ACTIVITY_KEY` gets a new value, the collector revokes the old key as it starts, signs
+  out dashboard sessions made with it and notes it in the admin log. Before, the old key kept working until it was
+  revoked in Settings, which a collector without the dashboard (`init --dashboard own` or `none`) can't open, so a leaked
+  key could never be taken back. An embedded collector does the same when a key's line is deleted from `secrets.json`.
+  To switch keys without a gap, create the new one in **Settings → API keys** instead. `shardlens keys` says so.
+- e761c8c: `shardlens init --force` without `--dashboard` keeps a folder set up for a dashboard of your own as one. With
+  `--identify-users` added later, it treated it as having no dashboard: it said there was nothing to open and didn't put
+  the new activity key in `dashboard.env`. It now rewrites `dashboard.env` with the keys added since.
+- e761c8c: The collector's start-up log says which mode users are recorded in (`mode`) and whether `SHARDLENS_MODE` set it
+  (`modeFrom`), so a log shows that audit mode took effect. The `.env` that `shardlens init` writes no longer says the
+  dashboard uses the bundled database next to the setting for your own, which read oddly without a dashboard.
+
 ## 1.1.0
 
 ### Minor Changes
