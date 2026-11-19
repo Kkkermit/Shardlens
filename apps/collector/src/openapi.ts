@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { batchJsonSchema, ConfigResponse, ErrorResponse, IngestAccepted } from '@shardlens/schema';
 import { z } from 'zod';
 import { QuerySpec } from './query/spec.js';
-import { AlertBody, SettingsPatch } from './routes/admin.js';
+import { AlertBody, KeyLabel, SettingsPatch } from './routes/admin.js';
 import { AuditLogFilters, EraseBody } from './routes/privacy.js';
 import { ReportBody } from './routes/reports.js';
 
@@ -162,7 +162,8 @@ export function openApiDocument(version = collectorVersion()): Record<string, un
           security: [{ readKey: [] }, { activityKey: [] }, { session: [] }],
           responses: {
             '200': {
-              description: '`tiles` events every second',
+              description:
+                '`tiles` events every second, and a `: heartbeat` comment every 15 seconds whatever the database does. A reader that has received nothing for 45 seconds can treat the connection as gone.',
               content: { 'text/event-stream': { schema: { type: 'string' } } },
             },
             ...unauthorized,
@@ -230,9 +231,7 @@ export function openApiDocument(version = collectorVersion()): Record<string, un
           tags: ['Admin'],
           summary: 'Create an API key (shown once)',
           security: [{ session: [] }],
-          requestBody: body(
-            z.object({ scope: z.enum(['ingest', 'read', 'activity']), label: z.string().min(1).max(64) }),
-          ),
+          requestBody: body(z.object({ scope: z.enum(['ingest', 'read', 'activity']), label: KeyLabel })),
           responses: { '201': { description: 'The new key, shown once' }, ...admin },
         },
       },

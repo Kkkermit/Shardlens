@@ -773,6 +773,14 @@ describe('audit mode', () => {
       ...asAdmin(),
       payload: { scope: 'activity', label: 'my dashboard' },
     });
+    // The name of an environment variable is refused: a new value of that variable would revoke the key.
+    const reserved = await h.app.inject({
+      method: 'POST',
+      url: '/v1/keys',
+      ...asAdmin(),
+      payload: { scope: 'read', label: 'SHARDLENS_READ_KEY' },
+    });
+    expect(reserved.statusCode).toBe(400);
     expect(created.statusCode).toBe(201);
     const { id, key } = created.json() as { id: string; key: string };
     expect(key).toMatch(/^slk_activity_[\w-]{43}$/);

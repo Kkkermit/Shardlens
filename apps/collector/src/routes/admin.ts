@@ -69,6 +69,16 @@ export const AlertBody = z
   })
   .strict();
 
+/** Keys from the environment carry their variable's name as label, and a new value revokes keys with that label. */
+export const KeyLabel = z
+  .string()
+  .min(1)
+  .max(64)
+  .refine(
+    (label) => !/^SHARDLENS_[A-Z]+_KEY$/.test(label.trim()),
+    'names like SHARDLENS_READ_KEY are kept for keys from the environment',
+  );
+
 /** The path parameter of a key, an alert or a report. */
 export const IdParam = z.object({ id: z.string().regex(/^\d{1,18}$/) });
 
@@ -187,7 +197,7 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
     const admin = await requireAdmin(deps, req, reply, { mutate: true });
     if (!admin) return;
     const body = z
-      .object({ scope: z.enum(['ingest', 'read', 'activity']), label: z.string().min(1).max(64) })
+      .object({ scope: z.enum(['ingest', 'read', 'activity']), label: KeyLabel })
       .strict()
       .parse(req.body ?? {});
     const key = newApiKey(body.scope);
