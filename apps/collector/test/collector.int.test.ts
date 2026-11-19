@@ -891,19 +891,21 @@ describe('servers and snapshots', () => {
         leave(tried),
         leave(never),
         interaction(user, event(10_000, { guild: tried })),
+        interaction(user, event(15_000, { guild: tried })),
         // After the removal, a user install run in those servers: not the servers using the bot.
         interaction(user, event(30_000, { guild: tried })),
         interaction(user, event(30_000, { guild: never })),
       ]),
     );
-    expect(res.json()).toMatchObject({ accepted: 7 });
+    expect(res.json()).toMatchObject({ accepted: 8 });
     const rows = await h.db.query<{ id: string; first: Date | null; last: Date | null }>(
       `SELECT guild_id::text AS id, first_command_at AS first, last_command_at AS last
          FROM guilds WHERE guild_id = ANY($1::bigint[])`,
       [[tried, never]],
     );
     const times = Object.fromEntries(rows.rows.map((r) => [r.id, [r.first?.getTime(), r.last?.getTime()]]));
-    expect(times).toEqual({ [tried]: [at + 10_000, at + 10_000], [never]: [undefined, undefined] });
+    // The last command before the removal, not the first: the one after it is left out.
+    expect(times).toEqual({ [tried]: [at + 10_000, at + 15_000], [never]: [undefined, undefined] });
   });
 
   it('ignores a snapshot of a shard outside the layout instead of counting it toward a new one', async () => {

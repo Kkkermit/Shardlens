@@ -100,9 +100,13 @@ everything a read key can. The collector records every read in its access log.
 pages your own staff can open.
 
 ```ts
-const shardlens = createShardlensClient({ endpoint, apiKey: process.env.SHARDLENS_ACTIVITY_KEY! });
+const shardlens = createShardlensClient({
+  endpoint: process.env.SHARDLENS_URL!,
+  apiKey: process.env.SHARDLENS_ACTIVITY_KEY!, // slk_activity_…
+});
 
 // Who ran into a failure in this server? Page back with `nextBefore`.
+const guildId = '112233445566778899';
 let before: string | null = null;
 do {
   const page = await shardlens.activity.log({ guild: guildId, outcome: 'failed', before });

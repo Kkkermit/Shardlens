@@ -157,7 +157,8 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
 
   const interactionRows: unknown[][] = [];
   const uniqueRows: unknown[][] = [];
-  const commandTimes = new Map<string, { first: number; last: number }>();
+  const commandGuilds: string[] = [];
+  const commandTimes: Date[] = [];
   const errorRows: unknown[][] = [];
   const restRows: unknown[][] = [];
   const invalidRows: unknown[][] = [];
@@ -194,9 +195,8 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
     scopes.push(...extra);
     for (const [scope, key] of scopes) uniqueRows.push([ctx.appId, user.period, day, scope, key, user.bytes]);
     if (guild && activity) {
-      const at = ts.getTime();
-      const t = commandTimes.get(guild);
-      commandTimes.set(guild, { first: Math.min(t?.first ?? at, at), last: Math.max(t?.last ?? at, at) });
+      commandGuilds.push(guild);
+      commandTimes.push(ts);
     }
   };
 
@@ -607,23 +607,20 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
     }
   }
 
-  if (commandTimes.size > 0) {
-    const ids = [...commandTimes.keys()];
-    // Compared by time, as a batch isn't in event order: commands before a removal in the same batch count, later
-    // ones are a user install used in a server the bot has left.
-    const whileInstalled = 'CASE WHEN g.left_at IS NULL OR v.last <= g.left_at THEN v.last ELSE v.first END';
+  if (commandTimes.length > 0) {
+    // By time, as a batch isn't in event order: commands before a removal in the same batch count, later ones are a
+    // user install used in a server the bot has left.
     await tx.query(
       `UPDATE guilds g SET
          first_command_at = LEAST(coalesce(g.first_command_at, v.first), v.first),
-         last_command_at = GREATEST(coalesce(g.last_command_at, ${whileInstalled}), ${whileInstalled})
-       FROM unnest($2::bigint[], $3::timestamptz[], $4::timestamptz[]) AS v(guild_id, first, last)
-       WHERE g.app_id = $1 AND g.guild_id = v.guild_id AND (g.left_at IS NULL OR v.first <= g.left_at)`,
-      [
-        ctx.appId,
-        ids,
-        ids.map((id) => new Date(commandTimes.get(id)!.first)),
-        ids.map((id) => new Date(commandTimes.get(id)!.last)),
-      ],
+         last_command_at = GREATEST(coalesce(g.last_command_at, v.last), v.last)
+       FROM (SELECT c.guild_id, min(c.ts) AS first, max(c.ts) AS last
+               FROM unnest($2::bigint[], $3::timestamptz[]) AS c(guild_id, ts)
+               JOIN guilds k ON k.app_id = $1 AND k.guild_id = c.guild_id
+              WHERE k.left_at IS NULL OR c.ts <= k.left_at
+              GROUP BY c.guild_id) v
+       WHERE g.app_id = $1 AND g.guild_id = v.guild_id`,
+      [ctx.appId, commandGuilds, commandTimes],
     );
   }
 
