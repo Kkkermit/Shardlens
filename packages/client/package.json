@@ -1,6 +1,6 @@
 {
   "name": "@shardlens/client",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "description": "Typed client for reading a Shardlens collector from your own dashboard or scripts: every query, live numbers and the activity log. Zero dependencies, Web-standard APIs only.",
   "license": "MIT",
   "type": "module",

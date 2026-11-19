@@ -1,5 +1,59 @@
 # @shardlens/collector
 
+## 1.2.0
+
+### Minor Changes
+
+- e761c8c: A key set in the collector's environment replaces the one the same variable held before. When `SHARDLENS_INGEST_KEY`,
+  `SHARDLENS_READ_KEY` or `SHARDLENS_ACTIVITY_KEY` gets a new value, the collector revokes the old key as it starts, signs
+  out dashboard sessions made with it and notes it in the admin log. Before, the old key kept working until it was
+  revoked in Settings, which a collector without the dashboard (`init --dashboard own` or `none`) can't open, so a leaked
+  key could never be taken back. An embedded collector does the same when a key's line is deleted from `secrets.json`.
+  To switch keys without a gap, create the new one in **Settings → API keys** instead. `shardlens keys` says so.
+- e761c8c: Find who ran into a failure. A server's page lists the commands that fail there, and in audit mode it and each
+  command's page link to the Activity log narrowed to their failed runs.
+
+  - `GET /v1/audit/log` and its CSV export take `outcome`: `failed` (every outcome but `ok`), `error`, `timeout`,
+    `no_response` or `ok`. Two indexes that hold only failures keep the newest ones quick to read in a large log.
+  - The Activity log's filters are in the address, so other tools can link to it:
+    `/activity?guild=<server ID>&command=<name>&outcome=failed`. A user ID is never part of the address.
+  - Dashboard addresses are plain text. A Discord ID in a hand-written link used to be read as a number and rounded to
+    another ID; links made before this change still open.
+
+- e761c8c: Live streams (`/v1/live`) send a heartbeat comment every 15 seconds, whatever the database does. A reader can tell a
+  quiet stream from a connection that died without either end closing it, and proxies that close idle connections keep
+  the stream open. `@shardlens/client`'s `live()` gives up on a stream that sends nothing for 45 seconds.
+- e761c8c: The dashboard is optional, and nothing is kept for it alone.
+
+  - `SHARDLENS_DASHBOARD=off` (`dashboard: false` for an embedded collector) serves the API without the dashboard
+    pages, for a dashboard of your own or none. Ingest, queries, jobs, reports and alerts carry on; their Discord
+    messages no longer link to a dashboard.
+  - Activity keys (`slk_activity_…`, scope `activity`) read the activity log and top users in audit mode from the
+    server side of your own dashboard, and everything a read key reads. Create one under **Settings → API keys**, or
+    set `SHARDLENS_ACTIVITY_KEY`; an embedded collector returns one as `activityKey`. Each read is written to the
+    access log under the key's label. A read key is answered with `403 activity_key_required`; exporting, settings and
+    key management still need a Discord sign-in.
+  - `SHARDLENS_MODE` (`mode` for an embedded collector) chooses hashed or identified users in the collector's own
+    configuration, which is how audit mode is chosen without a Settings page. When it is set, Settings shows the mode
+    and can't change it.
+
+### Patch Changes
+
+- e761c8c: A server that ran a command and removed the bot within one batch of events (a short-lived install, or events replayed
+  after an outage) is counted as activated on the Growth page and keeps its last command time. Before, the command was
+  dropped from the server's record because the removal had already been applied. Commands a user install runs in a
+  server after the bot was removed are still not counted as that server's.
+- e761c8c: The collector stops while live streams are open. Closing waited for every open `/v1/live` stream, which never ends on
+  its own, so a collector with the Overview page (or a `live()` reader) open didn't exit on `SIGTERM`, and
+  `collector.close()` of an embedded collector kept the bot running. Open streams are now ended on shutdown, and readers
+  see the stream end.
+- e761c8c: The collector's start-up log says which mode users are recorded in (`mode`) and whether `SHARDLENS_MODE` set it
+  (`modeFrom`), so a log shows that audit mode took effect. The `.env` that `shardlens init` writes no longer says the
+  dashboard uses the bundled database next to the setting for your own, which read oddly without a dashboard.
+- e761c8c: The `command` and `reliability` queries answer 0, not `null`, for a count or share that is zero while runs happened:
+  a command that ran 6 times and never succeeded has `ok: 0`, and one that never deferred has `deferRate: 0`. `null`
+  still means nothing ran in the range, as documented.
+
 ## 1.1.0
 
 ### Minor Changes
