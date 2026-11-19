@@ -162,18 +162,20 @@ privacy policy.
 
 ## Packages
 
-| Package                                                          | Purpose                                                                         |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| [`@shardlens/discordjs`](packages/discordjs)                     | The discord.js adapter. This is the one you install                             |
-| [`@shardlens/http`](packages/http)                               | For HTTP-interaction bots: Cloudflare Workers, Deno, Bun, `@discordjs/core`     |
-| [`@shardlens/client`](packages/client)                           | Typed client that reads a collector from your own dashboard or scripts          |
-| [`@shardlens/exporter-prometheus`](packages/exporter-prometheus) | Bot-health metrics for Prometheus and Grafana                                   |
-| [`@shardlens/exporter-otel`](packages/exporter-otel)             | Bot-health metrics through OpenTelemetry                                        |
-| [`shardlens`](packages/cli)                                      | CLI: `init`, `keys`, `privacy`, `doctor`                                        |
-| [`@shardlens/collector`](apps/collector)                         | Ingest, rollups, query API and live stream; serves the dashboard; embedded mode |
-| [`@shardlens/core`](packages/core)                               | Zero-dependency SDK core: queue, hashing, batching, retries, redaction          |
-| [`@shardlens/schema`](packages/schema)                           | Wire format (zod), JSON Schema, metric and data-collected registers             |
-| [`apps/dashboard`](apps/dashboard)                               | The React dashboard                                                             |
+| Package                                                          | Purpose                                                                         | Downloads                                                                                                                                                                                                |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`@shardlens/discordjs`](packages/discordjs)                     | The discord.js adapter. This is the one you install                             | [![Monthly downloads of @shardlens/discordjs](https://img.shields.io/npm/dm/@shardlens/discordjs?label=&color=2a78d6)](https://www.npmjs.com/package/@shardlens/discordjs)                               |
+| [`@shardlens/http`](packages/http)                               | For HTTP-interaction bots: Cloudflare Workers, Deno, Bun, `@discordjs/core`     | [![Monthly downloads of @shardlens/http](https://img.shields.io/npm/dm/@shardlens/http?label=&color=2a78d6)](https://www.npmjs.com/package/@shardlens/http)                                              |
+| [`@shardlens/client`](packages/client)                           | Typed client that reads a collector from your own dashboard or scripts          | [![Monthly downloads of @shardlens/client](https://img.shields.io/npm/dm/@shardlens/client?label=&color=2a78d6)](https://www.npmjs.com/package/@shardlens/client)                                        |
+| [`@shardlens/exporter-prometheus`](packages/exporter-prometheus) | Bot-health metrics for Prometheus and Grafana                                   | [![Monthly downloads of @shardlens/exporter-prometheus](https://img.shields.io/npm/dm/@shardlens/exporter-prometheus?label=&color=2a78d6)](https://www.npmjs.com/package/@shardlens/exporter-prometheus) |
+| [`@shardlens/exporter-otel`](packages/exporter-otel)             | Bot-health metrics through OpenTelemetry                                        | [![Monthly downloads of @shardlens/exporter-otel](https://img.shields.io/npm/dm/@shardlens/exporter-otel?label=&color=2a78d6)](https://www.npmjs.com/package/@shardlens/exporter-otel)                   |
+| [`shardlens`](packages/cli)                                      | CLI: `init`, `keys`, `privacy`, `doctor`                                        | [![Monthly downloads of shardlens](https://img.shields.io/npm/dm/shardlens?label=&color=2a78d6)](https://www.npmjs.com/package/shardlens)                                                                |
+| [`@shardlens/collector`](apps/collector)                         | Ingest, rollups, query API and live stream; serves the dashboard; embedded mode | [![Monthly downloads of @shardlens/collector](https://img.shields.io/npm/dm/@shardlens/collector?label=&color=2a78d6)](https://www.npmjs.com/package/@shardlens/collector)                               |
+| [`@shardlens/core`](packages/core)                               | Zero-dependency SDK core: queue, hashing, batching, retries, redaction          | [![Monthly downloads of @shardlens/core](https://img.shields.io/npm/dm/@shardlens/core?label=&color=2a78d6)](https://www.npmjs.com/package/@shardlens/core)                                              |
+| [`@shardlens/schema`](packages/schema)                           | Wire format (zod), JSON Schema, metric and data-collected registers             | [![Monthly downloads of @shardlens/schema](https://img.shields.io/npm/dm/@shardlens/schema?label=&color=2a78d6)](https://www.npmjs.com/package/@shardlens/schema)                                        |
+| [`apps/dashboard`](apps/dashboard)                               | The React dashboard, shipped inside `@shardlens/collector`                      | Not published                                                                                                                                                                                            |
+
+Downloads are per month, from npm.
 
 ## Contributing
 
