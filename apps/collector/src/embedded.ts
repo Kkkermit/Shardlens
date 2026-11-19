@@ -5,7 +5,7 @@
  * optional: with `dashboard: false` it is an API for `@shardlens/client` only.
  */
 import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { closeSync, fchmodSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { startCollector } from './app.js';
 import type { Config } from './env.js';
@@ -88,10 +88,19 @@ interface Secrets {
 
 const newKey = (scope: string) => `slk_${scope}_${randomBytes(32).toString('base64url')}`;
 
+function readSecrets(file: string): Partial<Secrets> {
+  try {
+    return JSON.parse(readFileSync(file, 'utf8')) as Partial<Secrets>;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    throw error;
+  }
+}
+
 /** Secrets are generated once and stored next to the database, readable by the bot's user only. */
 function loadSecrets(dataDir: string): Secrets {
   const file = join(dataDir, 'secrets.json');
-  const stored = existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as Partial<Secrets>) : {};
+  const stored = readSecrets(file);
   const secrets: Secrets = {
     sessionSecret: stored.sessionSecret ?? randomBytes(48).toString('base64url'),
     settingsKey: stored.settingsKey ?? randomBytes(32).toString('base64'),
@@ -101,11 +110,17 @@ function loadSecrets(dataDir: string): Secrets {
     activityKey: stored.activityKey ?? newKey('activity'),
   };
   if (Object.keys(secrets).every((name) => name in stored)) return secrets;
-  writeFileSync(file, `${JSON.stringify(secrets, null, 2)}\n`, { mode: 0o600 });
+  // Through one descriptor, so the file made private is the file written, even if the path is swapped meanwhile.
+  const fd = openSync(file, 'w', 0o600);
   try {
-    chmodSync(file, 0o600);
-  } catch {
-    // not supported on every platform
+    try {
+      fchmodSync(fd, 0o600);
+    } catch {
+      // not supported on every platform
+    }
+    writeFileSync(fd, `${JSON.stringify(secrets, null, 2)}\n`);
+  } finally {
+    closeSync(fd);
   }
   return secrets;
 }

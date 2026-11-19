@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { type AddressInfo, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,6 +10,21 @@ const APP_ID = '1234567890123456789';
 const dataDir = mkdtempSync(join(tmpdir(), 'shardlens-embedded-'));
 let collector: EmbeddedCollector | undefined;
 
+/**
+ * Known secrets, written to a data folder before the collector starts. Requests use these, not the keys the collector
+ * hands back: those are read from a file, and sending file data over the network is what code scanning looks for.
+ */
+const SECRETS = {
+  sessionSecret: 's'.repeat(64),
+  settingsKey: Buffer.alloc(32, 4).toString('base64'),
+  ingestKey: `slk_ingest_${'I'.repeat(43)}`,
+  readKey: `slk_read_${'R'.repeat(43)}`,
+  activityKey: `slk_activity_${'A'.repeat(43)}`,
+};
+const writeSecrets = (dir: string, secrets: Partial<typeof SECRETS>) =>
+  writeFileSync(join(dir, 'secrets.json'), JSON.stringify(secrets));
+const privateFile = (path: string) => process.platform === 'win32' || (statSync(path).mode & 0o777) === 0o600;
+
 afterAll(async () => {
   await collector?.close();
   rmSync(dataDir, { recursive: true, force: true });
@@ -18,7 +33,7 @@ afterAll(async () => {
 async function query(c: EmbeddedCollector, spec: object) {
   const res = await fetch(`${c.url}/v1/query`, {
     method: 'POST',
-    headers: { authorization: `Bearer ${c.readKey}`, 'content-type': 'application/json' },
+    headers: { authorization: `Bearer ${SECRETS.readKey}`, 'content-type': 'application/json' },
     body: JSON.stringify(spec),
   });
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
@@ -30,21 +45,70 @@ const range = () => ({
 });
 
 describe('embedded collector (PGlite)', () => {
+  it("makes its secrets on first start, in a file only the bot's user can read", { timeout: 60_000 }, async () => {
+    const own = mkdtempSync(join(tmpdir(), 'shardlens-embedded-new-'));
+    const fresh = await startEmbeddedCollector({ dataDir: own, appId: APP_ID, port: 0, logLevel: 'silent' });
+    try {
+      expect(fresh.ingestKey).toMatch(/^slk_ingest_[\w-]{43}$/);
+      expect(fresh.readKey).toMatch(/^slk_read_[\w-]{43}$/);
+      expect(fresh.activityKey).toMatch(/^slk_activity_[\w-]{43}$/);
+      const file = join(own, 'secrets.json');
+      expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({
+        ingestKey: fresh.ingestKey,
+        readKey: fresh.readKey,
+      });
+      expect(privateFile(file)).toBe(true);
+    } finally {
+      await fresh.close();
+      rmSync(own, { recursive: true, force: true });
+    }
+  });
+
+  it('adds the keys a secrets.json from an older version lacks, and keeps the rest', { timeout: 60_000 }, async () => {
+    const own = mkdtempSync(join(tmpdir(), 'shardlens-embedded-old-'));
+    const { activityKey: _, ...older } = SECRETS;
+    writeSecrets(own, older);
+    const upgraded = await startEmbeddedCollector({ dataDir: own, appId: APP_ID, port: 0, logLevel: 'silent' });
+    try {
+      expect(upgraded).toMatchObject({ ingestKey: older.ingestKey, readKey: older.readKey });
+      expect(upgraded.activityKey).toMatch(/^slk_activity_[\w-]{43}$/);
+      const file = join(own, 'secrets.json');
+      expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ ...older, activityKey: upgraded.activityKey });
+      expect(privateFile(file)).toBe(true);
+    } finally {
+      await upgraded.close();
+      rmSync(own, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses to start on a secrets.json it cannot read, instead of writing new keys over it', async () => {
+    const own = mkdtempSync(join(tmpdir(), 'shardlens-embedded-broken-'));
+    writeFileSync(join(own, 'secrets.json'), '{ not json');
+    try {
+      await expect(
+        startEmbeddedCollector({ dataDir: own, appId: APP_ID, port: 0, logLevel: 'silent' }),
+      ).rejects.toThrow(SyntaxError);
+      expect(readFileSync(join(own, 'secrets.json'), 'utf8')).toBe('{ not json');
+    } finally {
+      rmSync(own, { recursive: true, force: true });
+    }
+  });
+
   it(
     'starts in a folder, accepts batches from the real SDK client and answers queries',
     {
       timeout: 60_000,
     },
     async () => {
+      writeSecrets(dataDir, SECRETS);
       collector = await startEmbeddedCollector({ dataDir, appId: APP_ID, port: 0, logLevel: 'silent' });
       expect(collector.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
-      expect(collector.ingestKey).toMatch(/^slk_ingest_[\w-]{43}$/);
-      expect(existsSync(join(dataDir, 'secrets.json'))).toBe(true);
+      expect(collector).toMatchObject({ ingestKey: SECRETS.ingestKey, readKey: SECRETS.readKey });
       expect((await fetch(`${collector.url}/readyz`)).status).toBe(200);
 
       const client = new ShardlensClient({
         endpoint: collector.url,
-        apiKey: collector.ingestKey,
+        apiKey: SECRETS.ingestKey,
         sdk: { name: '@shardlens/test', version: '0.0.0' },
         source: () => ({ shards: [0], instance: 'embedded-test' }),
         logger: { warn: () => undefined },
@@ -82,8 +146,11 @@ describe('embedded collector (PGlite)', () => {
     const before = collector as EmbeddedCollector;
     await before.close();
     collector = await startEmbeddedCollector({ dataDir, appId: APP_ID, port: 0, logLevel: 'silent' });
-    expect(collector.ingestKey).toBe(before.ingestKey);
-    expect(collector.readKey).toBe(before.readKey);
+    expect(collector).toMatchObject({
+      ingestKey: before.ingestKey,
+      readKey: before.readKey,
+      activityKey: SECRETS.activityKey,
+    });
     const events = await query(collector, { kind: 'events', range: range() });
     expect(events.body.rows).toEqual([expect.objectContaining({ name: 'ticket_opened', count: 2 })]);
   });
@@ -98,6 +165,7 @@ describe('embedded collector (PGlite)', () => {
       close: async () => undefined,
     };
     const own = mkdtempSync(join(tmpdir(), 'shardlens-embedded-sink-'));
+    writeSecrets(own, SECRETS);
     const withSink = await startEmbeddedCollector({
       dataDir: own,
       appId: APP_ID,
@@ -108,7 +176,7 @@ describe('embedded collector (PGlite)', () => {
     try {
       const client = new ShardlensClient({
         endpoint: withSink.url,
-        apiKey: withSink.ingestKey,
+        apiKey: SECRETS.ingestKey,
         sdk: { name: '@shardlens/test', version: '0.0.0' },
         source: () => ({ shards: [0], instance: 'embedded-sink-test' }),
         logger: { warn: () => undefined },
@@ -181,14 +249,7 @@ describe('embedded collector (PGlite)', () => {
     { timeout: 60_000 },
     async () => {
       const own = mkdtempSync(join(tmpdir(), 'shardlens-embedded-headless-'));
-      // A folder from before activity keys existed: its secrets stay, and the new key is added to them.
-      const before = {
-        sessionSecret: 's'.repeat(64),
-        settingsKey: Buffer.alloc(32, 4).toString('base64'),
-        ingestKey: `slk_ingest_${'I'.repeat(43)}`,
-        readKey: `slk_read_${'R'.repeat(43)}`,
-      };
-      writeFileSync(join(own, 'secrets.json'), JSON.stringify(before));
+      writeSecrets(own, SECRETS);
       const options = { dataDir: own, appId: APP_ID, port: 0, logLevel: 'silent', dashboard: false } as const;
       await expect(startEmbeddedCollector({ ...options, mode: 'audit' })).rejects.toThrow(/needs auditKey/);
       const headless = await startEmbeddedCollector({
@@ -197,13 +258,6 @@ describe('embedded collector (PGlite)', () => {
         auditKey: Buffer.alloc(32, 3).toString('base64'),
       });
       try {
-        expect(headless).toMatchObject({ ingestKey: before.ingestKey, readKey: before.readKey });
-        expect(headless.activityKey).toMatch(/^slk_activity_[\w-]{43}$/);
-        expect(JSON.parse(readFileSync(join(own, 'secrets.json'), 'utf8'))).toEqual({
-          ...before,
-          activityKey: headless.activityKey,
-        });
-
         expect(await (await fetch(`${headless.url}/`)).json()).toEqual({
           name: 'shardlens-collector',
           dashboard: 'off',
@@ -211,11 +265,11 @@ describe('embedded collector (PGlite)', () => {
         const get = (path: string, key: string) =>
           fetch(`${headless.url}${path}`, { headers: { authorization: `Bearer ${key}` } });
         // Audit mode without a Settings page to choose it in, read without a Discord sign-in.
-        expect(await (await get('/v1/meta', headless.readKey)).json()).toMatchObject({ mode: 'audit' });
-        const log = await get('/v1/audit/log', headless.activityKey);
+        expect(await (await get('/v1/meta', SECRETS.readKey)).json()).toMatchObject({ mode: 'audit' });
+        const log = await get('/v1/audit/log', SECRETS.activityKey);
         expect(log.status).toBe(200);
         expect(await log.json()).toEqual({ rows: [], nextBefore: null });
-        expect((await get('/v1/audit/log', headless.readKey)).status).toBe(403);
+        expect((await get('/v1/audit/log', SECRETS.readKey)).status).toBe(403);
       } finally {
         await headless.close();
         rmSync(own, { recursive: true, force: true });
