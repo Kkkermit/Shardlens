@@ -16,7 +16,7 @@
       "entry": ["e2e/**/*.ts"]
     },
     "apps/docs": {
-      "entry": ["scripts/*.mjs", "snippets/*.ts", "src/content/**/*.mdx"]
+      "entry": ["scripts/*.mjs", "snippets/*.ts", "src/content/**/*.mdx", "src/route-data.ts"]
     },
     "examples/*": {
       "entry": ["src/*.ts"]
