@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Web-standard globals only (fetch, URL, AbortSignal, streams): no Node types, so Node-only APIs fail to compile.
+    "lib": ["es2023", "webworker"],
+    "types": []
+  },
+  "include": ["src", "test", "tsdown.config.ts"]
+}

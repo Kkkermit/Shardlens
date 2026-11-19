@@ -357,10 +357,13 @@ describe('interactions', () => {
     await settle();
     await lens.flush();
 
-    const [first, second] = collector.events('interaction');
-    expect(first).toMatchObject({ outcome: 'ok', handlerMs: 1234 });
-    expect(second).toMatchObject({ outcome: 'error', errorClass: 'RangeError' });
-    expect(second?.handlerMs).toEqual(expect.any(Number)); // measured from handlerStarted()
+    // By outcome, not by position: each event waits for its user hash, and hashes can finish in either order.
+    const events = collector.events('interaction');
+    expect(events).toHaveLength(2);
+    expect(events.find((e) => e.outcome === 'ok')).toMatchObject({ handlerMs: 1234 });
+    const failedEvent = events.find((e) => e.outcome === 'error');
+    expect(failedEvent).toMatchObject({ errorClass: 'RangeError' });
+    expect(failedEvent?.handlerMs).toEqual(expect.any(Number)); // measured from handlerStarted()
     expect(collector.raw()).not.toContain('secret detail');
     expect(lens.stats().internalErrors).toEqual({});
   });

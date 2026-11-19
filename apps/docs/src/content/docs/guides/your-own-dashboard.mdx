@@ -5,41 +5,77 @@ sidebar:
   order: 10.5
 ---
 
-import { Aside, Code } from '@astrojs/starlight/components';
+import { Aside, Code, TabItem, Tabs } from '@astrojs/starlight/components';
+import activity from '../../../../snippets/own-dashboard-activity.ts?raw';
 import ownDashboard from '../../../../snippets/own-dashboard.ts?raw';
 
 Already have a web dashboard for your bot? You don't have to send people to a second one. Everything the Shardlens
-dashboard shows comes from one endpoint, `POST /v1/query`, and your own backend can call it with a **read key**. The
-collector keeps doing the collecting, storing and counting; you decide how it looks.
+dashboard shows is an answer from the collector's API, and `@shardlens/client` asks for the same answers from your own
+backend. The collector keeps doing the collecting, storing and counting; you decide how it looks.
 
-## 1. Create a read key
+## 1. Get a read key
 
-In the Shardlens dashboard, **Settings → API keys → New read key**. It is shown once. A read key can run
-queries and nothing else: it can't send events, change settings or see who ran a command.
+Setting up from scratch, `npx shardlens init … --dashboard own` turns the Shardlens dashboard off and writes
+`dashboard.env` with the two settings your dashboard's server needs, `SHARDLENS_URL` and `SHARDLENS_READ_KEY`
+([Choose your setup](../../getting-started/choose-your-setup/)).
 
-Put it in your dashboard's server environment as `SHARDLENS_READ_KEY`, next to `SHARDLENS_URL`.
+With a collector that is already running, use `SHARDLENS_READ_KEY` from its `.env`, or create another key in the
+Shardlens dashboard under **Settings → API keys → New read key** (shown once). You can keep the Shardlens dashboard
+on as well as your own.
+
+A read key can run queries and nothing else: it can't send events, change settings or see who ran a command.
 
 <Aside type="caution" title="Server side only">
   Call the collector from your backend, never from browser code: anything in a page can be read by whoever opens it.
-  The collector sends no CORS headers for the same reason.
+  The collector sends no CORS headers for the same reason. The key travels with every request, so the client accepts
+  plain HTTP to `localhost` only: from another container or machine, use the collector's HTTPS address.
 </Aside>
 
 ## 2. Ask for what you want to show
 
+<Tabs syncKey="pkg">
+  <TabItem label="pnpm">`pnpm add @shardlens/client`</TabItem>
+  <TabItem label="npm">`npm install @shardlens/client`</TabItem>
+  <TabItem label="yarn">`yarn add @shardlens/client`</TabItem>
+  <TabItem label="bun">`bun add @shardlens/client`</TabItem>
+</Tabs>
+
+`@shardlens/client` has no dependencies and uses `fetch`, so it runs in Node.js, Bun, Deno, Cloudflare Workers and
+Next.js route handlers.
+
 <Code code={ownDashboard} lang="ts" title="lib/shardlens.ts" />
 
 Your front end then calls your own route (`/api/stats/commands` above) and renders the rows with whatever components
-and chart library you already use.
+and chart library you already use. Answers are typed, and a failed request throws a `ShardlensClientError` with the
+HTTP status and the collector's error code.
+
+Not on JavaScript? The client is a thin layer over `POST /v1/query` with `Authorization: Bearer <read key>` and a JSON
+body, which any language can send: `{ "kind": "commands", "range": { "from": "…", "to": "…" } }`.
+
+## Who ran what
+
+In [audit mode](../audit-mode/), your own pages can show the activity log too. That takes an **activity key**
+(`slk_activity_…`) instead of a read key: it reads everything a read key does, and who ran what.
+
+<Code code={activity} lang="ts" title="lib/shardlens-activity.ts" />
+
+`npx shardlens init … --dashboard own --identify-users` creates one and puts it in `dashboard.env`; with the
+Shardlens dashboard on, create one under **Settings → API keys → New activity key**. The
+[guardrails of audit mode](../audit-mode/#guardrails) apply to a key as they do to a person: every read is written
+to the access log under the key's label, a user is looked up by exact ID only, and nothing groups by user. Put these
+routes behind your own sign-in, for your own staff.
 
 ## What you can ask for
 
-Every query is a JSON object with a `kind`. Ranges are ISO timestamps, at most 400 days apart.
+Every query has a `kind`, and the client has a method named after each (`shardlens.overview()`,
+`shardlens.eventProps({ … })`), plus `shardlens.query({ kind, … })` for any of them. Ranges are ISO timestamps, at
+most 400 days apart; `lastDays(30)` makes one.
 
 | `kind`                              | What comes back                                                                                          |
 | ----------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | `overview`                          | The app, runs and failures per day for the last 30 days, the server count, unique users this period, and the state of each bot process's SDK |
 | `commands`                          | Every command: runs, change on the previous period, failure rate, p95, servers, unique users, and the kinds it ran as (`chat_input`, `message_command`, menus) |
-| `command`                           | One command in depth: runs per kind, subcommands, options, channel types, member tiers, languages, top servers, latency |
+| `command`                           | One command in depth: runs by outcome (ok, error, missed deadline, no response), how often it deferred or took over 3 s, runs per kind, subcommands, options, channel types, member tiers, languages, top servers, latency |
 | `series`                            | A metric over time (`interval`: minute, hour, day, week or month), optionally split with `groupBy`       |
 | `top`                               | The top values of one dimension: commands, servers, languages, outcomes                                  |
 | `heatmap`                           | Hour-by-weekday counts in your time zone                                                                 |
@@ -53,10 +89,26 @@ Every query is a JSON object with a `kind`. Ranges are ISO timestamps, at most 4
 | `funnel`, `retention`               | Conversion through steps, and cohort retention                                                           |
 
 `series` and `top` take `filters`, so one server's numbers are a filter on `guild` away, as in `topCommandsIn` above.
-The full schema of every query is in the [HTTP API reference](../../reference/http-api/) and at `/openapi.json` on
+Add a filter on `outcome` for the commands that fail there (`failingCommandsIn`), and ask for `command` to build a
+page per command (`commandDetail`). The full schema of every query is in the [HTTP API reference](../../reference/http-api/) and at `/openapi.json` on
 your collector.
 
 There is no `groupBy: 'user'` and no per-user query: that is by design, in every mode.
+
+## Linking to Shardlens for the rest
+
+The pages of the Shardlens dashboard have plain addresses, so yours can link to them instead of rebuilding them:
+
+| Address                                                    | Opens                                                    |
+| ---------------------------------------------------------- | -------------------------------------------------------- |
+| `/commands/<name>`                                         | One command in depth                                     |
+| `/servers/<server ID>`                                     | One server: runs, top and failing commands, install history |
+| `/activity?guild=<server ID>&outcome=failed`               | Who ran into a failure in that server ([audit mode](../audit-mode/) only) |
+| `/activity?command=<name>&outcome=failed`                  | Who ran into a failure of that command (audit mode only) |
+
+This needs the Shardlens dashboard on (`SHARDLENS_DASHBOARD=on`, the default), and the last two need a Discord
+sign-in there. `outcome` is `failed`, `error`, `timeout`, `no_response` or `ok`. A user ID is never part of an
+address.
 
 ## What you can split a metric by
 
@@ -101,7 +153,11 @@ everything else.
 
 - **Cache.** Numbers are rolled up once a minute, so caching a response for 60 seconds loses nothing.
 - **Limits.** `/v1/query` allows 600 requests a minute per address and answers `429` with `Retry-After` past that.
-- **Rotate** the key from **Settings → API keys** if it ever leaks: create a new one, deploy it, revoke the old one.
+  `/v1/live` keeps up to 10 streams open per address (100 in all) and answers `503` with `{ "error": "busy" }` past
+  that: share one `live()` between your visitors instead of opening one each.
+- **Replace** the key if it ever leaks: put a new one (`npx shardlens keys --scope read`) in the collector's `.env` as
+  `SHARDLENS_READ_KEY` and restart the collector. The old one stops working then. With the Shardlens dashboard on, you
+  can instead create a new key in **Settings → API keys**, deploy it, then revoke the old one, with no gap.
 
 ## Other ways to get the numbers out
 
@@ -109,4 +165,5 @@ everything else.
   [alerts](../alerts/) tell you when something breaks.
 - **Into Grafana:** the [Prometheus and OpenTelemetry exporters](../grafana/) send bot-health metrics to the
   monitoring you already run, with or without a collector.
-- **Live:** `GET /v1/live` is a Server-Sent Events stream of interactions per minute, p95 and shard state.
+- **Live:** `shardlens.live()` follows `GET /v1/live`, a Server-Sent Events stream of interactions per minute, p95
+  and shard state: `for await (const update of shardlens.live({ signal })) { … }`.

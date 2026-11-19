@@ -2,6 +2,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRootRoute, createRoute, createRouter, RouterProvider } from '@tanstack/react-router';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { parseActivitySearch } from './activity-search';
+import { parseSearch, stringifySearch } from './address';
 import { ApiError, onUnauthorized } from './api';
 import { ActivityPage } from './routes/activity';
 import { AlertsPage } from './routes/alerts';
@@ -43,13 +45,18 @@ const routes = [
   createRoute({ getParentRoute: () => rootRoute, path: '/reliability', component: ReliabilityPage }),
   createRoute({ getParentRoute: () => rootRoute, path: '/premium', component: PremiumPage }),
   createRoute({ getParentRoute: () => rootRoute, path: '/events', component: EventsPage }),
-  createRoute({ getParentRoute: () => rootRoute, path: '/activity', component: ActivityPage }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/activity',
+    component: ActivityPage,
+    validateSearch: parseActivitySearch,
+  }),
   createRoute({ getParentRoute: () => rootRoute, path: '/alerts', component: AlertsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: '/reports', component: ReportsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: '/settings', component: SettingsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: '/login', component: OverviewPage }),
 ];
-const router = createRouter({ routeTree: rootRoute.addChildren(routes) });
+const router = createRouter({ routeTree: rootRoute.addChildren(routes), parseSearch, stringifySearch });
 
 declare module '@tanstack/react-router' {
   interface Register {

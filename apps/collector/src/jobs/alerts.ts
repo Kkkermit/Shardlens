@@ -106,7 +106,7 @@ function breaches(value: number, comparator: string, threshold: number): boolean
 /** Evaluates every enabled alert rule; notifies at most once per rule per 30 minutes. */
 export async function runAlerts(
   db: Db,
-  opts: { settingsKey: string; publicUrl: URL; fetchImpl?: typeof fetch },
+  opts: { settingsKey: string; dashboardUrl: URL | undefined; fetchImpl?: typeof fetch },
   now = new Date(),
 ): Promise<number> {
   const cipher = auditCipher(opts.settingsKey);
@@ -147,7 +147,7 @@ export async function runAlerts(
       {
         title: `🔔 ${rule.name}`,
         body: `${meta.label}: **${meta.unit(value)}** (rule: ${rule.comparator} ${meta.unit(rule.threshold)}, last ${minutes} min)`,
-        link: new URL('/reliability', opts.publicUrl).toString(),
+        link: opts.dashboardUrl && new URL('/reliability', opts.dashboardUrl).toString(),
         critical: true,
       },
       opts.fetchImpl,

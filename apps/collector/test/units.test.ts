@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { batchJsonSchema } from '@shardlens/schema';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Db } from '../src/db.js';
-import { ENV_VARIABLES, loadConfig } from '../src/env.js';
+import { dashboardUrl, ENV_VARIABLES, loadConfig } from '../src/env.js';
 import { parseUserHash } from '../src/ingest/codes.js';
 import { startJobs } from '../src/jobs/scheduler.js';
 import { LiveHub } from '../src/live.js';
@@ -67,6 +67,36 @@ describe('loadConfig', () => {
 
   it('needs both Discord OAuth variables or neither', () => {
     expect(() => loadConfig({ ...base, DISCORD_CLIENT_ID: '1234567890123456789' })).toThrow(/DISCORD_CLIENT_SECRET/);
+  });
+
+  it('serves the dashboard unless told not to, and then has no dashboard to link to', () => {
+    const usual = loadConfig(base);
+    expect(usual).toMatchObject({ dashboard: true, mode: undefined, activityKey: undefined });
+    expect(dashboardUrl(usual)?.href).toBe('https://stats.example.com/');
+    const headless = loadConfig({ ...base, SHARDLENS_DASHBOARD: 'off' });
+    expect(headless.dashboard).toBe(false);
+    expect(dashboardUrl(headless)).toBeUndefined();
+    expect(() => loadConfig({ ...base, SHARDLENS_DASHBOARD: 'no' })).toThrow(/SHARDLENS_DASHBOARD/);
+  });
+
+  it('takes the mode from the environment, and audit mode only with the key that encrypts it', () => {
+    const auditKey = Buffer.alloc(32, 2).toString('base64');
+    const activityKey = `slk_activity_${'A'.repeat(43)}`;
+    expect(
+      loadConfig({
+        ...base,
+        SHARDLENS_MODE: 'audit',
+        SHARDLENS_AUDIT_KEY: auditKey,
+        SHARDLENS_ACTIVITY_KEY: activityKey,
+      }),
+    ).toMatchObject({ mode: 'audit', activityKey });
+    expect(loadConfig({ ...base, SHARDLENS_MODE: 'privacy' }).mode).toBe('privacy');
+    expect(() => loadConfig({ ...base, SHARDLENS_MODE: 'audit' })).toThrow(
+      /SHARDLENS_MODE=audit needs SHARDLENS_AUDIT_KEY/,
+    );
+    expect(() => loadConfig({ ...base, SHARDLENS_ACTIVITY_KEY: `slk_read_${'A'.repeat(43)}` })).toThrow(
+      /SHARDLENS_ACTIVITY_KEY/,
+    );
   });
 });
 
@@ -159,7 +189,7 @@ describe('docs stay in step with the code', () => {
       expect(
         parameters.map((parameter) => parameter.name),
         path,
-      ).toEqual(['from', 'to', 'before', 'command', 'guild', 'user', 'limit']);
+      ).toEqual(['from', 'to', 'before', 'command', 'guild', 'user', 'outcome', 'limit']);
     }
   });
 });
@@ -220,7 +250,7 @@ describe('job scheduler', () => {
     const jobs = startJobs(
       db,
       { info: () => undefined, error: (entry) => void errors.push(entry) },
-      { settingsKey: Buffer.alloc(32, 1).toString('base64'), publicUrl: new URL('https://stats.example.com') },
+      { settingsKey: Buffer.alloc(32, 1).toString('base64'), dashboardUrl: new URL('https://stats.example.com') },
     );
 
     await vi.advanceTimersByTimeAsync(10.5 * 60_000);
@@ -359,6 +389,48 @@ describe('live tiles stream', () => {
     }
   });
 
+  it('sends a heartbeat every 15 seconds, also while the database keeps updates from going out', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const db = { query: () => new Promise(() => undefined) } as unknown as Db;
+    const config = loadConfig({ ...base, SHARDLENS_DEMO: 'true', LOG_LEVEL: 'silent' });
+    const app = await buildServer({ config, db, keys: new KeyStore(db), live: new LiveHub(db) });
+    const address = await app.listen({ port: 0, host: '127.0.0.1' });
+    const aborted = new AbortController();
+    try {
+      const res = await fetch(`${address}/v1/live`, { signal: aborted.signal });
+      const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+      const decoder = new TextDecoder();
+      let text = decoder.decode((await reader.read()).value);
+      expect(text).not.toContain('heartbeat');
+      vi.advanceTimersByTime(15_000);
+      while (!text.includes(': heartbeat\n\n')) text += decoder.decode((await reader.read()).value);
+      expect(text).not.toContain('event: tiles');
+    } finally {
+      vi.useRealTimers();
+      aborted.abort();
+      await app.close();
+    }
+  });
+
+  it(
+    'ends open streams when the server closes, instead of waiting for them for ever',
+    { timeout: 10_000 },
+    async () => {
+      const db = { query: async () => ({ rows: [] }) } as unknown as Db;
+      const config = loadConfig({ ...base, SHARDLENS_DEMO: 'true', LOG_LEVEL: 'silent' });
+      const app = await buildServer({ config, db, keys: new KeyStore(db), live: new LiveHub(db) });
+      const address = await app.listen({ port: 0, host: '127.0.0.1' });
+      const res = await fetch(`${address}/v1/live`);
+      const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+      await reader.read();
+      const closed = app.close().then(() => 'closed');
+      const late = new Promise((resolve) => setTimeout(resolve, 3_000, 'still open'));
+      expect(await Promise.race([closed, late])).toBe('closed');
+      let done = false;
+      while (!done) ({ done } = await reader.read());
+    },
+  );
+
   it('waits for a slow database instead of starting another refresh every second', { timeout: 10_000 }, async () => {
     let queries = 0;
     const db = {
@@ -416,6 +488,14 @@ describe('KeyStore', () => {
     expect(await keys.verify(realKey, 'read')).toBeUndefined();
     expect(await keys.verify(undefined, 'ingest')).toBeUndefined();
     expect(lookups()).toBe(0);
+  });
+
+  it('accepts a key of any of the scopes asked for, and of no other', async () => {
+    const { keys, lookups } = store();
+    expect(await keys.verify(realKey, ['read', 'ingest'])).toMatchObject({ scope: 'ingest' });
+    expect(await keys.verify(realKey, ['read', 'activity'])).toBeUndefined();
+    expect(await keys.verify(`slk_activity_${'A'.repeat(43)}`, ['read', 'ingest'])).toBeUndefined();
+    expect(lookups()).toBe(1);
   });
 
   it('keeps real keys cached through a flood of made-up ones', async () => {

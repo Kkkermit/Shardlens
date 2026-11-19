@@ -10,7 +10,10 @@ Needs Node.js 22.12 or newer; no dependencies.
 # Write docker-compose.yml, a Caddyfile, a .env with generated secrets and keys, and bot.env with your bot's two settings
 npx shardlens init --domain stats.example.com --app-id 123456789012345678
 
-# Print a new API key (ingest or read)
+# The same, for a dashboard of your own (also writes dashboard.env for it) or for none
+npx shardlens init --domain stats.example.com --app-id 123456789012345678 --dashboard own
+
+# Print a new API key (ingest, read or activity)
 npx shardlens keys --scope read
 
 # Print a privacy-policy paragraph that matches your setup

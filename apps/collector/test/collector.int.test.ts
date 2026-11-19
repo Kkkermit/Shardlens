@@ -11,7 +11,7 @@ import { evaluateMetric } from '../src/jobs/alerts.js';
 import { backfillRollups, runRollups, runUniques } from '../src/jobs/rollups.js';
 import { runRetention, runSalts } from '../src/jobs/scheduler.js';
 import { allowedUser } from '../src/routes/auth.js';
-import { KeyStore } from '../src/security/auth.js';
+import { KeyStore, seedKey } from '../src/security/auth.js';
 import { buildServer } from '../src/server.js';
 import { activeSalts } from '../src/storage/maintenance.js';
 import { periodIdent } from '../src/storage/periods.js';
@@ -286,6 +286,12 @@ describe('ingest', () => {
       expect.stringMatching(/^Discord sign-in works once the bot has reported/),
     ]);
     expect(await signInProblems(h.db, { ...discordOnly, extraAdmins: ['334455667788990011'] })).toHaveLength(1);
+    // Without the dashboard there is no Settings page to create a key in: a collector nothing can read is said so.
+    expect(await signInProblems(h.db, { ...discordOnly, dashboard: false })).toEqual([
+      expect.stringMatching(/^No ingest key/),
+      expect.stringMatching(/^No read key, and the dashboard is off/),
+    ]);
+    expect(await signInProblems(h.db, { ...h.config, dashboard: false })).toEqual([]);
 
     const deps = { config: discordOnly, db: h.db } as unknown as Parameters<typeof allowedUser>[0];
     expect(await allowedUser(deps, fresh.appId, '334455667788990011')).toBe('bot_not_reported');
@@ -660,7 +666,10 @@ describe('rollups, uniques and queries', () => {
     expect(reliability.totals).toMatchObject({ runs: 105, missedDeadlines: 5, noResponse: 3 });
     expect(await evaluateMetric(h.db, APP_ID, 'missed_deadline_rate', 3_600)).toBeCloseTo((100 * 5) / 105);
     const detail = (await query(h.app, { kind: 'command', name: 'ping', range: range() })).json();
-    expect(detail.totals).toMatchObject({ runs: 5 });
+    // None succeeded, failed or deferred: that is 0, not unknown.
+    expect(detail.totals).toMatchObject({ runs: 5, ok: 0, error: 0, timeout: 2, noResponse: 3, deferRate: 0 });
+    const never = (await query(h.app, { kind: 'command', name: 'never-ran', range: range() })).json();
+    expect(never.totals).toMatchObject({ runs: null, ok: null, error: null, deferRate: null });
     expect(detail.subcommands).toEqual([]);
   });
 
@@ -862,6 +871,41 @@ describe('servers and snapshots', () => {
     );
     const detected = await h.db.query('SELECT count(*)::int AS n FROM guild_events WHERE detected_at_startup');
     expect(detected.rows[0].n).toBe(0);
+  });
+
+  it('counts the commands a server ran before removing the bot, when both arrive in one batch', async () => {
+    const { hasher, period } = await sdkHasher(h.app);
+    const user = (await hasher.hash('300000000000000009', period)) as string;
+    const [tried, never] = [snowflakeOnShard(0, 1, 71), snowflakeOnShard(0, 1, 72)];
+    const at = Date.now() - 120_000;
+    const event = (offset: number, fields: object) => ({ id: uuidv7(at + offset), ts: at + offset, ...fields });
+    const join = (guild: string) =>
+      event(0, { type: 'guild_join', info: guildInfo(guild, { joinedAt: at }), detectedAtStartup: false });
+    const leave = (guild: string) => event(20_000, { type: 'guild_leave', guild, detectedAtStartup: false });
+    const res = await ingest(
+      h.app,
+      envelope([
+        join(tried),
+        join(never),
+        // Not in the order they happened: the SDK sends server events ahead of commands.
+        leave(tried),
+        leave(never),
+        interaction(user, event(10_000, { guild: tried })),
+        interaction(user, event(15_000, { guild: tried })),
+        // After the removal, a user install run in those servers: not the servers using the bot.
+        interaction(user, event(30_000, { guild: tried })),
+        interaction(user, event(30_000, { guild: never })),
+      ]),
+    );
+    expect(res.json()).toMatchObject({ accepted: 8 });
+    const rows = await h.db.query<{ id: string; first: Date | null; last: Date | null }>(
+      `SELECT guild_id::text AS id, first_command_at AS first, last_command_at AS last
+         FROM guilds WHERE guild_id = ANY($1::bigint[])`,
+      [[tried, never]],
+    );
+    const times = Object.fromEntries(rows.rows.map((r) => [r.id, [r.first?.getTime(), r.last?.getTime()]]));
+    // The last command before the removal, not the first: the one after it is left out.
+    expect(times).toEqual({ [tried]: [at + 10_000, at + 15_000], [never]: [undefined, undefined] });
   });
 
   it('ignores a snapshot of a shard outside the layout instead of counting it toward a new one', async () => {
@@ -1300,6 +1344,44 @@ describe('abuse limits', () => {
   });
 });
 
+describe('keys from the environment', () => {
+  it('revokes the key a variable held before, and only when a new value arrives', async () => {
+    const [first, second] = ['E', 'F'].map((c) => `slk_read_${c.repeat(43)}`) as [string, string];
+    const reads = async (key: string) =>
+      (await h.app.inject({ method: 'GET', url: '/v1/meta', headers: { authorization: `Bearer ${key}` } })).statusCode;
+    await seedKey(h.db, APP_ID, first, 'SHARDLENS_READ_KEY');
+    const session = await h.app.inject({
+      method: 'POST',
+      url: '/auth/read-key',
+      headers: { 'x-shardlens-csrf': '1' },
+      payload: { key: first },
+    });
+    expect(session.statusCode).toBe(200);
+    expect(await reads(first)).toBe(200);
+
+    // The owner replaces a leaked key in .env and restarts.
+    await seedKey(h.db, APP_ID, second, 'SHARDLENS_READ_KEY');
+    const keys = new KeyStore(h.db);
+    expect(await keys.verify(first, 'read')).toBeUndefined();
+    expect(await keys.verify(second, 'read')).toBeDefined();
+    const signedIn = await h.db.query<{ n: number }>(
+      'SELECT count(*)::int AS n FROM sessions s JOIN api_keys k ON k.id = s.key_id WHERE k.revoked_at IS NOT NULL',
+    );
+    expect(signedIn.rows[0]?.n).toBe(0);
+    const audit = await h.db.query<{ details: { by: string; variable: string } }>(
+      "SELECT details FROM admin_audit WHERE action = 'key_revoke' AND details->>'by' = 'environment'",
+    );
+    expect(audit.rows.map((r) => r.details)).toEqual([expect.objectContaining({ variable: 'SHARDLENS_READ_KEY' })]);
+
+    // An instance still started with the old value can't take the new one away, nor bring the old one back.
+    await seedKey(h.db, APP_ID, first, 'SHARDLENS_READ_KEY');
+    expect(await new KeyStore(h.db).verify(first, 'read')).toBeUndefined();
+    expect(await new KeyStore(h.db).verify(second, 'read')).toBeDefined();
+    // Keys of other variables, and keys made in Settings, are left alone.
+    expect(await reads(READ_KEY)).toBe(200);
+  });
+});
+
 describe('dashboard files', () => {
   it('serves the dashboard for its pages, and 404 for a file that does not exist', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'shardlens-dashboard-'));
@@ -1338,6 +1420,36 @@ describe('dashboard files', () => {
         expect(res.statusCode, url).toBe(404);
         expect(res.json()).toEqual({ error: 'not_found' });
       }
+    } finally {
+      await app.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('serves no page with the dashboard off, and the API as before', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'shardlens-dashboard-'));
+    writeFileSync(join(dir, 'index.html'), '<!doctype html><title>Shardlens</title>');
+    const app = await buildServer({
+      db: h.db,
+      live: h.live,
+      keys: new KeyStore(h.db),
+      config: { ...h.config, dashboardDir: dir, dashboard: false },
+    });
+    try {
+      const root = await app.inject({ method: 'GET', url: '/' });
+      expect(root.json()).toEqual({ name: 'shardlens-collector', dashboard: 'off' });
+      for (const url of ['/commands/ticket', '/index.html', '/settings']) {
+        const res = await app.inject({ method: 'GET', url });
+        expect(res.statusCode, url).toBe(404);
+        expect(res.headers['content-type'], url).toContain('application/json');
+      }
+      const meta = await app.inject({
+        method: 'GET',
+        url: '/v1/meta',
+        headers: { authorization: `Bearer ${READ_KEY}` },
+      });
+      expect(meta.statusCode).toBe(200);
+      expect((await app.inject({ method: 'GET', url: '/readyz' })).statusCode).toBe(200);
     } finally {
       await app.close();
       rmSync(dir, { recursive: true, force: true });

@@ -5,6 +5,7 @@ import { evaluateMetric, runAlerts } from '../src/jobs/alerts.js';
 import { runReports } from '../src/jobs/reports.js';
 import { backfillRollups, runRollups, runUniques } from '../src/jobs/rollups.js';
 import { ALERT_METRICS } from '../src/routes/admin.js';
+import { seedKey } from '../src/security/auth.js';
 import { auditCipher } from '../src/security/crypto.js';
 import {
   APP_ID,
@@ -352,7 +353,7 @@ describe('alerts', () => {
       calls.push(`${String(url)} ${String(init?.body)}`);
       return new Response(null, { status: 204 });
     }) as typeof fetch;
-    const opts = { settingsKey: h.config.settingsKey, publicUrl: h.config.publicUrl, fetchImpl };
+    const opts = { settingsKey: h.config.settingsKey, dashboardUrl: h.config.publicUrl, fetchImpl };
     expect(await runAlerts(h.db, opts)).toBe(1);
     expect(await runAlerts(h.db, opts)).toBe(0);
     expect(calls).toHaveLength(1);
@@ -368,7 +369,7 @@ describe('alerts', () => {
       return new Response(null, { status: 204 });
     }) as typeof fetch;
     const rotatedKey = Buffer.alloc(32, 9).toString('base64');
-    expect(await runAlerts(h.db, { settingsKey: rotatedKey, publicUrl: h.config.publicUrl, fetchImpl })).toBe(0);
+    expect(await runAlerts(h.db, { settingsKey: rotatedKey, dashboardUrl: h.config.publicUrl, fetchImpl })).toBe(0);
     expect(calls).toEqual([]);
     const history = await h.db.query<{ delivered: boolean; error: string }>(
       'SELECT delivered, error FROM alert_events ORDER BY id DESC LIMIT 1',
@@ -408,7 +409,7 @@ describe('scheduled reports', () => {
       calls.push(`${String(url)} ${String(init?.body)}`);
       return new Response(null, { status });
     }) as typeof fetch;
-    return { calls, opts: { settingsKey: h.config.settingsKey, publicUrl: h.config.publicUrl, fetchImpl } };
+    return { calls, opts: { settingsKey: h.config.settingsKey, dashboardUrl: h.config.publicUrl, fetchImpl } };
   };
   const create = (payload: object) => h.app.inject({ method: 'POST', url: '/v1/reports', ...asAdmin(), payload });
   const list = async () =>
@@ -526,6 +527,23 @@ describe('scheduled reports', () => {
 });
 
 describe('audit mode', () => {
+  const ACTIVITY_KEY = `slk_activity_${'C'.repeat(43)}`;
+  const withKey = (key: string, url: string) =>
+    h.app.inject({ method: 'GET', url, headers: { authorization: `Bearer ${key}` } });
+
+  it('has nothing for an activity key to read while users are hashed', async () => {
+    await seedKey(h.db, APP_ID, ACTIVITY_KEY, 'SHARDLENS_ACTIVITY_KEY');
+    const settings = await h.app.inject({ method: 'GET', url: '/v1/settings', ...asAdmin() });
+    expect(settings.json()).toMatchObject({ mode: 'privacy', modeSetByEnvironment: false });
+    for (const url of ['/v1/audit/log', '/v1/audit/top-users']) {
+      const res = await withKey(ACTIVITY_KEY, url);
+      expect(res.statusCode, url).toBe(404);
+      expect(res.json(), url).toEqual({ error: 'audit_mode_off' });
+    }
+    // The numbers are there in either mode.
+    expect((await withKey(ACTIVITY_KEY, '/v1/meta')).json()).toMatchObject({ mode: 'privacy' });
+  });
+
   it('cannot be switched on without the audit key on the collector', async () => {
     // This harness has the key, so the switch works; the negative case is covered by the settings validator.
     const on = await h.app.inject({
@@ -667,6 +685,189 @@ describe('audit mode', () => {
       ...asAdmin({ 'x-shardlens-confirm': 'export-audit-log' }),
     });
     expect(exported.statusCode).toBe(400);
+  });
+
+  it('narrows the log and its export to failed runs, or to one outcome', async () => {
+    const { hasher, period } = await sdkHasher(h.app);
+    const user = (await hasher.hash(USER, period))!;
+    const runs = ['ok', 'error', 'timeout', 'no_response'].map((outcome) =>
+      interaction(user, {
+        command: 'flaky',
+        outcome,
+        ...(outcome === 'no_response' ? { ackMs: undefined } : {}),
+        actor: { userId: USER },
+      }),
+    );
+    expect((await ingest(h.app, envelope(runs, { mode: 'audit' }))).json()).toMatchObject({ accepted: 4 });
+    const outcomes = async (filter: string) => {
+      const log = await h.app.inject({
+        method: 'GET',
+        url: `/v1/audit/log?command=flaky&${filter}`,
+        cookies: { shardlens_session: adminCookie },
+      });
+      return (log.json().rows as { outcome: string }[]).map((row) => row.outcome).sort();
+    };
+    expect(await outcomes('outcome=failed')).toEqual(['error', 'no_response', 'timeout']);
+    expect(await outcomes('outcome=failed&guild=112233445566778899')).toEqual(['error', 'no_response', 'timeout']);
+    expect(await outcomes('outcome=failed&guild=998877665544332211')).toEqual([]);
+    expect(await outcomes('outcome=timeout')).toEqual(['timeout']);
+    expect(await outcomes('outcome=ok')).toEqual(['ok']);
+
+    const unknown = await h.app.inject({
+      method: 'GET',
+      url: '/v1/audit/log?outcome=broken',
+      cookies: { shardlens_session: adminCookie },
+    });
+    expect(unknown.statusCode).toBe(400);
+
+    const csv = await h.app.inject({
+      method: 'GET',
+      url: '/v1/audit/export.csv?command=flaky&outcome=failed',
+      ...asAdmin({ 'x-shardlens-confirm': 'export-audit-log' }),
+    });
+    expect(csv.body.trim().split('\n')).toHaveLength(4);
+    expect(csv.body).not.toContain(',ok,');
+
+    const views = await h.db.query<{ details: { outcome: string | null } }>(
+      "SELECT details FROM audit_access_log WHERE action = 'view_log' AND details->>'command' = 'flaky'",
+    );
+    expect(views.rows.map((row) => row.details.outcome)).toEqual(expect.arrayContaining(['failed', 'timeout', 'ok']));
+  });
+
+  it('reads the newest failures from the indexes that hold only failures', async () => {
+    const failureIndexes = await h.db.query<{ indexname: string; indexdef: string }>(
+      `SELECT indexname, indexdef FROM pg_indexes
+        WHERE tablename LIKE 'audit_log\\_%' AND indexdef LIKE '%WHERE (outcome <> 0)'`,
+    );
+    const named = (perServer: boolean) =>
+      failureIndexes.rows.filter((row) => row.indexdef.includes('guild_id') === perServer).map((row) => row.indexname);
+    const plan = async (where: string) => {
+      const client = await h.db.connect();
+      try {
+        // A table this small is read whole and sorted unless told otherwise; this asks whether an index can serve
+        // the log's query as the route writes it.
+        await client.query('BEGIN');
+        await client.query(
+          'SET LOCAL enable_seqscan = off; SET LOCAL enable_bitmapscan = off; SET LOCAL enable_sort = off',
+        );
+        const res = await client.query<{ 'QUERY PLAN': string }>(
+          `EXPLAIN SELECT a.interaction_id FROM audit_log a WHERE a.app_id = ${APP_ID} AND ${where}
+            ORDER BY a.ts DESC, a.interaction_id DESC LIMIT 50`,
+        );
+        return res.rows.map((row) => row['QUERY PLAN']).join('\n');
+      } finally {
+        await client.query('ROLLBACK').catch(() => undefined);
+        client.release();
+      }
+    };
+    const everywhere = await plan('a.outcome <> 0');
+    expect(named(false).some((index) => everywhere.includes(index))).toBe(true);
+    const oneServer = await plan('a.guild_id = 112233445566778899 AND a.outcome <> 0 AND a.outcome = 2');
+    expect(named(true).some((index) => oneServer.includes(index))).toBe(true);
+  });
+
+  it('lets an activity key read who ran what for a dashboard of your own, and logs each read under the key', async () => {
+    const created = await h.app.inject({
+      method: 'POST',
+      url: '/v1/keys',
+      ...asAdmin(),
+      payload: { scope: 'activity', label: 'my dashboard' },
+    });
+    // The name of an environment variable is refused: a new value of that variable would revoke the key.
+    const reserved = await h.app.inject({
+      method: 'POST',
+      url: '/v1/keys',
+      ...asAdmin(),
+      payload: { scope: 'read', label: 'SHARDLENS_READ_KEY' },
+    });
+    expect(reserved.statusCode).toBe(400);
+    expect(created.statusCode).toBe(201);
+    const { id, key } = created.json() as { id: string; key: string };
+    expect(key).toMatch(/^slk_activity_[\w-]{43}$/);
+
+    const log = await withKey(key, '/v1/audit/log?command=flaky&outcome=failed');
+    expect(log.statusCode).toBe(200);
+    expect(log.json().rows).toHaveLength(3);
+    expect(log.json().rows[0]).toMatchObject({ userId: USER, command: 'flaky' });
+    expect((await withKey(key, '/v1/audit/top-users?window=24h')).json().rows[0]).toMatchObject({ userId: USER });
+    // A page that refreshes asks again and again: the same read within a minute is one line of the access log.
+    expect((await withKey(key, '/v1/audit/log?command=flaky&outcome=failed')).statusCode).toBe(200);
+    // Paging is not a refresh: each page read is a line of its own, however quickly the pages follow each other.
+    const first = await withKey(key, '/v1/audit/log?command=flaky&outcome=failed&limit=1');
+    const second = `/v1/audit/log?command=flaky&outcome=failed&limit=1&before=${encodeURIComponent(first.json().nextBefore)}`;
+    expect((await withKey(key, second)).json().rows).toHaveLength(1);
+    expect((await withKey(key, second)).statusCode).toBe(200);
+    // One key for a whole dashboard: it runs the queries a read key runs.
+    const overview = await h.app.inject({
+      method: 'POST',
+      url: '/v1/query',
+      headers: { authorization: `Bearer ${key}` },
+      payload: { kind: 'overview' },
+    });
+    expect(overview.statusCode).toBe(200);
+
+    const reads = await h.db.query<{ action: string; viewer_user_id: string; label: string }>(
+      `SELECT l.action, l.viewer_user_id::text, k.label
+         FROM audit_access_log l JOIN api_keys k ON k.id = l.viewer_key_id ORDER BY l.id`,
+    );
+    expect(reads.rows).toEqual([
+      { action: 'view_log', viewer_user_id: '0', label: 'my dashboard' },
+      { action: 'top_users', viewer_user_id: '0', label: 'my dashboard' },
+      { action: 'view_log', viewer_user_id: '0', label: 'my dashboard' },
+      { action: 'view_log', viewer_user_id: '0', label: 'my dashboard' },
+    ]);
+    const shown = await h.app.inject({ method: 'GET', url: '/v1/audit/access-log', ...asAdmin() });
+    expect(shown.json().rows).toEqual(
+      expect.arrayContaining([expect.objectContaining({ action: 'view_log', viewerKey: 'my dashboard' })]),
+    );
+
+    // A read key is told which key it needs; any other key is no key at all.
+    const withReadKey = await withKey(READ_KEY, '/v1/audit/log');
+    expect(withReadKey.statusCode).toBe(403);
+    expect(withReadKey.json()).toEqual({ error: 'activity_key_required' });
+    expect((await withKey(INGEST_KEY, '/v1/audit/log')).statusCode).toBe(401);
+    expect((await withKey(`slk_activity_${'Z'.repeat(43)}`, '/v1/audit/top-users')).statusCode).toBe(401);
+    // Exports, the access log, settings and keys stay with a person signed in with Discord.
+    for (const url of ['/v1/audit/export.csv', '/v1/audit/access-log', '/v1/settings', '/v1/keys']) {
+      expect((await withKey(key, url)).statusCode, url).toBe(401);
+    }
+    const signIn = await h.app.inject({
+      method: 'POST',
+      url: '/auth/read-key',
+      headers: { 'x-shardlens-csrf': '1' },
+      payload: { key },
+    });
+    expect(signIn.statusCode).toBe(401);
+
+    expect((await h.app.inject({ method: 'DELETE', url: `/v1/keys/${id}`, ...asAdmin() })).statusCode).toBe(200);
+    expect((await withKey(key, '/v1/audit/log')).statusCode).toBe(401);
+  });
+
+  it('keeps the mode the collector was configured with, whatever Settings asks for', async () => {
+    h.config.mode = 'audit';
+    try {
+      const settings = await h.app.inject({ method: 'GET', url: '/v1/settings', ...asAdmin() });
+      expect(settings.json()).toMatchObject({ mode: 'audit', modeSetByEnvironment: true });
+      const change = await h.app.inject({
+        method: 'PUT',
+        url: '/v1/settings',
+        ...asAdmin(),
+        payload: { mode: 'privacy' },
+      });
+      expect(change.statusCode).toBe(409);
+      expect(change.json()).toMatchObject({ error: 'mode_set_by_environment' });
+      // Saving the rest of the form, which sends the same mode back, still works.
+      const same = await h.app.inject({
+        method: 'PUT',
+        url: '/v1/settings',
+        ...asAdmin(),
+        payload: { mode: 'audit', auditRetentionDays: 30 },
+      });
+      expect(same.statusCode).toBe(200);
+      expect(same.json()).toMatchObject({ mode: 'audit' });
+    } finally {
+      h.config.mode = undefined;
+    }
   });
 
   it('erases a user everywhere on request: hashed rows, unique users and the encrypted activity log', async () => {

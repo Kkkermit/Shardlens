@@ -35,6 +35,35 @@ test('audit mode: switch on, view the activity log, export with confirmation, sw
   expect(logPanel?.width).toBeGreaterThan(300);
   await page.setViewportSize({ width: 1280, height: 720 });
 
+  // A server's page leads to its failed runs: the log opens narrowed to them, and asks the collector for them.
+  await page.goto('/servers');
+  await page.getByRole('group', { name: 'Servers' }).getByRole('link').first().click();
+  const asked = page.waitForRequest((req) => /\/v1\/audit\/log\?.*outcome=failed/.test(req.url()));
+  await page.getByRole('region', { name: 'Failing commands' }).getByRole('link', { name: 'View failed runs' }).click();
+  await expect(page).toHaveURL(/\/activity\?guild=\d{17,19}&outcome=failed$/);
+  const server = new URL(page.url()).searchParams.get('guild');
+  expect(new URL((await asked).url()).searchParams.get('guild')).toBe(server);
+  await expect(page.getByLabel('Outcome')).toHaveValue('failed');
+  await expect(page.getByLabel('Server ID')).toHaveValue(server ?? '');
+  await expectAccessible(page);
+
+  await page.goto('/commands/ticket');
+  await expect(
+    page.getByRole('region', { name: 'Outcomes' }).getByRole('link', { name: 'View failed runs' }),
+  ).toHaveAttribute('href', '/activity?command=ticket&outcome=failed');
+
+  // A link written by hand keeps a long ID digit for digit; the form's changes go to the address, a user ID never.
+  await page.goto('/activity?guild=123456789012345678&command=ticket&outcome=timeout');
+  await expect(page.getByLabel('Server ID')).toHaveValue('123456789012345678');
+  await expect(page.getByLabel('Command', { exact: true })).toHaveValue('ticket');
+  await expect(page.getByLabel('Outcome')).toHaveValue('timeout');
+  await page.getByLabel('Outcome').selectOption('');
+  await page.getByLabel('Exact user ID').fill('80351110224678912');
+  const lookup = page.waitForRequest((req) => req.url().includes('user=80351110224678912'));
+  await page.getByRole('button', { name: 'Apply' }).click();
+  expect((await lookup).url()).not.toContain('outcome=');
+  await expect(page).toHaveURL(/\/activity\?command=ticket&guild=123456789012345678$/);
+
   const unconfirmed = await page.request.get('/v1/audit/export.csv', { headers: { 'x-shardlens-csrf': '1' } });
   expect(unconfirmed.status()).toBe(428);
   const exported = await page.request.get('/v1/audit/export.csv', {

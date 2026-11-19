@@ -127,7 +127,11 @@ describe('message (prefix) commands', () => {
     await settle();
     await lens.flush();
 
-    const [failed, passed] = collector.events('message_command');
+    // By command, not by position: each event waits for its user hash, and two hashes can finish in either order.
+    const events = collector.events('message_command');
+    const failed = events.find((e) => e.command === 'ticket');
+    const passed = events.find((e) => e.command === 'ping');
+    expect(events).toHaveLength(2);
     expect(failed).toMatchObject({
       command: 'ticket',
       sub: 'close',

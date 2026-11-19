@@ -1,4 +1,5 @@
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseEnv } from 'node:util';
@@ -29,6 +30,8 @@ describe('init', () => {
       dir,
       url: 'https://stats.example.com',
       written: ['docker-compose.yml', 'Caddyfile', '.env', 'bot.env'],
+      dashboard: 'shardlens',
+      audit: false,
     });
     const text = await readFile(join(dir, '.env'), 'utf8');
     expect(text).toMatch(/^SHARDLENS_INGEST_KEY=slk_ingest_[\w-]{43}$/m);
@@ -170,6 +173,92 @@ describe('init', () => {
     await init({ ...options, dir: identified, identifyUsers: true });
     expect(await readFile(join(hashed, '.env'), 'utf8')).toMatch(/^# SHARDLENS_AUDIT_KEY=.{44}$/m);
     expect(await readFile(join(identified, '.env'), 'utf8')).toMatch(/^SHARDLENS_AUDIT_KEY=.{44}$/m);
+  });
+
+  it('sets the collector up for the Shardlens dashboard unless another choice is made', async () => {
+    const dir = await tempDir();
+    const result = await init({ ...options, dir });
+    expect(result.dashboard).toBe('shardlens');
+    expect((await env(dir)).SHARDLENS_DASHBOARD).toBe('on');
+    expect(existsSync(join(dir, 'dashboard.env'))).toBe(false);
+  });
+
+  it('turns the dashboard off for a dashboard of your own, and writes what its server needs', async () => {
+    const dir = await tempDir();
+    const result = await init({ ...options, dir, dashboard: 'own' });
+    expect(result).toMatchObject({ dashboard: 'own', written: expect.arrayContaining(['dashboard.env']) });
+    const settings = await env(dir);
+    expect(settings.SHARDLENS_DASHBOARD).toBe('off');
+    // Hashed users: nothing identifies anyone, so there is no key that reads who ran what.
+    expect(settings).not.toHaveProperty('SHARDLENS_MODE');
+    expect(settings).not.toHaveProperty('SHARDLENS_ACTIVITY_KEY');
+    expect(await env(dir, 'dashboard.env')).toEqual({
+      SHARDLENS_URL: 'https://stats.example.com',
+      SHARDLENS_READ_KEY: settings.SHARDLENS_READ_KEY,
+    });
+    if (posix) expect(await mode(join(dir, 'dashboard.env'))).toBe(0o600);
+    await expect(init({ ...options, dir, dashboard: 'own' })).rejects.toThrow(/dashboard\.env/);
+  });
+
+  it('chooses identified users in .env when there is no Settings page, with a key to read them', async () => {
+    const own = await tempDir();
+    await init({ ...options, dir: own, dashboard: 'own', identifyUsers: true });
+    const settings = await env(own);
+    expect(settings).toMatchObject({ SHARDLENS_DASHBOARD: 'off', SHARDLENS_MODE: 'audit' });
+    expect(Buffer.from(settings.SHARDLENS_AUDIT_KEY ?? '', 'base64')).toHaveLength(32);
+    expect(settings.SHARDLENS_ACTIVITY_KEY).toMatch(/^slk_activity_[\w-]{43}$/);
+    expect((await env(own, 'dashboard.env')).SHARDLENS_ACTIVITY_KEY).toBe(settings.SHARDLENS_ACTIVITY_KEY);
+
+    const none = await tempDir();
+    const result = await init({ ...options, dir: none, dashboard: 'none', identifyUsers: true });
+    expect(result.dashboard).toBe('none');
+    expect(existsSync(join(none, 'dashboard.env'))).toBe(false);
+    expect(await env(none)).toMatchObject({
+      SHARDLENS_DASHBOARD: 'off',
+      SHARDLENS_MODE: 'audit',
+    });
+
+    // With the Shardlens dashboard, the switch stays in Settings, behind a Discord sign-in.
+    const shardlens = await tempDir();
+    await init({ ...options, dir: shardlens, identifyUsers: true });
+    const usual = await env(shardlens);
+    expect(usual).not.toHaveProperty('SHARDLENS_MODE');
+    expect(usual).not.toHaveProperty('SHARDLENS_ACTIVITY_KEY');
+  });
+
+  it('keeps a dashboard of your own when run again without the option, and gives it the keys added since', async () => {
+    const dir = await tempDir();
+    await init({ ...options, dir, dashboard: 'own' });
+    const again = await init({ ...options, dir, force: true, identifyUsers: true });
+    expect(again).toMatchObject({ dashboard: 'own', written: expect.arrayContaining(['dashboard.env']) });
+    expect((await readdir(dir)).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+    const settings = await env(dir);
+    expect(settings).toMatchObject({ SHARDLENS_DASHBOARD: 'off', SHARDLENS_MODE: 'audit' });
+    expect((await env(dir, 'dashboard.env')).SHARDLENS_ACTIVITY_KEY).toBe(settings.SHARDLENS_ACTIVITY_KEY);
+    await expect(init({ ...options, dir })).rejects.toThrow(/dashboard\.env/);
+  });
+
+  it('changes the dashboard choice of an existing .env only when asked', async () => {
+    const dir = await tempDir();
+    await init({ ...options, dir, dashboard: 'none' });
+    // Running init again without the option must not bring the dashboard back.
+    const again = await init({ ...options, dir, force: true });
+    expect(again).toMatchObject({ updated: [], dashboard: 'none' });
+    expect((await env(dir)).SHARDLENS_DASHBOARD).toBe('off');
+
+    const identified = await init({ ...options, dir, force: true, identifyUsers: true });
+    expect(identified.updated).toEqual(['SHARDLENS_AUDIT_KEY', 'SHARDLENS_MODE', 'SHARDLENS_ACTIVITY_KEY']);
+    const activityKey = (await env(dir)).SHARDLENS_ACTIVITY_KEY;
+
+    const back = await init({ ...options, dir, force: true, dashboard: 'shardlens' });
+    expect(back).toMatchObject({ updated: ['SHARDLENS_DASHBOARD'], dashboard: 'shardlens' });
+    const settings = await env(dir);
+    expect(settings).toMatchObject({ SHARDLENS_DASHBOARD: 'on', SHARDLENS_ACTIVITY_KEY: activityKey });
+
+    // A new application gets a new activity key with its other API keys.
+    const moved = await init({ ...options, dir, appId: '9876543210987654321', force: true });
+    expect(moved.updated).toContain('SHARDLENS_ACTIVITY_KEY');
+    expect((await env(dir)).SHARDLENS_ACTIVITY_KEY).not.toBe(activityKey);
   });
 
   it('validates the domain and application ID as usage errors', async () => {

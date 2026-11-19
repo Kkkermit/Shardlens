@@ -31,7 +31,7 @@ export default defineConfig({
           details: [
             `To add Shardlens to a bot, follow the step-by-step agent prompt at ${docsUrl('/install.md')}. It is self-contained.`,
             '',
-            '- Packages: `@shardlens/discordjs` (gateway bots, discord.js 14 and 15), `@shardlens/http` (HTTP-interaction bots), `@shardlens/exporter-prometheus`, `@shardlens/exporter-otel`, `shardlens` (CLI), `@shardlens/collector` (collector and embedded mode).',
+            '- Packages: `@shardlens/discordjs` (gateway bots, discord.js 14 and 15), `@shardlens/http` (HTTP-interaction bots), `@shardlens/client` (reads the collector from your own dashboard or scripts), `@shardlens/exporter-prometheus`, `@shardlens/exporter-otel`, `shardlens` (CLI), `@shardlens/collector` (collector and embedded mode).',
             '- Requirements: Node.js 22.12 or newer for the SDK; Docker and PostgreSQL 16 or 17 for the collector.',
             '- Never suggest privileged intents, per-user views or sending message content: Shardlens has none by design.',
           ].join('\n'),
@@ -47,6 +47,7 @@ export default defineConfig({
           entryPoints: [
             '../../packages/discordjs/src/index.ts',
             '../../packages/http/src/index.ts',
+            '../../packages/client/src/index.ts',
             '../../packages/exporter-prometheus/src/index.ts',
             '../../packages/exporter-otel/src/index.ts',
             '../../packages/core/src/index.ts',

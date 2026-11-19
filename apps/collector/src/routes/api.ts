@@ -9,6 +9,9 @@ import { activeSalts } from '../storage/maintenance.js';
 import type { SaltPeriod } from '../storage/periods.js';
 import { requireReader } from './guard.js';
 
+/** How often a live stream sends a heartbeat. `@shardlens/client` gives up on a stream that is quiet for three. */
+const LIVE_HEARTBEAT_MS = 15_000;
+
 export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void> {
   app.get('/v1/config', { config: { rateLimit: { max: 120, timeWindow: '1 minute' } } }, async (req, reply) => {
     const auth = await deps.keys.verify(bearerToken(req), 'ingest');
@@ -63,6 +66,11 @@ export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void>
   // Open streams in all and per visitor, so one visitor (anyone, in demo mode) can't take every slot.
   let connections = 0;
   const perVisitor = new Map<string, number>();
+  // Closing the server waits for open requests, and a stream never ends on its own.
+  const streams = new Set<() => void>();
+  app.addHook('preClose', async () => {
+    for (const end of streams) end();
+  });
   app.get('/v1/live', async (req, reply) => {
     const appId = await requireReader(deps, req, reply);
     if (!appId) return;
@@ -131,10 +139,23 @@ export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void>
       }
     };
     const timer = setInterval(() => void send(), 1_000);
+    // On its own timer, so a reader or proxy can tell a slow refresh from a dead connection.
+    const heartbeat = setInterval(() => {
+      if (!closed) res.write(': heartbeat\n\n');
+    }, LIVE_HEARTBEAT_MS);
     void send();
-    req.raw.on('close', () => {
+    const end = () => {
       closed = true;
       clearInterval(timer);
+      clearInterval(heartbeat);
+      res.end();
+    };
+    streams.add(end);
+    req.raw.on('close', () => {
+      streams.delete(end);
+      closed = true;
+      clearInterval(timer);
+      clearInterval(heartbeat);
       connections--;
       const left = (perVisitor.get(visitor) ?? 1) - 1;
       if (left > 0) perVisitor.set(visitor, left);

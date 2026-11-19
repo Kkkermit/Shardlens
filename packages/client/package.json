@@ -1,0 +1,70 @@
+{
+  "name": "@shardlens/client",
+  "version": "0.0.0",
+  "description": "Typed client for reading a Shardlens collector from your own dashboard or scripts: every query, live numbers and the activity log. Zero dependencies, Web-standard APIs only.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kkkermit/Shardlens.git",
+    "directory": "packages/client"
+  },
+  "homepage": "https://kkkermit.github.io/Shardlens/guides/your-own-dashboard/",
+  "bugs": "https://github.com/Kkkermit/Shardlens/issues",
+  "keywords": [
+    "shardlens",
+    "discord",
+    "discord-bot",
+    "analytics",
+    "dashboard",
+    "api-client",
+    "self-hosted",
+    "cloudflare-workers",
+    "deno",
+    "bun",
+    "nextjs"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.cts",
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "lint:package": "publint --strict && attw --pack . --profile node16",
+    "api-report": "api-extractor run",
+    "api-report:update": "api-extractor run --local"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "catalog:",
+    "@microsoft/api-extractor": "catalog:",
+    "publint": "catalog:",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

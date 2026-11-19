@@ -45,10 +45,12 @@ On shutdown, call `lens.shutdown()` first, so queued events reach the collector,
 <FileTree>
 - shardlens-data/
   - db/ the database (PGlite)
-  - secrets.json session secret, settings key, ingest and read keys; generated on first start
+  - secrets.json session secret, settings key, ingest, read and activity keys; generated on first start
 </FileTree>
 
-Back the folder up while the bot is stopped, and keep it private: `secrets.json` holds your keys. On Linux and macOS
+Back the folder up while the bot is stopped, and keep it private: `secrets.json` holds your keys. To replace a key
+that leaked, delete its line from `secrets.json` and restart the bot: a new one is generated, and the old one stops
+working. On Linux and macOS
 the folder and the file are created readable by your bot's user only. Windows has no such file mode, so there the
 folder inherits the permissions of the folder it is in: put it somewhere other users can't read.
 
@@ -58,6 +60,8 @@ folder inherits the permissions of the folder it is in: put it somewhere other u
 | ------------------ | ------------------------- | ------------------------------------------------------------------------------- |
 | `dataDir`          | (required)                | Where the database and secrets live.                                            |
 | `appId`            | (required)                | Your Discord application ID.                                                    |
+| `dashboard`        | `true`                    | `false` serves the API only: for [a dashboard of your own or none](../../getting-started/choose-your-setup/), read with `@shardlens/client` and `collector.readKey`. |
+| `mode`             | chosen in Settings        | `'privacy'` or `'audit'`, decided here instead of in the dashboard's Settings. The way to choose [audit mode](../../guides/audit-mode/) with `dashboard: false`; `'audit'` needs `auditKey`. |
 | `port`             | `8080`                    | Dashboard and API port.                                                         |
 | `host`             | `127.0.0.1`               | Address to listen on. The default keeps the dashboard private to this machine.  |
 | `publicUrl`        | `http://localhost:<port>` | The URL people open the dashboard at (sign-in redirects, alert links).          |
@@ -68,6 +72,9 @@ folder inherits the permissions of the folder it is in: put it somewhere other u
 | `trustProxy`       | `false`                   | Behind a reverse proxy, the number of proxies in front (`1` for one), so rate limits see each visitor's address. |
 | `sink`             | none                      | Also copy every event into [your own database](../your-own-database/).          |
 | `logLevel`         | `warn`                    | Collector log level, kept quiet so your bot's logs stay readable.               |
+
+`startEmbeddedCollector` resolves to the collector's `url` and `ingestKey` (for the SDK), `dashboardUrl`,
+`readKey` and `activityKey` (for the dashboard, and for `@shardlens/client`), and `close()`.
 
 ## When to use the standalone collector instead
 

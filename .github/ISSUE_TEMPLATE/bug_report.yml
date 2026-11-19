@@ -14,6 +14,7 @@ body:
       options:
         - '@shardlens/discordjs (SDK)'
         - '@shardlens/http'
+        - '@shardlens/client'
         - '@shardlens/core'
         - Exporters (Prometheus / OpenTelemetry)
         - Collector

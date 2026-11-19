@@ -267,6 +267,19 @@ test('the Overview notices a bot that starts after the page was opened', async (
   await expect(page.getByText('Done: Receiving events from your bot')).toBeAttached();
 });
 
+test("a server's page shows the commands that fail there, and no way into who ran them", async ({ reader: page }) => {
+  await page.goto('/servers');
+  await settled(page, 'Servers');
+  await page.getByRole('group', { name: 'Servers' }).getByRole('link').first().click();
+  await settled(page);
+  const failing = page.getByRole('region', { name: 'Failing commands' });
+  // 30 days of seeded traffic in the largest server always include some failures.
+  await expect(failing.getByRole('list', { name: 'Failing commands' }).getByRole('link').first()).toBeVisible();
+  // Privacy mode, and a read key: there is no activity log to link to.
+  await expect(page.getByRole('link', { name: 'View failed runs' })).toHaveCount(0);
+  await expectAccessible(page);
+});
+
 test('navigating moves the focus to the new page, and rows open from the keyboard', async ({ reader: page }) => {
   await page.goto('/');
   await settled(page, 'Overview');

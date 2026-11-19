@@ -20,7 +20,10 @@ It needs Docker and takes about five minutes. It:
    (`fake-discord/scenarios.mjs`), then checks the collector's counts against what was sent, stops the bot with
    `SIGINT` (a sharded bot's manager has to pass it on to its shards) and searches the logs, the collector's database and the copy for raw user IDs, usernames, display names,
    avatars, the bot token, interaction tokens and typed text;
-5. prints a summary and exits non-zero on a count that differs, a leak, an empty copy, an unclean shutdown or a REST
+5. reads the same numbers the way an owner's own dashboard would: `panel/` is a project with `@shardlens/client`
+   installed from its tarball, loaded as an ES module and as CommonJS, and its runs per command must match the
+   collector's API;
+6. prints a summary and exits non-zero on a count that differs, a leak, an empty copy, an unclean shutdown or a REST
    route the fake doesn't know. Containers and processes are always removed; logs are kept when the run fails.
 
 | Bot          | Shape                                                                              | Collector                 | Copy of the events |

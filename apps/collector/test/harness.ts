@@ -56,6 +56,7 @@ export async function startHarness(
     extraAdmins: opts.extraAdmins ?? [],
     trustProxy: false,
     demo: opts.demo ?? false,
+    dashboard: true,
     dashboardDir: undefined,
     port: 0,
     host: '127.0.0.1',

@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { isDiscordWebhookUrl, maskStoredWebhook } from '../discord-webhook.js';
+import { dashboardUrl } from '../env.js';
 import { REPORT_SCHEDULES, type ReportSchedule, sendReportNow } from '../jobs/reports.js';
 import { auditCipher } from '../security/crypto.js';
 import type { Deps } from '../server.js';
@@ -120,7 +121,7 @@ export async function reportRoutes(app: FastifyInstance, deps: Deps): Promise<vo
       const { id } = IdParam.parse(req.params);
       const result = await sendReportNow(deps.db, admin.appId, id, {
         settingsKey: deps.config.settingsKey,
-        publicUrl: deps.config.publicUrl,
+        dashboardUrl: dashboardUrl(deps.config),
       });
       if (!result) return reply.code(404).send({ error: 'not_found' });
       return result.ok ? { ok: true } : reply.code(502).send({ error: 'webhook_failed', message: result.error });

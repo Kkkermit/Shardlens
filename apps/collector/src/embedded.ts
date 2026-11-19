@@ -1,10 +1,21 @@
 /**
  * `@shardlens/collector/embedded`: the whole collector (ingest, jobs, dashboard) inside your bot process, on an
  * in-process PostgreSQL (PGlite) stored in one folder. For small bots on one host that don't want to run anything
- * else. Same code, same privacy model and same dashboard as the standalone collector (ADR 0012).
+ * else. Same code, same privacy model and same dashboard as the standalone collector (ADR 0012). The dashboard is
+ * optional: with `dashboard: false` it is an API for `@shardlens/client` only.
  */
 import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  fchmodSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join, resolve } from 'node:path';
 import { startCollector } from './app.js';
 import type { Config } from './env.js';
@@ -18,6 +29,16 @@ export interface EmbeddedCollectorOptions {
   /** Folder for the database and the generated secrets. Created if missing. Back it up, and keep it private. */
   dataDir: string;
   appId: string;
+  /**
+   * Serve the Shardlens dashboard. Default `true`. With `false` only the API is served, for a dashboard of your own
+   * (read it with `@shardlens/client`) or none.
+   */
+  dashboard?: boolean | undefined;
+  /**
+   * Hashed (`'privacy'`) or identified (`'audit'`) users, decided here instead of in the dashboard's Settings. Needed
+   * to choose audit mode when `dashboard` is `false`; `'audit'` also needs `auditKey`. Left out, Settings decides.
+   */
+  mode?: 'privacy' | 'audit' | undefined;
   /** Port for the dashboard and API. Default 8080. */
   port?: number | undefined;
   /** Address to listen on. Default `127.0.0.1`: only this machine can reach the dashboard. */
@@ -50,11 +71,20 @@ export interface EmbeddedCollectorOptions {
 export interface EmbeddedCollector {
   /** Where the SDK sends events: pass it as `endpoint` to `createShardlens`. */
   readonly url: string;
+  /** `publicUrl`, or `http://localhost:<port>`. With `dashboard: false` only the API answers there. */
   readonly dashboardUrl: string;
   /** Ingest key for the SDK (generated on first start, kept in `dataDir`). */
   readonly ingestKey: string;
-  /** Read key to sign in to the dashboard (generated on first start, kept in `dataDir`). */
+  /**
+   * Read key: signs in to the dashboard, and reads every number through `@shardlens/client` (generated on first
+   * start, kept in `dataDir`).
+   */
   readonly readKey: string;
+  /**
+   * Activity key: reads what a read key does, and who ran what while the collector is in audit mode. For the server
+   * side of a dashboard of your own (generated on first start, kept in `dataDir`).
+   */
+  readonly activityKey: string;
   close(): Promise<void>;
 }
 
@@ -63,24 +93,51 @@ interface Secrets {
   settingsKey: string;
   ingestKey: string;
   readKey: string;
+  activityKey: string;
+}
+
+const newKey = (scope: string) => `slk_${scope}_${randomBytes(32).toString('base64url')}`;
+
+function readSecrets(file: string): Partial<Secrets> {
+  try {
+    return JSON.parse(readFileSync(file, 'utf8')) as Partial<Secrets>;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    throw error;
+  }
 }
 
 /** Secrets are generated once and stored next to the database, readable by the bot's user only. */
 function loadSecrets(dataDir: string): Secrets {
   const file = join(dataDir, 'secrets.json');
-  if (existsSync(file)) return JSON.parse(readFileSync(file, 'utf8')) as Secrets;
+  const stored = readSecrets(file);
   const secrets: Secrets = {
-    sessionSecret: randomBytes(48).toString('base64url'),
-    settingsKey: randomBytes(32).toString('base64'),
-    ingestKey: `slk_ingest_${randomBytes(32).toString('base64url')}`,
-    readKey: `slk_read_${randomBytes(32).toString('base64url')}`,
+    sessionSecret: stored.sessionSecret ?? randomBytes(48).toString('base64url'),
+    settingsKey: stored.settingsKey ?? randomBytes(32).toString('base64'),
+    ingestKey: stored.ingestKey ?? newKey('ingest'),
+    readKey: stored.readKey ?? newKey('read'),
+    // Not in files written before activity keys existed: added on the next start, the rest kept as it was.
+    activityKey: stored.activityKey ?? newKey('activity'),
   };
-  writeFileSync(file, `${JSON.stringify(secrets, null, 2)}\n`, { mode: 0o600 });
+  if (Object.keys(secrets).every((name) => name in stored)) return secrets;
+  // Written beside it and renamed over it: a start cut short mid-write must not leave the settings key half written.
+  const temporary = `${file}.${randomBytes(6).toString('hex')}.tmp`;
+  const fd = openSync(temporary, 'wx', 0o600);
   try {
-    chmodSync(file, 0o600);
-  } catch {
-    // not supported on every platform
+    try {
+      fchmodSync(fd, 0o600);
+    } catch {
+      // not supported on every platform
+    }
+    writeFileSync(fd, `${JSON.stringify(secrets, null, 2)}\n`);
+    fsyncSync(fd);
+  } catch (error) {
+    closeSync(fd);
+    rmSync(temporary, { force: true });
+    throw error;
   }
+  closeSync(fd);
+  renameSync(temporary, file);
   return secrets;
 }
 
@@ -91,6 +148,9 @@ function loadSecrets(dataDir: string): Secrets {
 export async function startEmbeddedCollector(options: EmbeddedCollectorOptions): Promise<EmbeddedCollector> {
   if (!/^\d{17,20}$/.test(options.appId))
     throw new Error('startEmbeddedCollector: appId must be your Discord application ID');
+  if (options.mode === 'audit' && !options.auditKey) {
+    throw new Error("startEmbeddedCollector: mode 'audit' needs auditKey");
+  }
   if (typeof options.sink?.to === 'string' && !SINK_URL.test(options.sink.to)) {
     throw new Error('startEmbeddedCollector: sink.to must be a mongodb:, mysql:, mariadb:, postgres: or sqlite: URL');
   }
@@ -123,6 +183,9 @@ export async function startEmbeddedCollector(options: EmbeddedCollectorOptions):
       discordPublicKey: options.discordPublicKey,
       ingestKey: secrets.ingestKey,
       readKey: secrets.readKey,
+      activityKey: secrets.activityKey,
+      mode: options.mode,
+      dashboard: options.dashboard ?? true,
       extraAdmins: [...(options.extraAdmins ?? [])],
       trustProxy: options.trustProxy ?? false,
       demo: false,
@@ -142,6 +205,7 @@ export async function startEmbeddedCollector(options: EmbeddedCollectorOptions):
       dashboardUrl: options.publicUrl ?? `http://localhost:${listening.port}`,
       ingestKey: secrets.ingestKey,
       readKey: secrets.readKey,
+      activityKey: secrets.activityKey,
       close() {
         closed ??= (async () => {
           await collector.stop();

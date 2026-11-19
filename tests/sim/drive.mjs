@@ -1,5 +1,6 @@
 // Runs one bot end to end: its fake Discord, its collector (inside the bot, or standalone), the bot, the scripted
 // scenario. Then compares what the collector counted with what was sent, and stops the bot the way an owner would.
+import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -71,10 +72,46 @@ function compare(expected, actual) {
 }
 
 /**
+ * An owner's own dashboard: the packed client, loaded as an ES module and as CommonJS, must read what the collector's
+ * API gives directly. Compared by runs per command, which no longer change once the bot is idle.
+ */
+async function panelMismatches({ panel, url, readKey, range, appId, query }) {
+  const runs = (rows, name, count) => JSON.stringify(rows.map((row) => [row[name], row[count]]).sort());
+  const commands = runs((await query({ kind: 'commands' })).rows, 'command', 'runs');
+  const top = runs(
+    (await query({ kind: 'top', metric: 'interactions', groupBy: 'command', limit: 500 })).rows,
+    'key',
+    'count',
+  );
+  const env = { ...process.env, SHARDLENS_URL: url, SHARDLENS_READ_KEY: readKey, SIM_RANGE: JSON.stringify(range) };
+  const failures = [];
+  for (const script of ['read.mjs', 'read.cjs']) {
+    let answer;
+    try {
+      answer = JSON.parse(
+        execFileSync(process.execPath, [script], { cwd: panel, env, encoding: 'utf8', stdio: 'pipe' }),
+      );
+    } catch (error) {
+      failures.push(
+        `the panel's ${script} failed: ${String(error.stderr || error.message)
+          .trim()
+          .slice(-500)}`,
+      );
+      continue;
+    }
+    if (answer.appId !== appId) failures.push(`the panel's ${script} read application ${answer.appId}`);
+    if (runs(answer.commands, 'command', 'runs') !== commands || runs(answer.top, 'key', 'count') !== top) {
+      failures.push(`the panel's ${script} read other runs per command than the collector's API gives`);
+    }
+  }
+  return failures;
+}
+
+/**
  * Runs `bot`, installed in `dir`. Resolves with what failed, how many events were sent, and the secrets and
  * identities the leak check must not find.
  */
-export async function drive(bot, { dir, logs, databases, collectorMain }) {
+export async function drive(bot, { dir, logs, databases, collectorMain, panel }) {
   const config = BOTS[bot];
   const { appId } = scenarios[bot];
   const log = (name) => join(logs, `${bot}-${name}.log`);
@@ -187,6 +224,9 @@ export async function drive(bot, { dir, logs, databases, collectorMain }) {
       mismatches = compare(status.expected, await counted(query));
     } while (mismatches.length > 0 && Date.now() < settled);
     failures.push(...mismatches);
+    if (mismatches.length === 0) {
+      failures.push(...(await panelMismatches({ panel, url: collectorUrl, readKey, range, appId, query })));
+    }
     for (const bucket of Object.values(status.expected)) {
       for (const outcomes of Object.values(bucket)) events += Object.values(outcomes).reduce((a, b) => a + b, 0);
     }

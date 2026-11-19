@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { batchJsonSchema, ConfigResponse, ErrorResponse, IngestAccepted } from '@shardlens/schema';
 import { z } from 'zod';
 import { QuerySpec } from './query/spec.js';
-import { AlertBody, SettingsPatch } from './routes/admin.js';
+import { AlertBody, KeyLabel, SettingsPatch } from './routes/admin.js';
 import { AuditLogFilters, EraseBody } from './routes/privacy.js';
 import { ReportBody } from './routes/reports.js';
 
@@ -57,6 +57,12 @@ export function openApiDocument(version = collectorVersion()): Record<string, un
       securitySchemes: {
         ingestKey: { type: 'http', scheme: 'bearer', description: 'Ingest-only key: `slk_ingest_…`' },
         readKey: { type: 'http', scheme: 'bearer', description: 'Read-only key: `slk_read_…`' },
+        activityKey: {
+          type: 'http',
+          scheme: 'bearer',
+          description:
+            'Activity key: `slk_activity_…`. Reads what a read key does, and who ran what in audit mode. Server side only.',
+        },
         session: {
           type: 'apiKey',
           in: 'cookie',
@@ -132,7 +138,7 @@ export function openApiDocument(version = collectorVersion()): Record<string, un
           summary: 'Run a typed query',
           description:
             'Every query kind maps to a fixed SQL template with bound parameters. There is no per-user grouping.',
-          security: [{ readKey: [] }, { session: [] }],
+          security: [{ readKey: [] }, { activityKey: [] }, { session: [] }],
           requestBody: body(QuerySpec),
           responses: {
             '200': { description: 'Query result (shape depends on `kind`)' },
@@ -145,7 +151,7 @@ export function openApiDocument(version = collectorVersion()): Record<string, un
         get: {
           tags: ['Data'],
           summary: 'Application name, mode and time zone',
-          security: [{ readKey: [] }, { session: [] }],
+          security: [{ readKey: [] }, { activityKey: [] }, { session: [] }],
           responses: { '200': { description: 'Metadata' }, ...unauthorized },
         },
       },
@@ -153,10 +159,11 @@ export function openApiDocument(version = collectorVersion()): Record<string, un
         get: {
           tags: ['Data'],
           summary: 'Live tiles (Server-Sent Events)',
-          security: [{ readKey: [] }, { session: [] }],
+          security: [{ readKey: [] }, { activityKey: [] }, { session: [] }],
           responses: {
             '200': {
-              description: '`tiles` events every second',
+              description:
+                '`tiles` events every second, and a `: heartbeat` comment every 15 seconds whatever the database does. A reader that has received nothing for 45 seconds can treat the connection as gone.',
               content: { 'text/event-stream': { schema: { type: 'string' } } },
             },
             ...unauthorized,
@@ -224,7 +231,7 @@ export function openApiDocument(version = collectorVersion()): Record<string, un
           tags: ['Admin'],
           summary: 'Create an API key (shown once)',
           security: [{ session: [] }],
-          requestBody: body(z.object({ scope: z.enum(['ingest', 'read']), label: z.string().min(1).max(64) })),
+          requestBody: body(z.object({ scope: z.enum(['ingest', 'read', 'activity']), label: KeyLabel })),
           responses: { '201': { description: 'The new key, shown once' }, ...admin },
         },
       },
@@ -331,8 +338,8 @@ export function openApiDocument(version = collectorVersion()): Record<string, un
           tags: ['Audit mode'],
           summary: 'Activity log (who ran what)',
           description:
-            'Filter by time, command, server or exact user ID. `nextBefore` in the reply is the `before` of the next page. Logged in the access log.',
-          security: [{ session: [] }],
+            'Filter by time, command, server, outcome (`failed` is every outcome but `ok`) or exact user ID. `nextBefore` in the reply is the `before` of the next page. For a Discord sign-in or an activity key (a read key gets `403 activity_key_required`). Logged in the access log.',
+          security: [{ session: [] }, { activityKey: [] }],
           parameters: auditLogFilters,
           responses: {
             '200': { description: 'Rows, newest first' },
@@ -346,8 +353,9 @@ export function openApiDocument(version = collectorVersion()): Record<string, un
         get: {
           tags: ['Audit mode'],
           summary: 'Most active users in the last 24 hours or 7 days',
-          security: [{ session: [] }],
-          responses: { '200': { description: 'Counts' }, ...admin },
+          description: 'For a Discord sign-in or an activity key. Logged in the access log.',
+          security: [{ session: [] }, { activityKey: [] }],
+          responses: { '200': { description: 'Counts' }, ...admin, '404': error('Audit mode is off') },
         },
       },
       '/v1/audit/export.csv': {

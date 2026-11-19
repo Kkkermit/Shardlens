@@ -17,6 +17,11 @@ The image is `ghcr.io/kkkermit/shardlens-collector`. It is configured with
 [environment variables](https://kkkermit.github.io/Shardlens/reference/environment/), applies its database migrations
 when it starts, and serves the dashboard on the same port as the API.
 
+The dashboard is optional. With `SHARDLENS_DASHBOARD=off` (`npx shardlens init … --dashboard own` or `none`) the
+collector serves its API only, and [`@shardlens/client`](https://www.npmjs.com/package/@shardlens/client) reads every
+number into a dashboard of your own:
+[Choose your setup](https://kkkermit.github.io/Shardlens/getting-started/choose-your-setup/).
+
 ## Embedded mode
 
 This package also runs the whole collector inside a small bot's own process, on an in-process PostgreSQL
@@ -34,6 +39,7 @@ import { createShardlens } from '@shardlens/discordjs';
 const collector = await startEmbeddedCollector({ dataDir: './shardlens-data', appId: '123456789012345678' });
 createShardlens(client, { endpoint: collector.url, apiKey: collector.ingestKey });
 // Dashboard: collector.dashboardUrl, sign in with collector.readKey
+// Or pass `dashboard: false` and read the numbers with @shardlens/client, collector.url and collector.readKey
 ```
 
 Keep the data folder private and out of version control: it holds the database and the generated keys.

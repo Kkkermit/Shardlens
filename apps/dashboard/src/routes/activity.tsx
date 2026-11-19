@@ -1,5 +1,7 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { type FormEvent, useState } from 'react';
+import { Link, useNavigate, useSearch } from '@tanstack/react-router';
+import { type FormEvent, useEffect, useState } from 'react';
+import { type ActivitySearch, OUTCOME_FILTERS, parseActivitySearch } from '../activity-search';
 import { api, errorText, request, useMeta } from '../api';
 import { NeedsDiscord, useAdminGate } from '../components/AdminGate';
 import { DataTable } from '../components/DataTable';
@@ -28,26 +30,43 @@ interface AuditRow {
   avatar: string | null;
 }
 
+const withUser = (search: ActivitySearch, user: string): ActivitySearch & { user?: string } =>
+  user ? { ...search, user } : search;
+
 export function ActivityPage() {
   const gate = useAdminGate();
   const meta = useMeta();
   const tz = meta.data?.timezone ?? 'UTC';
-  const [filters, setFilters] = useState({ command: '', guild: '', user: '' });
-  const [applied, setApplied] = useState(filters);
-  // Cursors of the pages shown so far: `nextBefore` of each, newest page first. Empty on the newest page.
-  const [pages, setPages] = useState<string[]>([]);
+  const navigate = useNavigate();
+  const { command, guild, outcome } = useSearch({ from: '/activity' });
+  const [filters, setFilters] = useState({
+    command: command ?? '',
+    guild: guild ?? '',
+    outcome: outcome ?? '',
+    user: '',
+  });
+  // The address's filters plus the user ID, which stays out of the address: one value, so Apply changes both at once.
+  const [applied, setApplied] = useState<ActivitySearch & { user?: string }>(() =>
+    parseActivitySearch({ command, guild, outcome }),
+  );
+  // The form and the log follow the address when it changes from elsewhere (Back, a link from a server's page).
+  useEffect(() => {
+    setFilters((typed) => ({ ...typed, command: command ?? '', guild: guild ?? '', outcome: outcome ?? '' }));
+    setApplied((was) => withUser(parseActivitySearch({ command, guild, outcome }), was.user ?? ''));
+  }, [command, guild, outcome]);
+  const appliedKey = JSON.stringify(applied);
+  // `nextBefore` of each page shown so far, for these filters only: new filters start at the newest page.
+  const [paging, setPaging] = useState<{ filters: string; cursors: string[] }>({ filters: appliedKey, cursors: [] });
+  const pages = paging.filters === appliedKey ? paging.cursors : [];
+  const setPages = (cursors: string[]) => setPaging({ filters: appliedKey, cursors });
   const [message, setMessage] = useState('');
   const [windowSel, setWindowSel] = useState<'24h' | '7d'>('24h');
-  const params = new URLSearchParams(
-    Object.entries(applied)
-      .map(([k, v]) => [k, v.trim()] as [string, string])
-      .filter(([, v]) => v !== ''),
-  );
+  const params = new URLSearchParams({ ...applied });
   const before = pages.at(-1);
   const pageParams = new URLSearchParams(params);
   if (before) pageParams.set('before', before);
   const log = useQuery({
-    queryKey: ['audit-log', applied, before],
+    queryKey: ['audit-log', appliedKey, before],
     queryFn: () => api<{ rows: AuditRow[]; nextBefore: string | null }>(`/v1/audit/log?${pageParams.toString()}`),
     enabled: gate.allowed && meta.data?.mode === 'audit',
     placeholderData: keepPreviousData,
@@ -106,8 +125,9 @@ export function ActivityPage() {
     const problem = activityFilterError(filters);
     setMessage(problem);
     if (problem) return;
-    setApplied(filters);
-    setPages([]);
+    const search = parseActivitySearch(filters);
+    setApplied(withUser(search, filters.user.trim()));
+    void navigate({ to: '/activity', search });
   };
   // While another page loads, the buttons wait for it: its cursor isn't known yet.
   const nextBefore = log.isPlaceholderData ? null : (log.data?.nextBefore ?? null);
@@ -141,6 +161,17 @@ export function ActivityPage() {
           />
         </label>
         <label>
+          Outcome
+          <select value={filters.outcome} onChange={(e) => setFilters({ ...filters, outcome: e.target.value })}>
+            <option value="">Any</option>
+            {OUTCOME_FILTERS.map((o) => (
+              <option key={o} value={o}>
+                {o === 'failed' ? 'Failed' : label('outcome', o)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
           Exact user ID
           <input
             value={filters.user}
@@ -169,7 +200,9 @@ export function ActivityPage() {
                   render: (r) =>
                     r.command ? (
                       <>
-                        <Name>{commandLabel(r.command, [r.kind])}</Name>
+                        <Link to="/commands/$name" params={{ name: r.command }}>
+                          <Name>{commandLabel(r.command, [r.kind])}</Name>
+                        </Link>
                         {r.sub ? (
                           <>
                             {' '}
@@ -187,7 +220,13 @@ export function ActivityPage() {
                   key: 'server',
                   header: 'Server',
                   render: (r) =>
-                    r.guildName ? <Name>{r.guildName}</Name> : r.guildId ? <code>{r.guildId}</code> : 'DM',
+                    r.guildId ? (
+                      <Link to="/servers/$id" params={{ id: r.guildId }}>
+                        {r.guildName ? <Name>{r.guildName}</Name> : <code>{r.guildId}</code>}
+                      </Link>
+                    ) : (
+                      'DM'
+                    ),
                 },
                 {
                   key: 'user',

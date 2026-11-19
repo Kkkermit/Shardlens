@@ -163,6 +163,17 @@ describe('posting to a Discord webhook', () => {
     expect(calls[1]?.body.allowed_mentions).toEqual({ parse: [] });
   });
 
+  it('leaves the link out when the collector serves no dashboard to open', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(null, { status: bodies.length === 1 ? 400 : 204 });
+    }) as typeof fetch;
+    expect(await postToDiscordWebhook(url, { ...message, link: undefined }, fetchImpl)).toEqual({ ok: true });
+    expect(JSON.stringify(bodies[0])).not.toContain('Open in Shardlens');
+    expect(bodies[1]).toMatchObject({ content: '**Test**\nBody' });
+  });
+
   it('says why a request got no answer, without the URL', async () => {
     const unreachable = (async () => {
       throw new TypeError(`fetch failed for ${url}`, { cause: { code: 'ENOTFOUND', message: url } });

@@ -17,7 +17,10 @@ interface Settings {
   skuPrices: Record<string, { amount: number; currency: string }>;
   badges: string[];
   auditKeyConfigured: boolean;
+  modeSetByEnvironment: boolean;
 }
+
+const KEY_LABELS = { ingest: 'bot', read: 'scripts', activity: 'my dashboard' };
 
 interface Key {
   id: string;
@@ -55,9 +58,15 @@ export function SettingsPage() {
   const access = useQuery({
     queryKey: ['access-log'],
     queryFn: () =>
-      api<{ rows: { ts: string; viewerUserId: string; action: string; details: Record<string, unknown> }[] }>(
-        '/v1/audit/access-log',
-      ),
+      api<{
+        rows: {
+          ts: string;
+          viewerUserId: string;
+          viewerKey: string | null;
+          action: string;
+          details: Record<string, unknown>;
+        }[];
+      }>('/v1/audit/access-log'),
     enabled: gate.allowed,
   });
   const [messageFor, say] = usePanelStatus();
@@ -101,8 +110,8 @@ export function SettingsPage() {
   }
   const timezones = [...new Set([s.timezone, 'UTC', ...Intl.supportedValuesOf('timeZone')])];
 
-  const createKey = async (scope: 'ingest' | 'read') => {
-    const name = window.prompt(`Label for the new ${scope} key`, scope === 'ingest' ? 'bot' : 'scripts');
+  const createKey = async (scope: keyof typeof KEY_LABELS) => {
+    const name = window.prompt(`Label for the new ${scope} key`, KEY_LABELS[scope]);
     if (!name) return;
     say('keys', '');
     try {
@@ -208,13 +217,20 @@ export function SettingsPage() {
             identities encrypted for at most 90 days and logs every view. Tell your users in your privacy policy if you
             turn it on.
           </p>
+          {s.modeSetByEnvironment ? (
+            <p className="muted">
+              The mode is set by <code>SHARDLENS_MODE</code> on the collector (<code>mode</code> for an embedded one).
+              Change it there.
+            </p>
+          ) : null}
           <StatusMessage message={messageFor('identity')} />
           <form
             className="filters"
             onSubmit={(e) => {
               e.preventDefault();
               const f = new FormData(e.currentTarget);
-              const mode = String(f.get('mode')) as Settings['mode'];
+              // A disabled field isn't part of the form: the mode stays what the collector's configuration says.
+              const mode = s.modeSetByEnvironment ? s.mode : (String(f.get('mode')) as Settings['mode']);
               if (
                 mode === 'audit' &&
                 s.mode !== 'audit' &&
@@ -230,7 +246,7 @@ export function SettingsPage() {
           >
             <label>
               Mode
-              <select name="mode" defaultValue={s.mode}>
+              <select name="mode" defaultValue={s.mode} disabled={s.modeSetByEnvironment}>
                 <option value="privacy">Hashed: user IDs never leave your bot (default)</option>
                 <option value="audit" disabled={!s.auditKeyConfigured}>
                   Identified: user ID, username and avatar
@@ -362,7 +378,7 @@ export function SettingsPage() {
 
         <Panel
           title="API keys"
-          subtitle="Ingest keys are for your bot; read keys for scripts and read-only dashboard access"
+          subtitle="Ingest keys are for your bot. Read keys are for scripts, a dashboard of your own and read-only access here. Activity keys also read who ran what in audit mode: keep them on a server, never in a page."
         >
           {newKey ? (
             <div className="notice" role="status">
@@ -376,6 +392,9 @@ export function SettingsPage() {
             </button>
             <button type="button" onClick={() => void createKey('read')}>
               New read key
+            </button>
+            <button type="button" onClick={() => void createKey('activity')}>
+              New activity key
             </button>
           </div>
           <QueryBody query={keys}>
@@ -425,7 +444,16 @@ export function SettingsPage() {
                 {
                   key: 'who',
                   header: 'Viewer',
-                  render: (r) => (r.viewerUserId === '0' ? 'SDK' : <code>{r.viewerUserId}</code>),
+                  render: (r) =>
+                    r.viewerKey ? (
+                      <>
+                        Activity key <Name>{r.viewerKey}</Name>
+                      </>
+                    ) : r.viewerUserId === '0' ? (
+                      'SDK'
+                    ) : (
+                      <code>{r.viewerUserId}</code>
+                    ),
                 },
                 { key: 'action', header: 'Action', render: (r) => r.action },
                 { key: 'details', header: 'Details', render: (r) => <code>{describeDetails(r.details)}</code> },

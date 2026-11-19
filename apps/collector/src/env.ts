@@ -28,6 +28,12 @@ const EnvSchema = z.object({
     .string()
     .regex(/^slk_read_[\w-]{43}$/, 'must be an slk_read_ key')
     .optional(),
+  SHARDLENS_ACTIVITY_KEY: z
+    .string()
+    .regex(/^slk_activity_[\w-]{43}$/, 'must be an slk_activity_ key')
+    .optional(),
+  SHARDLENS_MODE: z.enum(['privacy', 'audit']).optional(),
+  SHARDLENS_DASHBOARD: z.enum(['on', 'off']).default('on'),
   SHARDLENS_EXTRA_ADMINS: z.string().optional(),
   SHARDLENS_TRUST_PROXY: z
     .string()
@@ -68,6 +74,15 @@ export interface Config {
   discordPublicKey: string | undefined;
   ingestKey: string | undefined;
   readKey: string | undefined;
+  /** Reads who ran what (audit mode) for a dashboard of the owner's own. */
+  activityKey?: string | undefined;
+  /**
+   * Hashed or identified users, decided here instead of in Settings: the only way to choose when the dashboard is
+   * off. `undefined` leaves the choice to Settings.
+   */
+  mode?: 'privacy' | 'audit' | undefined;
+  /** Serve the dashboard pages. Off, the collector is an API only: for people who use their own dashboard or none. */
+  dashboard: boolean;
   extraAdmins: string[];
   /**
    * Proxies in front whose `X-Forwarded-For` entries are believed: a count trusts that many hops from the right, `true`
@@ -104,6 +119,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       'Invalid collector configuration: set both DISCORD_CLIENT_ID and DISCORD_CLIENT_SECRET, or neither',
     );
   }
+  if (e.SHARDLENS_MODE === 'audit' && e.SHARDLENS_AUDIT_KEY === undefined) {
+    throw new Error('Invalid collector configuration: SHARDLENS_MODE=audit needs SHARDLENS_AUDIT_KEY');
+  }
   const extraAdmins = (e.SHARDLENS_EXTRA_ADMINS ?? '')
     .split(',')
     .map((s) => s.trim())
@@ -125,6 +143,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     discordPublicKey: e.DISCORD_PUBLIC_KEY,
     ingestKey: e.SHARDLENS_INGEST_KEY,
     readKey: e.SHARDLENS_READ_KEY,
+    activityKey: e.SHARDLENS_ACTIVITY_KEY,
+    mode: e.SHARDLENS_MODE,
+    dashboard: e.SHARDLENS_DASHBOARD === 'on',
     extraAdmins,
     trustProxy:
       e.SHARDLENS_TRUST_PROXY === 'true'
@@ -147,4 +168,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     host: e.HOST,
     logLevel: e.LOG_LEVEL,
   };
+}
+
+/** Where the dashboard is, for links in alerts and reports: nowhere when the collector doesn't serve it. */
+export function dashboardUrl(config: Config): URL | undefined {
+  return config.dashboard ? config.publicUrl : undefined;
 }

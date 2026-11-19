@@ -37,6 +37,16 @@ The key was not accepted.
 
 The batch is for a different application. `SHARDLENS_APP_ID` on the collector has to match the bot's application ID.
 
+From your own dashboard, `403` with `activity_key_required` means a read key asked for who ran what: that takes an
+[activity key](../../guides/audit-mode/#read-it-from-your-own-dashboard). `404` with `audit_mode_off` means the key is
+right and the collector isn't in audit mode.
+
+## The collector's address shows `"dashboard":"off"`
+
+The collector was set up without the Shardlens dashboard (`SHARDLENS_DASHBOARD=off`, from `shardlens init --dashboard
+own` or `none`), so it answers as an API only. Set `SHARDLENS_DASHBOARD=on` in its `.env` and restart it to get the
+dashboard back: [Choose your setup](../../getting-started/choose-your-setup/#changing-your-mind).
+
 ## "Salt missing" or events waiting
 
 The SDK hashes user IDs with a salt from the collector's `/v1/config`. Until it has a salt, it holds events for up to 60
@@ -92,20 +102,21 @@ The collector writes one JSON object per line (`docker compose logs collector`).
 
 | Message                               | Level   | What it means                                                                                                             |
 | ------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `Shardlens collector started`         | info    | Startup finished. Lists the database migrations this start applied (`migrationsApplied`, empty when the database was up to date) and which optional features are switched on (Discord sign-in, webhook events, audit key, ClickHouse, the sink to your own database). |
+| `Shardlens collector started`         | info    | Startup finished. Lists the database migrations this start applied (`migrationsApplied`, empty when the database was up to date), which optional features are switched on (Discord sign-in, webhook events, audit key, ClickHouse, the sink to your own database), whether the dashboard is served, and the mode users are recorded in (`mode`, and `modeFrom`: `environment` when `SHARDLENS_MODE` set it). |
 | `Server listening at …`               | info    | The address the collector accepts connections on.                                                                         |
 | `shutting down`                       | info    | The collector received `SIGTERM` or `SIGINT` and is finishing what it was doing.                                          |
 | `Demo mode: …`                        | warning | `SHARDLENS_DEMO` is on: the dashboard is open to anyone. For demo data only.                                              |
 | `Live tiles are not shared …`         | warning | PostgreSQL refused `LISTEN` at startup, so with several collectors each one's live tiles show only its own traffic until a retry in the background succeeds. |
 | `Live tiles lost their LISTEN connection …` | warning | The connection that shares live tiles broke (a database restart, say). The collector subscribes again, waiting up to 30 seconds between tries. |
 | `this collector is now the job leader` | info   | This instance runs the background jobs (rollups, alerts, retention). Exactly one instance does.                           |
-| `events rejected`                     | warning | A batch was accepted but some events were dropped. `reasons` counts them: `too_old` (older than your raw-data retention, 35 days at most), `in_future` (more than a day ahead), `unknown_salt_period` (hashed with a salt that was destroyed), `invalid_event`, `refused_by_database` (a value PostgreSQL would not store). |
+| `events rejected`                     | warning | A batch was accepted but some events were dropped. `reasons` counts them: `too_old` (older than your raw-data retention: 35 days unless Settings says otherwise), `in_future` (more than a day ahead), `unknown_salt_period` (hashed with a salt that was destroyed), `invalid_event`, `refused_by_database` (a value PostgreSQL would not store). |
 | `input refused by the database`       | warning | A request carried a value PostgreSQL would not store. It was answered with `400`; nothing was saved from it.              |
 | `clock skew corrected for batch`      | warning | The bot's clock is more than 5 minutes off. Timestamps were corrected; fix the clock (NTP).                               |
 | `Discord sign-in failed`              | warning | The OAuth exchange failed. `reason` names the error, usually a wrong client secret or redirect URL.                       |
 | `Discord sign-in refused: …`          | warning | Someone who is not the application owner, a team member or an extra admin tried to sign in. If it says the bot has not reported yet, start the bot with Shardlens once, or add your user ID to `SHARDLENS_EXTRA_ADMINS`. |
 | `No ingest key: …`                    | warning | No ingest key exists, in the environment or created in the dashboard. Set `SHARDLENS_INGEST_KEY`.                         |
 | `No way to open the dashboard: …`     | warning | Neither a read key nor Discord sign-in is set up. Set `SHARDLENS_READ_KEY`.                                               |
+| `No read key, and the dashboard is off: …` | warning | `SHARDLENS_DASHBOARD=off` and no read or activity key exists, so neither your own dashboard nor a script can read the numbers. Set `SHARDLENS_READ_KEY`. |
 | `Discord sign-in works once …`        | warning | Only Discord sign-in is set up and the bot hasn't reported yet. Set a read key or `SHARDLENS_EXTRA_ADMINS` meanwhile.      |
 | `live update failed`                  | warning | The live tiles could not read the database. Logged once per open dashboard.                                               |
 | `slow job`                            | info    | A background job took more than 10 seconds. Frequent on a healthy database means it needs more resources.                 |

@@ -1,6 +1,10 @@
 import { createHash, randomBytes } from 'node:crypto';
 
-export type ApiKeyScope = 'ingest' | 'read';
+/**
+ * `ingest` sends events, `read` runs queries, `activity` also reads who ran what in audit mode (for the owner's own
+ * dashboard, where no person signs in with Discord).
+ */
+export type ApiKeyScope = 'ingest' | 'read' | 'activity';
 
 /**
  * Creates an API key: `slk_<scope>_<32 random bytes, base64url>`. The plaintext is shown once; only its SHA-256 is
@@ -13,6 +17,6 @@ export function newApiKey(scope: ApiKeyScope): { plaintext: string; sha256: stri
 
 /** Scope encoded in a key's prefix, or `undefined` if the key is not a Shardlens key. */
 export function apiKeyScope(presented: string): ApiKeyScope | undefined {
-  const match = /^slk_(ingest|read)_[\w-]{43}$/.exec(presented);
+  const match = /^slk_(ingest|read|activity)_[\w-]{43}$/.exec(presented);
   return match?.[1] as ApiKeyScope | undefined;
 }

@@ -47,8 +47,14 @@ export class KeyStore {
     this.#db = db;
   }
 
-  async verify(presented: string | undefined, scope: ApiKeyScope): Promise<KeyAuth | undefined> {
-    if (!presented || apiKeyScope(presented) !== scope) return undefined;
+  /** The key's record when it is known, not revoked and of `scope` (or one of several scopes). */
+  async verify(
+    presented: string | undefined,
+    scope: ApiKeyScope | readonly ApiKeyScope[],
+  ): Promise<KeyAuth | undefined> {
+    const allowed: readonly ApiKeyScope[] = typeof scope === 'string' ? [scope] : scope;
+    const claimed = presented ? apiKeyScope(presented) : undefined;
+    if (!presented || !claimed || !allowed.includes(claimed)) return undefined;
     const digest = sha256(presented);
     const cacheKey = digest.toString('hex');
     const now = Date.now();
@@ -69,7 +75,7 @@ export class KeyStore {
       entry = { auth: { keyId: row.id, appId: row.app_id, scope: row.scope }, at: now };
       this.#known.set(cacheKey, entry);
     }
-    if (entry.auth.scope !== scope) return undefined;
+    if (!allowed.includes(entry.auth.scope)) return undefined;
     if (now - (this.#touched.get(entry.auth.keyId) ?? 0) > KEY_CACHE_MS) {
       this.#touched.set(entry.auth.keyId, now);
       void this.#db
@@ -86,13 +92,32 @@ export class KeyStore {
   }
 }
 
-/** Ensures a plaintext key from the environment exists in `api_keys` (stored as its SHA-256 only). */
+/**
+ * Ensures a plaintext key from the environment exists in `api_keys` (stored as its SHA-256 only), labelled with its
+ * variable. A new value revokes the key the variable held before: without the dashboard, changing the variable is the
+ * only way to replace a leaked key. Only a key seen for the first time does this, so a collector instance still
+ * started with the old value can't revoke the new one.
+ */
 export async function seedKey(db: Db, appId: string, plaintext: string, label: string): Promise<void> {
   const scope = apiKeyScope(plaintext);
   if (!scope) throw new Error(`${label} is not a valid Shardlens key`);
+  const digest = sha256(plaintext);
   await db.query(
-    `INSERT INTO api_keys (app_id, scope, sha256, label) VALUES ($1, $2, $3, $4) ON CONFLICT (sha256) DO NOTHING`,
-    [appId, scope, sha256(plaintext), label],
+    `WITH added AS (
+       INSERT INTO api_keys (app_id, scope, sha256, label) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (sha256) DO NOTHING RETURNING id
+     ), replaced AS (
+       UPDATE api_keys SET revoked_at = now()
+        WHERE EXISTS (SELECT 1 FROM added) AND app_id = $1 AND scope = $2 AND label = $4 AND sha256 <> $3
+          AND revoked_at IS NULL
+       RETURNING id
+     ), signed_out AS (
+       DELETE FROM sessions WHERE key_id IN (SELECT id FROM replaced)
+     )
+     INSERT INTO admin_audit (app_id, action, details)
+     SELECT $1, 'key_revoke', jsonb_build_object('id', id::text, 'by', 'environment', 'variable', $4::text)
+       FROM replaced`,
+    [appId, scope, digest, label],
   );
 }
 
