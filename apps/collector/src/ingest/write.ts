@@ -156,7 +156,8 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
   };
 
   const interactionRows: unknown[][] = [];
-  const uniqueRows: unknown[][] = [];
+  /** By primary key, so each row is inserted once and in key order (see the insert). */
+  const uniqueRows = new Map<string, unknown[]>();
   const commandGuilds: string[] = [];
   const commandTimes: Date[] = [];
   const errorRows: unknown[][] = [];
@@ -193,7 +194,17 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
     if (command) scopes.push(['command', command]);
     if (guild) scopes.push(['guild', guild]);
     scopes.push(...extra);
-    for (const [scope, key] of scopes) uniqueRows.push([ctx.appId, user.period, day, scope, key, user.bytes]);
+    const hash = user.bytes.toString('hex');
+    for (const [scope, key] of scopes) {
+      uniqueRows.set(`${user.period}\0${scope}\0${key}\0${day}\0${hash}`, [
+        ctx.appId,
+        user.period,
+        day,
+        scope,
+        key,
+        user.bytes,
+      ]);
+    }
     if (guild && activity) {
       commandGuilds.push(guild);
       commandTimes.push(ts);
@@ -457,7 +468,14 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
   };
 
   await counted('interactions', INTERACTION_COLUMNS, interactionRows, result.stored);
-  await insertRows(tx, 'uniques', ['app_id', 'period', 'day', 'scope', 'scope_key', 'user_hash'], uniqueRows);
+  // Concurrent batches share these rows (the same people run commands on every shard), and an insert waits for any
+  // batch that inserted the same row first. Taken in one order, those waits can't form a cycle and deadlock.
+  await insertRows(
+    tx,
+    'uniques',
+    ['app_id', 'period', 'day', 'scope', 'scope_key', 'user_hash'],
+    [...uniqueRows.keys()].sort().map((key) => uniqueRows.get(key)!),
+  );
   await insertRows(
     tx,
     'audit_log',
@@ -629,7 +647,8 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
       tx,
       'dirty_buckets',
       ['app_id', 'bucket'],
-      [...dirty].map((b) => [ctx.appId, new Date(b)]),
+      // In order, like the unique-user rows: late batches from several shards mark the same minutes.
+      [...dirty].sort((a, b) => a - b).map((b) => [ctx.appId, new Date(b)]),
     );
   }
 
