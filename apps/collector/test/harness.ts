@@ -9,7 +9,7 @@ import { LiveHub } from '../src/live.js';
 import { KeyStore, seedKey } from '../src/security/auth.js';
 import { buildServer } from '../src/server.js';
 import type { ClickHouseStore } from '../src/storage/clickhouse.js';
-import { ensurePartitions } from '../src/storage/maintenance.js';
+
 import { PostgresStore } from '../src/storage/postgres/store.js';
 import type { Store } from '../src/storage/store.js';
 
@@ -45,7 +45,7 @@ export async function startHarness(
   await store.apps.register(APP_ID);
   await seedKey(store, APP_ID, INGEST_KEY, 'test ingest');
   await seedKey(store, APP_ID, READ_KEY, 'test read');
-  await ensurePartitions(db);
+  await store.prepare();
   const config: Config = {
     databaseUrl: url,
     publicUrl: new URL('https://stats.example.com'),

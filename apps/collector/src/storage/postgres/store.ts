@@ -1,10 +1,24 @@
 import { type Db, isRefusedInput } from '../../db.js';
-import type { AdminAuditStorage, AppStorage, KeyStorage, SessionStorage, SettingStorage, Store } from '../store.js';
+import type {
+  AdminAuditStorage,
+  AppStorage,
+  IngestStorage,
+  KeyStorage,
+  SaltStorage,
+  SessionStorage,
+  SettingStorage,
+  Store,
+  WebhookEventStorage,
+} from '../store.js';
 import { postgresAdminAudit } from './admin-audit.js';
 import { postgresApps } from './apps.js';
+import { postgresIngest } from './ingest/write.js';
 import { postgresKeys } from './keys.js';
+import { ensurePartitions } from './partitions.js';
+import { postgresSalts } from './salts.js';
 import { postgresSessions } from './sessions.js';
 import { postgresSettings } from './settings.js';
+import { postgresWebhookEvents } from './webhook-events.js';
 
 /**
  * The collector's store on PostgreSQL, or on PGlite in embedded mode (ADR 0012): a `pg` pool, or PGlite behind the
@@ -15,6 +29,9 @@ export class PostgresStore implements Store {
   readonly keys: KeyStorage;
   readonly sessions: SessionStorage;
   readonly settings: SettingStorage;
+  readonly salts: SaltStorage;
+  readonly ingest: IngestStorage;
+  readonly webhookEvents: WebhookEventStorage;
   readonly adminAudit: AdminAuditStorage;
   readonly #db: Db;
 
@@ -24,7 +41,14 @@ export class PostgresStore implements Store {
     this.keys = postgresKeys(db);
     this.sessions = postgresSessions(db);
     this.settings = postgresSettings(db);
+    this.salts = postgresSalts(db);
+    this.ingest = postgresIngest(db);
+    this.webhookEvents = postgresWebhookEvents(db);
     this.adminAudit = postgresAdminAudit(db);
+  }
+
+  async prepare(): Promise<void> {
+    await ensurePartitions(this.#db);
   }
 
   async ready(): Promise<void> {

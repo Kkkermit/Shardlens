@@ -1,16 +1,43 @@
-import { parseBatch } from '@shardlens/schema';
+import { type Event, parseBatch } from '@shardlens/schema';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { isRefusedInput, transaction } from '../db.js';
-import { type Indexed, writeEachEvent, writeEvents } from '../ingest/write.js';
 import { bearerToken, type KeyAuth } from '../security/auth.js';
 import { auditCipher } from '../security/crypto.js';
 import { gunzipBounded } from '../security/gzip.js';
 import type { Deps } from '../server.js';
-import { ACCEPT_BACK_DAYS, livePeriods, RETENTION_DAYS } from '../storage/maintenance.js';
+import { ACCEPT_BACK_DAYS, RETENTION_DAYS } from '../storage/retention.js';
+import type { IngestContext, IngestItem, WriteResult } from '../storage/store.js';
 
 const MAX_SKEW_MS = 5 * 60_000;
 const MAX_FUTURE_MS = 86_400_000;
 const MAX_IN_FLIGHT = 16;
+
+/** For a batch when it and the app are both in audit mode and the audit key is configured. */
+interface Audit {
+  cipher: ReturnType<typeof auditCipher>;
+  oldestMs: number;
+}
+
+/**
+ * The item as the store gets it: who ran a command never reaches the store in clear. The identity is encrypted with
+ * the audit key in audit mode within audit retention, and left out otherwise.
+ */
+function sealActor(item: IngestItem, audit: Audit | undefined): IngestItem {
+  const e = item.event;
+  if ((e.type !== 'interaction' && e.type !== 'message_command') || !e.actor) return item;
+  const { actor, ...event } = e;
+  if (!audit || e.ts < audit.oldestMs) return { index: item.index, event: event as Event };
+  const { cipher } = audit;
+  const named = actor.username !== undefined || actor.avatar !== undefined;
+  return {
+    index: item.index,
+    event: event as Event,
+    actor: {
+      lookup: cipher.lookupHash(actor.userId),
+      userId: cipher.encrypt(actor.userId),
+      profile: named ? cipher.encrypt(JSON.stringify({ username: actor.username, avatar: actor.avatar })) : null,
+    },
+  };
+}
 
 /** `POST /v1/ingest`: SDK batches. */
 export async function ingestRoutes(app: FastifyInstance, deps: Deps): Promise<void> {
@@ -109,7 +136,7 @@ export async function ingestRoutes(app: FastifyInstance, deps: Deps): Promise<vo
         // Events written to gauges must also fit the gauge table's shorter window, or the insert would fail the batch.
         const gaugeDays = Math.min(keepDays, RETENTION_DAYS.gauges as number);
         const oldestGauge = now - (gaugeDays - 1) * 86_400_000;
-        const items: Indexed[] = [];
+        const items: IngestItem[] = [];
         parsed.events.forEach((event, i) => {
           const index = positions[i]!;
           const ts = event.ts + shift;
@@ -120,15 +147,15 @@ export async function ingestRoutes(app: FastifyInstance, deps: Deps): Promise<vo
           else items.push({ index, event: shift === 0 ? event : { ...event, ts } });
         });
 
-        const periods = await livePeriods(deps.db, auth.appId);
-        let audit: { cipher: ReturnType<typeof auditCipher>; oldestMs: number } | undefined;
+        const periods = await deps.store.salts.livePeriods(auth.appId, new Date());
+        let audit: Audit | undefined;
         if (envelope.mode === 'audit' && deps.config.auditKey) {
           const days = await deps.store.settings.get(auth.appId, 'audit_retention_days');
           const auditDays = Math.min(90, Math.max(1, days ?? 30));
           // Audit rows only within audit retention (older partitions don't exist).
           audit = { cipher: auditCipher(deps.config.auditKey), oldestMs: now - (auditDays - 1) * 86_400_000 };
         }
-        const context = {
+        const context: IngestContext = {
           appId: auth.appId,
           env: envelope.app.env,
           release: envelope.app.release,
@@ -136,20 +163,18 @@ export async function ingestRoutes(app: FastifyInstance, deps: Deps): Promise<vo
           shards: envelope.source.shards,
           sdkVersion: `${envelope.sdk.name}@${envelope.sdk.version}`.slice(0, 96),
           livePeriods: periods,
-          audit,
           now: new Date(now),
           mirror: deps.analytics !== undefined,
         };
-        let result: Awaited<ReturnType<typeof writeEvents>>;
+        const sealed = items.map((item) => sealActor(item, audit));
+        let result: WriteResult;
         try {
-          result = await transaction(deps.db, (tx) => writeEvents(tx, context, items));
+          result = await deps.store.ingest.write(context, sealed);
         } catch (error) {
-          if (!isRefusedInput(error)) throw error;
-          req.log.warn(
-            { code: error.code },
-            'a value in the batch was refused by the database; writing it event by event',
-          );
-          result = await transaction(deps.db, (tx) => writeEachEvent(tx, context, items));
+          const code = deps.store.refusedInput(error);
+          if (code === undefined) throw error;
+          req.log.warn({ code }, 'a value in the batch was refused by the database; writing it event by event');
+          result = await deps.store.ingest.writeEach(context, sealed);
         }
         // After the PostgreSQL commit: queue accepted rows for ClickHouse and the sink (never blocks or fails ingest).
         if (result.mirror) deps.analytics?.mirror(result.mirror);

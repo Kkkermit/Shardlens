@@ -1,11 +1,8 @@
 import type pg from 'pg';
 import type { Db } from '../db.js';
-import {
-  createUpcomingSalts,
-  destroyExpiredSalts,
-  dropExpiredPartitions,
-  ensurePartitionsPatiently,
-} from '../storage/maintenance.js';
+import { dropExpiredPartitions, ensurePartitionsPatiently } from '../storage/postgres/partitions.js';
+import { PostgresStore } from '../storage/postgres/store.js';
+import { createUpcomingSalts, destroyExpiredSalts } from '../storage/salts.js';
 import { runAlerts } from './alerts.js';
 import { runReports } from './reports.js';
 import { rawRetentionDays, runRollups, runUniques } from './rollups.js';
@@ -49,8 +46,9 @@ export async function runRetention(db: Db, now: Date): Promise<void> {
 }
 
 export async function runSalts(db: Db, now: Date): Promise<string[]> {
-  await createUpcomingSalts(db, now);
-  return destroyExpiredSalts(db, now, (appId, period) => runUniques(db, appId, period, true));
+  const store = new PostgresStore(db);
+  await createUpcomingSalts(store, now);
+  return destroyExpiredSalts(store, now, (appId, period) => runUniques(db, appId, period, true));
 }
 
 /**

@@ -5,8 +5,10 @@
 import { periodLabel, ShardlensClient, uuidv7, type WireEvent } from '@shardlens/core';
 import { createPool } from '../db.js';
 import { backfillRollups, runUniques } from '../jobs/rollups.js';
-import { ensureSalt, RETENTION_DAYS } from '../storage/maintenance.js';
 import { previousPeriodLabel } from '../storage/periods.js';
+import { PostgresStore } from '../storage/postgres/store.js';
+import { RETENTION_DAYS } from '../storage/retention.js';
+import { ensureSalt } from '../storage/salts.js';
 
 const env = (name: string, fallback?: string) => {
   const v = process.env[name] ?? fallback;
@@ -128,6 +130,7 @@ const COMMANDS: { name: string; subs: string[]; weight: number; defer: number; e
 
 async function main() {
   const db = createPool(env('DATABASE_URL'));
+  const store = new PostgresStore(db);
   const appId = env('SHARDLENS_APP_ID');
   const now = Date.now();
   const start = now - 30 * DAY;
@@ -150,13 +153,10 @@ async function main() {
   }
 
   // The demo spans the previous salt period too, so make sure its salt exists (it normally would already).
-  await db.query('INSERT INTO apps (app_id, name) VALUES ($1, $2) ON CONFLICT (app_id) DO NOTHING', [
-    appId,
-    'Demo bot',
-  ]);
-  await ensureSalt(db, appId, periodLabel('month', new Date(now)));
+  await store.apps.register(appId, 'Demo bot');
+  await ensureSalt(store, appId, periodLabel('month', new Date(now)));
   const previous = previousPeriodLabel('month', new Date(now));
-  await ensureSalt(db, appId, previous);
+  await ensureSalt(store, appId, previous);
   // Demo only: last month's salt may already be past its 7-day grace window. Keep it alive for an hour so last
   // month's demo users can be hashed; the salt job then destroys it as usual (finalising its counts).
   await db.query(

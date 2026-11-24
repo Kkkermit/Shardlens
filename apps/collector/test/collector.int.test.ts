@@ -13,9 +13,9 @@ import { runRetention, runSalts } from '../src/jobs/scheduler.js';
 import { allowedUser } from '../src/routes/auth.js';
 import { KeyStore, seedKey } from '../src/security/auth.js';
 import { buildServer } from '../src/server.js';
-import { activeSalts } from '../src/storage/maintenance.js';
 import { periodIdent } from '../src/storage/periods.js';
 import { PostgresStore } from '../src/storage/postgres/store.js';
+import { activeSalts } from '../src/storage/salts.js';
 import {
   APP_ID,
   envelope,
@@ -967,7 +967,7 @@ describe('database server settings', () => {
   });
 
   it('creates the unique-user partition in every database the process uses', async () => {
-    await activeSalts(h.db, APP_ID, 'month');
+    await activeSalts(h.store, APP_ID, 'month');
     await h.db.query('CREATE DATABASE shardlens_second');
     const url = new URL(h.config.databaseUrl);
     url.pathname = '/shardlens_second';
@@ -975,7 +975,7 @@ describe('database server settings', () => {
     const db = createPool(url.toString(), 1);
     try {
       await db.query('INSERT INTO apps (app_id) VALUES ($1)', [APP_ID]);
-      const [salt] = await activeSalts(db, APP_ID, 'month');
+      const [salt] = await activeSalts(new PostgresStore(db), APP_ID, 'month');
       const partition = await db.query<{ t: string | null }>('SELECT to_regclass($1) AS t', [
         `uniques_${periodIdent(salt?.period ?? '')}`,
       ]);

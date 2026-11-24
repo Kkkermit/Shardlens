@@ -81,11 +81,7 @@ async function eraseUser(
   const hashes = [...input.hashes];
   if (input.userId) {
     // Hash the ID with every live salt, so an exact-ID erase covers all periods still linkable.
-    const salts = await db.query<{ secret: Buffer }>(
-      'SELECT secret FROM salts WHERE app_id = $1 AND secret IS NOT NULL',
-      [appId],
-    );
-    for (const s of salts.rows) hashes.push(hmacUser(s.secret, input.userId));
+    for (const secret of await deps.store.salts.liveSecrets(appId)) hashes.push(hmacUser(secret, input.userId));
   }
   let erased = 0;
   if (hashes.length > 0) {

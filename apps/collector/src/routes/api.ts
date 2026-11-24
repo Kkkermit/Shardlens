@@ -5,7 +5,7 @@ import { runQuery } from '../query/run.js';
 import { QuerySpec } from '../query/spec.js';
 import { bearerToken } from '../security/auth.js';
 import { clientKey, type Deps } from '../server.js';
-import { activeSalts } from '../storage/maintenance.js';
+import { activeSalts } from '../storage/salts.js';
 import { requireReader } from './guard.js';
 
 /** How often a live stream sends a heartbeat. `@shardlens/client` gives up on a stream that is quiet for three. */
@@ -18,7 +18,7 @@ export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void>
     const a = await deps.store.apps.get(auth.appId);
     if (!a) return reply.code(404).send({ error: 'unknown_app' });
     const sampling = await deps.store.settings.get(auth.appId, 'sampling');
-    const salts = await activeSalts(deps.db, auth.appId, a.saltPeriod);
+    const salts = await activeSalts(deps.store, auth.appId, a.saltPeriod);
     reply.header('cache-control', 'no-store');
     return {
       v: 1,

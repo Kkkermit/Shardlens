@@ -1,5 +1,5 @@
 import type { Db } from '../db.js';
-import { ACCEPT_BACK_DAYS } from '../storage/maintenance.js';
+import { ACCEPT_BACK_DAYS } from '../storage/retention.js';
 
 const DAY = 86_400_000;
 const BUCKET_MS = { rollup_1m: 60_000, rollup_1h: 3_600_000, rollup_1d: DAY } as const;

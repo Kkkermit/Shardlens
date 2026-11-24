@@ -41,6 +41,11 @@ export function postgresApps(db: Db): AppStorage {
       );
     },
 
+    async list() {
+      const apps = await db.query<{ app_id: string; salt_period: SaltPeriod }>('SELECT app_id, salt_period FROM apps');
+      return apps.rows.map((r) => ({ appId: r.app_id, saltPeriod: r.salt_period }));
+    },
+
     async update(appId, changes) {
       const set = COLUMNS.filter(([field]) => changes[field] !== undefined);
       if (set.length === 0) return;

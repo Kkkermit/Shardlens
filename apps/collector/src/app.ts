@@ -6,8 +6,8 @@ import { LiveHub } from './live.js';
 import { KeyStore, seedKey } from './security/auth.js';
 import { buildServer } from './server.js';
 import type { ClickHouseStore } from './storage/clickhouse.js';
-import { activeSalts, ensurePartitions } from './storage/maintenance.js';
 import { PostgresStore } from './storage/postgres/store.js';
+import { activeSalts } from './storage/salts.js';
 import { createSink, SinkMirror } from './storage/sink.js';
 import type { Store } from './storage/store.js';
 
@@ -72,9 +72,9 @@ export async function startCollector(
   if (config.mode && (await store.apps.setMode(config.appId, config.mode))) {
     await store.adminAudit.record(config.appId, null, 'settings_update', { fields: ['mode'], by: 'environment' });
   }
-  await ensurePartitions(db);
+  await store.prepare();
   const appRow = await store.apps.get(config.appId);
-  await activeSalts(db, config.appId, appRow?.saltPeriod ?? 'month');
+  await activeSalts(store, config.appId, appRow?.saltPeriod ?? 'month');
 
   const live = new LiveHub(db);
   const liveShared = await live.start();

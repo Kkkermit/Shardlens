@@ -1,7 +1,7 @@
 import { createHmac } from 'node:crypto';
-import type { Db, Tx } from '../db.js';
-import { ensureSalt } from '../storage/maintenance.js';
-import { periodLabel, type SaltPeriod } from '../storage/periods.js';
+import { periodLabel } from '../storage/periods.js';
+import { ensureSalt } from '../storage/salts.js';
+import type { Store } from '../storage/store.js';
 
 /**
  * The collector's half of user pseudonymisation, for data that reaches it directly from Discord (webhook events).
@@ -14,20 +14,15 @@ export function hmacUser(secret: Buffer, userId: string): Buffer {
 
 /** Hash for the salt period containing `at`, or `undefined` if that period's salt is gone (destroyed or never made). */
 export async function hashUserId(
-  db: Db | Tx,
+  store: Store,
   appId: string,
   userId: string,
   at: Date = new Date(),
 ): Promise<{ period: string; bytes: Buffer } | undefined> {
-  const app = await db.query<{ salt_period: SaltPeriod }>('SELECT salt_period FROM apps WHERE app_id = $1', [appId]);
-  const saltPeriod = app.rows[0]?.salt_period ?? 'month';
+  const saltPeriod = (await store.apps.get(appId))?.saltPeriod ?? 'month';
   const period = periodLabel(saltPeriod, at);
   // Salts are created lazily; make sure the *current* period has one (never create salts for past periods).
-  if (period === periodLabel(saltPeriod, new Date())) await ensureSalt(db, appId, period);
-  const salt = await db.query<{ secret: Buffer | null }>(
-    'SELECT secret FROM salts WHERE app_id = $1 AND period = $2 AND destroy_after > now()',
-    [appId, period],
-  );
-  const secret = salt.rows[0]?.secret;
+  if (period === periodLabel(saltPeriod, new Date())) await ensureSalt(store, appId, period);
+  const secret = await store.salts.secret(appId, period);
   return secret ? { period, bytes: hmacUser(secret, userId) } : undefined;
 }

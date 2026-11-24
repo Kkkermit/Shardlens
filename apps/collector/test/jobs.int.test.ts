@@ -5,13 +5,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createPool, transaction } from '../src/db.js';
 import { runRollups, runUniques } from '../src/jobs/rollups.js';
 import {
-  activeSalts,
   dropExpiredPartitions,
   ensurePartitions,
   ensurePartitionsPatiently,
-  ensureSalt,
-  UPCOMING_SALT_MS,
-} from '../src/storage/maintenance.js';
+} from '../src/storage/postgres/partitions.js';
+import { activeSalts, ensureSalt, UPCOMING_SALT_MS } from '../src/storage/salts.js';
 import { APP_ID, type Harness, startHarness } from './harness.js';
 
 const MINUTE = 60_000;
@@ -195,8 +193,8 @@ describe('unique users', () => {
     ).rows[0];
 
   it('counts a week only when it lies inside one salt period, and never rewrites a final count', async () => {
-    await ensureSalt(h.db, APP_ID, '2026-11');
-    await ensureSalt(h.db, APP_ID, '2026-12');
+    await ensureSalt(h.store, APP_ID, '2026-11');
+    await ensureSalt(h.store, APP_ID, '2026-12');
     // 9–15 November is inside November. 30 November – 6 December spans two salts, so its users can't be combined.
     await seen('2026-11', '2026-11-10', users(4));
     await seen('2026-11', '2026-11-30', users(10));
@@ -224,10 +222,10 @@ describe('unique users', () => {
 describe('salts', () => {
   it("hands out the next period's salt in the last minutes of a period, after the others", async () => {
     const end = Date.UTC(2026, 11, 1);
-    const near = await activeSalts(h.db, APP_ID, 'month', new Date(end - 2 * MINUTE));
+    const near = await activeSalts(h.store, APP_ID, 'month', new Date(end - 2 * MINUTE));
     expect(near[0]?.period).toBe('2026-11');
     expect(near.at(-1)?.period).toBe('2026-12');
-    const earlier = await activeSalts(h.db, APP_ID, 'month', new Date(end - UPCOMING_SALT_MS - MINUTE));
+    const earlier = await activeSalts(h.store, APP_ID, 'month', new Date(end - UPCOMING_SALT_MS - MINUTE));
     expect(earlier.map((s) => s.period)).not.toContain('2026-12');
   });
 });

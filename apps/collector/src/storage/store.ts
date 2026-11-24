@@ -1,4 +1,6 @@
+import type { Event } from '@shardlens/schema';
 import type { ApiKeyScope } from '../security/keys.js';
+import type { MirroredCustom, MirroredInteraction } from './clickhouse.js';
 import type { SaltPeriod } from './periods.js';
 
 /*
@@ -35,6 +37,8 @@ export interface AppStorage {
    */
   register(appId: string, name?: string): Promise<void>;
   get(appId: string): Promise<AppRecord | undefined>;
+  /** Every app, for the jobs that work per app. */
+  list(): Promise<{ appId: string; saltPeriod: SaltPeriod }[]>;
   /** Changes only the fields given. */
   update(appId: string, changes: Partial<AppRecord>): Promise<void>;
   /** `true` when the mode was another before. */
@@ -144,6 +148,145 @@ export interface SettingStorage {
   supportsTimeZone(name: string): Promise<boolean>;
 }
 
+/** A period's salt, made outside the store (`storage/salts.ts`). */
+export interface NewSalt {
+  /** Salt period label: `2026-11`, `2026-W46` or `2026-11-13`. */
+  period: string;
+  /** 32 random bytes. */
+  secret: Buffer;
+  periodEnd: Date;
+  /** When the job destroys the secret: the end of the period plus a grace week. */
+  destroyAfter: Date;
+}
+
+/**
+ * Salts pseudonymise users (ADR 0001). A destroyed salt keeps its row with the secret gone, so its period can never be
+ * salted again.
+ */
+export interface SaltStorage {
+  /**
+   * Stores the salt unless the app already has one for its period, and makes ready whatever that period's unique-user
+   * rows need (PostgreSQL: a partition). Several collectors may call it at once for the same period.
+   */
+  ensure(appId: string, salt: NewSalt): Promise<void>;
+  /** Of `periods`, those whose secret is still there and not due for destruction at `now`. */
+  alive(appId: string, periods: readonly string[], now: Date): Promise<{ period: string; secret: Buffer }[]>;
+  /** Every period whose secret is still there and not due for destruction at `now`. */
+  livePeriods(appId: string, now: Date): Promise<Set<string>>;
+  /** The period's secret, unless it is due for destruction now (or destroyed). */
+  secret(appId: string, period: string): Promise<Buffer | undefined>;
+  /** Every secret not destroyed yet, due or not: an erase by user ID hashes with each. */
+  liveSecrets(appId: string): Promise<Buffer[]>;
+  /** Salts due for destruction at `now` whose secret is still there, for every app. */
+  expired(now: Date): Promise<{ appId: string; period: string }[]>;
+  /**
+   * Destroys the salt: deletes the period's unique-user rows, removes the secret and records `now` as when. Final
+   * unique counts are written before this is called.
+   */
+  destroy(appId: string, period: string, now: Date): Promise<void>;
+}
+
+/** Who ran a command in audit mode, encrypted outside the store with the audit key. Stored as it is. */
+export interface SealedActor {
+  /** Deterministic key, so a lookup by exact user ID needs no decryption. */
+  lookup: Buffer;
+  /** The user ID, encrypted. */
+  userId: Buffer;
+  /** Username and avatar, encrypted together. `null` when the SDK sent neither. */
+  profile: Buffer | null;
+}
+
+export interface IngestItem {
+  /** Position in the submitted batch, for rejections. */
+  index: number;
+  /** Validated, its time corrected for the sender's clock. Never carries `actor`: see `actor` here. */
+  event: Event;
+  /** For interactions and message commands, only in audit mode and within audit retention. */
+  actor?: SealedActor | undefined;
+}
+
+export interface IngestContext {
+  appId: string;
+  env: string;
+  release: string | undefined;
+  /** The sending bot process. */
+  instance: string;
+  /** The shards that process holds. */
+  shards: number[];
+  /** `name@version` of the SDK. */
+  sdkVersion: string;
+  /** Salt periods whose salt is alive: an event hashed in any other is rejected as `unknown_salt_period`. */
+  livePeriods: ReadonlySet<string>;
+  now: Date;
+  /** Also return what was stored for the ClickHouse analytics store (`WriteResult.mirror`). */
+  mirror?: boolean | undefined;
+}
+
+export interface WriteResult {
+  /** Events stored now. */
+  accepted: number;
+  /** Events already stored by an earlier attempt of the batch. */
+  duplicates: number;
+  rejected: { index: number; reason: string }[];
+  /** IDs, lower case, of the interactions and message commands stored now (retried ones left out): live tiles count them. */
+  stored: Set<string>;
+  /** With `IngestContext.mirror`: the interactions and custom events stored now, never retried ones. */
+  mirror?: { interactions: MirroredInteraction[]; custom: MirroredCustom[] } | undefined;
+}
+
+export interface IngestStorage {
+  /**
+   * Stores a batch, all of it or none of it. Each event is stored once by its UUIDv7 (with its time), so a retried
+   * batch comes back as duplicates. Server joins, leaves, profiles, snapshots, the command registry and app info are
+   * applied in batch order; an event more than 2 minutes old marks its minute for the rollup job to recompute.
+   * Concurrent batches share unique-user rows and late minutes, so an engine with row locks writes those in one order.
+   */
+  write(ctx: IngestContext, items: readonly IngestItem[]): Promise<WriteResult>;
+  /**
+   * As `write`, one event at a time, after `write` threw an error `Store.refusedInput` recognises: an event the store
+   * refuses is rejected alone, as `refused_by_database`, and the others are stored.
+   */
+  writeEach(ctx: IngestContext, items: readonly IngestItem[]): Promise<WriteResult>;
+}
+
+/** One Discord webhook event delivery (an install or an entitlement change). */
+export interface WebhookDelivery {
+  /** Derived from the body, so Discord's retry of a delivery has the same ID and is stored once. */
+  id: string;
+  ts: Date;
+  appId: string;
+  /** Discord's event type, such as `APPLICATION_AUTHORIZED`. */
+  type: string;
+  /** 0 server install, 1 user install. */
+  integrationType: number | null;
+  userHash: Buffer | null;
+  /** The installing user's ID, encrypted with the audit key, in audit mode only. */
+  actor: Buffer | null;
+  guildId: string | null;
+  scopes: string[] | null;
+}
+
+/** An entitlement created, updated or deleted, from the gateway (ingest) or a webhook event. */
+export interface EntitlementChange {
+  appId: string;
+  ts: Date;
+  action: 'create' | 'update' | 'delete';
+  skuId: string;
+  entitlementType: number;
+  owner: 'user' | 'guild';
+  userHash: Buffer | null;
+  guildId: string | null;
+  startsAt: Date | null;
+  endsAt: Date | null;
+}
+
+export interface WebhookEventStorage {
+  /** Stores the delivery unless one with its ID is stored. */
+  record(delivery: WebhookDelivery): Promise<void>;
+  /** Stores an entitlement change that arrived as a webhook event. */
+  recordEntitlement(change: EntitlementChange): Promise<void>;
+}
+
 export interface AdminAuditStorage {
   /** Records something a person (`userId`), or the collector's configuration (`null`), changed. No secrets in `details`. */
   record(appId: string, userId: string | null, action: string, details?: object): Promise<void>;
@@ -154,7 +297,15 @@ export interface Store {
   readonly keys: KeyStorage;
   readonly sessions: SessionStorage;
   readonly settings: SettingStorage;
+  readonly salts: SaltStorage;
+  readonly ingest: IngestStorage;
+  readonly webhookEvents: WebhookEventStorage;
   readonly adminAudit: AdminAuditStorage;
+  /**
+   * Makes ready, at start-up, whatever the coming week's events need (PostgreSQL: daily partitions from the start of
+   * each table's retention to a week ahead). Several collectors may run it at once.
+   */
+  prepare(): Promise<void>;
   /** Resolves when the store can serve (`GET /readyz`); rejects when it can't. */
   ready(): Promise<void>;
   /**
