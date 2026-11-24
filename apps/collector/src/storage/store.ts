@@ -1,4 +1,6 @@
+import type { QueryResults } from '@shardlens/client';
 import type { Event } from '@shardlens/schema';
+import type { QuerySpec, Spec } from '../query/spec.js';
 import type { ApiKeyScope } from '../security/keys.js';
 import type { MirroredCustom, MirroredInteraction } from './clickhouse.js';
 import type { SaltPeriod } from './periods.js';
@@ -287,6 +289,99 @@ export interface WebhookEventStorage {
   recordEntitlement(change: EntitlementChange): Promise<void>;
 }
 
+/**
+ * A value as a store hands it over for an answer the HTTP API sends as JSON: a `Date` may stand wherever a string is,
+ * since JSON writes it as the ISO 8601 string the client reads. Other strings keep the format the client documents
+ * (days as `YYYY-MM-DD`, chart points without an offset).
+ */
+export type Stored<T> = T extends string
+  ? string extends T
+    ? string | Date
+    : T
+  : T extends readonly (infer U)[]
+    ? Stored<U>[]
+    : T extends object
+      ? { [K in keyof T]: Stored<T[K]> }
+      : T;
+
+/**
+ * The answer to a query of kind `K`: the shape `@shardlens/client` types (`results.ts`), which the dashboard reads too.
+ * `test/client.int.test.ts` checks every answer against it, strictly.
+ */
+export type QueryAnswer<K extends QuerySpec['kind']> = Stored<QueryResults[K]>;
+
+/** A series point from rollups. `key` is the `groupBy` dimension as stored (`''` for events without it, or no `groupBy`). */
+export interface SeriesRow {
+  /** Start of the interval in the spec's time zone, without an offset: `2026-11-16T00:00:00`. */
+  t: string;
+  key: string | null;
+  value: number | null;
+}
+
+/** A top row from rollups. `key` is the `groupBy` dimension as stored (`''` for events without it). */
+export interface TopRow {
+  key: string;
+  /** The spec's `stat`. */
+  value: number | null;
+  count: number;
+}
+
+export interface HeatmapCell {
+  /** ISO weekday in the spec's time zone, 1 Monday to 7 Sunday. */
+  weekday: number;
+  hour: number;
+  value: number;
+}
+
+export interface GuildName {
+  id: string;
+  name: string;
+  icon: string | null;
+}
+
+/**
+ * Every query kind of `POST /v1/query`, plus the lookups the shared query code needs. Specs arrive parsed by
+ * `QuerySpec` (defaults applied). Dimension values are stored as the codes in `ingest/codes.ts` (`query/dimensions.ts`
+ * turns API names into codes and back). Single events are read only as far back as the app's raw retention; rollups
+ * by minute for 14 days, by hour for 13 months and by day after that (the rollup job writes them).
+ */
+export interface QueryStorage {
+  /**
+   * `series` from the rollups of `metric` (the spec's metric resolved: `custom.<name>`, or `interactions.by_guild` when
+   * it groups or filters by server). The `limit` keys with the most events, filters matched against stored codes.
+   */
+  series(appId: string, spec: Spec<'series'>, metric: string, now: Date): Promise<SeriesRow[]>;
+  /** `top` from the rollups of `metric` (see `series`), highest `stat` first. */
+  top(appId: string, spec: Spec<'top'>, metric: string, now: Date): Promise<TopRow[]>;
+  /** Events of `metric` by weekday and hour, from hourly rollups (the last 13 months at most). */
+  heatmap(appId: string, spec: Spec<'heatmap'>, metric: string, now: Date): Promise<HeatmapCell[]>;
+  commands(appId: string, spec: Spec<'commands'>, now: Date): Promise<QueryAnswer<'commands'>>;
+  command(appId: string, spec: Spec<'command'>, now: Date): Promise<QueryAnswer<'command'>>;
+  servers(appId: string, spec: Spec<'servers'>, now: Date): Promise<QueryAnswer<'servers'>>;
+  server(appId: string, spec: Spec<'server'>, now: Date): Promise<QueryAnswer<'server'>>;
+  growth(appId: string, spec: Spec<'growth'>, now: Date): Promise<QueryAnswer<'growth'>>;
+  audience(appId: string, spec: Spec<'audience'>, now: Date): Promise<QueryAnswer<'audience'>>;
+  overview(appId: string, spec: Spec<'overview'>, now: Date): Promise<QueryAnswer<'overview'>>;
+  gauge(appId: string, spec: Spec<'gauge'>, now: Date): Promise<QueryAnswer<'gauge'>>;
+  bursts(appId: string, spec: Spec<'bursts'>, now: Date): Promise<QueryAnswer<'bursts'>>;
+  reliability(appId: string, spec: Spec<'reliability'>, now: Date): Promise<QueryAnswer<'reliability'>>;
+  premium(appId: string, spec: Spec<'premium'>, now: Date): Promise<QueryAnswer<'premium'>>;
+  installs(appId: string, spec: Spec<'installs'>, now: Date): Promise<QueryAnswer<'installs'>>;
+  events(appId: string, spec: Spec<'events'>, now: Date): Promise<QueryAnswer<'events'>>;
+  eventProps(appId: string, spec: Spec<'eventProps'>, now: Date): Promise<QueryAnswer<'eventProps'>>;
+  /** Links a person's steps by salted hash inside the store and returns counts only. */
+  funnel(appId: string, spec: Spec<'funnel'>, now: Date): Promise<QueryAnswer<'funnel'>>;
+  /** As `funnel`: counts only, a person known by salted hash. */
+  retention(appId: string, spec: Spec<'retention'>, now: Date): Promise<QueryAnswer<'retention'>>;
+  /** Names and icons of the servers with these IDs that the store has a profile for. */
+  guildNames(appId: string, ids: readonly string[]): Promise<GuildName[]>;
+  /**
+   * A public badge's number: `servers` (the bot is in now), `users-monthly` (unique users of the latest salt period)
+   * or `commands-daily` (runs in the last 24 hours). `null` when there is none.
+   */
+  badge(appId: string, metric: string): Promise<number | null>;
+}
+
 export interface AdminAuditStorage {
   /** Records something a person (`userId`), or the collector's configuration (`null`), changed. No secrets in `details`. */
   record(appId: string, userId: string | null, action: string, details?: object): Promise<void>;
@@ -300,6 +395,7 @@ export interface Store {
   readonly salts: SaltStorage;
   readonly ingest: IngestStorage;
   readonly webhookEvents: WebhookEventStorage;
+  readonly query: QueryStorage;
   readonly adminAudit: AdminAuditStorage;
   /**
    * Makes ready, at start-up, whatever the coming week's events need (PostgreSQL: daily partitions from the start of

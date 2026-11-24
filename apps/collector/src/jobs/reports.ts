@@ -3,6 +3,7 @@ import { postToDiscordWebhook } from '../discord-webhook.js';
 import { runQuery } from '../query/run.js';
 import { QuerySpec } from '../query/spec.js';
 import { auditCipher } from '../security/crypto.js';
+import { PostgresStore } from '../storage/postgres/store.js';
 
 export const REPORT_SCHEDULES = ['daily', 'weekly'] as const;
 export type ReportSchedule = (typeof REPORT_SCHEDULES)[number];
@@ -67,13 +68,14 @@ function periodLabel(row: Pick<ReportRow, 'schedule' | 'timezone' | 'day_start' 
 
 /** The summary for one finished day or week. Counts only: nothing in a report identifies a user. */
 async function buildReport(db: Db, row: ReportRow, now: Date): Promise<{ title: string; body: string }> {
+  const store = new PostgresStore(db);
   const from = row.schedule === 'daily' ? row.day_start : row.week_start;
   const range = { from: from.toISOString(), to: row.day_end.toISOString() };
   const [reliability, commands, growth, audience] = (await Promise.all([
-    runQuery(db, row.app_id, QuerySpec.parse({ kind: 'reliability', range }), now),
-    runQuery(db, row.app_id, QuerySpec.parse({ kind: 'commands', range }), now),
-    runQuery(db, row.app_id, QuerySpec.parse({ kind: 'growth', range, timezone: row.timezone }), now),
-    runQuery(db, row.app_id, QuerySpec.parse({ kind: 'audience', range }), now),
+    runQuery(store, row.app_id, QuerySpec.parse({ kind: 'reliability', range }), now),
+    runQuery(store, row.app_id, QuerySpec.parse({ kind: 'commands', range }), now),
+    runQuery(store, row.app_id, QuerySpec.parse({ kind: 'growth', range, timezone: row.timezone }), now),
+    runQuery(store, row.app_id, QuerySpec.parse({ kind: 'audience', range }), now),
   ])) as [
     { totals: Totals | null },
     { rows: CommandRow[] },

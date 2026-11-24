@@ -4,6 +4,7 @@ import type {
   AppStorage,
   IngestStorage,
   KeyStorage,
+  QueryStorage,
   SaltStorage,
   SessionStorage,
   SettingStorage,
@@ -15,6 +16,7 @@ import { postgresApps } from './apps.js';
 import { postgresIngest } from './ingest/write.js';
 import { postgresKeys } from './keys.js';
 import { ensurePartitions } from './partitions.js';
+import { postgresQueries } from './queries.js';
 import { postgresSalts } from './salts.js';
 import { postgresSessions } from './sessions.js';
 import { postgresSettings } from './settings.js';
@@ -32,6 +34,7 @@ export class PostgresStore implements Store {
   readonly salts: SaltStorage;
   readonly ingest: IngestStorage;
   readonly webhookEvents: WebhookEventStorage;
+  readonly query: QueryStorage;
   readonly adminAudit: AdminAuditStorage;
   readonly #db: Db;
 
@@ -44,6 +47,7 @@ export class PostgresStore implements Store {
     this.salts = postgresSalts(db);
     this.ingest = postgresIngest(db);
     this.webhookEvents = postgresWebhookEvents(db);
+    this.query = postgresQueries(db);
     this.adminAudit = postgresAdminAudit(db);
   }
 

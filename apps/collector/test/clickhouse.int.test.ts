@@ -24,7 +24,7 @@ const pgRange = () => ({
   to: new Date(Date.now() + 3_600_000).toISOString(),
 });
 const run = (spec: object, withClickHouse: boolean) =>
-  runQuery(h.db, APP_ID, QuerySpec.parse(spec), new Date(), withClickHouse ? store : undefined) as Promise<
+  runQuery(h.store, APP_ID, QuerySpec.parse(spec), new Date(), withClickHouse ? store : undefined) as Promise<
     Record<string, unknown>
   >;
 

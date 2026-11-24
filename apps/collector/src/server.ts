@@ -11,7 +11,7 @@ import { ZodError } from 'zod';
 import type { Db } from './db.js';
 import type { Config } from './env.js';
 import type { LiveHub } from './live.js';
-import { QueryError } from './query/run.js';
+import { QueryError } from './query/error.js';
 import { adminRoutes } from './routes/admin.js';
 import { apiRoutes } from './routes/api.js';
 import { authRoutes } from './routes/auth.js';

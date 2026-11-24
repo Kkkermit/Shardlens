@@ -1,8 +1,7 @@
-import type { Db } from '../db.js';
-import { COMMAND_KINDS_SQL } from '../ingest/codes.js';
-import type { QuerySpec } from './spec.js';
+import type { Db } from '../../../db.js';
+import { COMMAND_KINDS_SQL } from '../../../ingest/codes.js';
+import type { Spec } from '../../../query/spec.js';
 
-type Spec<K extends QuerySpec['kind']> = Extract<QuerySpec, { kind: K }>;
 type Step = Spec<'funnel'>['steps'][number];
 
 /**

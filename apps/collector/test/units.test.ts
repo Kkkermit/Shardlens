@@ -9,10 +9,10 @@ import { parseUserHash } from '../src/ingest/codes.js';
 import { startJobs } from '../src/jobs/scheduler.js';
 import { LiveHub } from '../src/live.js';
 import { openApiDocument } from '../src/openapi.js';
-import { rollupSource } from '../src/query/rollup-source.js';
 import { KeyStore } from '../src/security/auth.js';
 import { buildServer, clientKey } from '../src/server.js';
 import { periodBounds, periodIdent } from '../src/storage/periods.js';
+import { rollupSource } from '../src/storage/postgres/query/rollup-source.js';
 import { PostgresStore } from '../src/storage/postgres/store.js';
 
 const base = {

@@ -1,5 +1,5 @@
-import type { Db } from '../db.js';
-import { INTERACTIONS_ONLY_SQL } from '../ingest/codes.js';
+import type { Db } from '../../../db.js';
+import { INTERACTIONS_ONLY_SQL } from '../../../ingest/codes.js';
 import { gaugeSamples } from './gauge-samples.js';
 import { rawFrom, rollupSource } from './rollup-source.js';
 import { countWhenRan, share } from './totals-sql.js';
@@ -122,13 +122,13 @@ export async function premium(db: Db, appId: string, range: { from: string; to: 
       "SELECT value FROM settings WHERE app_id = $1 AND key = 'sku_prices'",
       [appId],
     ),
-    db.query(
+    db.query<{ sku: string; action: string; count: number; testCount: number }>(
       `SELECT sku_id::text AS sku, action, count(*)::int AS count,
               count(*) FILTER (WHERE entitlement_type = 4)::int AS "testCount"
          FROM entitlements WHERE app_id = $1 AND ts >= $2 AND ts < $3 GROUP BY 1, 2 ORDER BY 1, 2`,
       [appId, from, to],
     ),
-    db.query(
+    db.query<{ sku: string; active: number }>(
       `SELECT sku, count(*)::int AS active FROM (
          SELECT DISTINCT ON (sku_id, coalesce(user_hash, '\\x'::bytea), coalesce(guild_id, 0))
                 sku_id::text AS sku, action, ends_at
@@ -139,7 +139,7 @@ export async function premium(db: Db, appId: string, range: { from: string; to: 
        GROUP BY sku`,
       [appId],
     ),
-    db.query(
+    db.query<{ sku: string; active: number; ending: number; inactive: number }>(
       `SELECT sku, count(*) FILTER (WHERE status = 0)::int AS active, count(*) FILTER (WHERE status = 1)::int AS ending,
               count(*) FILTER (WHERE status = 2)::int AS inactive
          FROM (SELECT DISTINCT ON (user_hash) unnest(sku_ids)::text AS sku, status FROM subscriptions
@@ -156,15 +156,15 @@ export async function premium(db: Db, appId: string, range: { from: string; to: 
   const names = new Map((skus.rows[0]?.skus ?? []).map((s) => [s.id, s.name]));
   const priceMap = prices.rows[0]?.value ?? {};
   const revenue: Record<string, number> = {};
-  for (const row of subs.rows as { sku: string; active: number; ending: number }[]) {
+  for (const row of subs.rows) {
     const price = priceMap[row.sku];
     if (price) revenue[price.currency] = (revenue[price.currency] ?? 0) + price.amount * (row.active + row.ending);
   }
   const label = (sku: string) => names.get(sku) ?? sku;
   return {
-    changes: (changes.rows as { sku: string }[]).map((r) => ({ ...r, name: label(r.sku) })),
-    activeEntitlements: (active.rows as { sku: string }[]).map((r) => ({ ...r, name: label(r.sku) })),
-    subscriptions: (subs.rows as { sku: string }[]).map((r) => ({
+    changes: changes.rows.map((r) => ({ ...r, name: label(r.sku) })),
+    activeEntitlements: active.rows.map((r) => ({ ...r, name: label(r.sku) })),
+    subscriptions: subs.rows.map((r) => ({
       ...r,
       name: label(r.sku),
       price: priceMap[r.sku] ?? null,

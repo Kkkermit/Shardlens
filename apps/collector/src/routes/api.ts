@@ -1,6 +1,5 @@
 import type { FastifyInstance } from 'fastify';
 import { openApiDocument } from '../openapi.js';
-import { badgeValue } from '../query/reports.js';
 import { runQuery } from '../query/run.js';
 import { QuerySpec } from '../query/spec.js';
 import { bearerToken } from '../security/auth.js';
@@ -35,7 +34,7 @@ export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void>
     const appId = await requireReader(deps, req, reply);
     if (!appId) return;
     const spec = QuerySpec.parse(req.body);
-    return runQuery(deps.db, appId, spec, new Date(), deps.analytics);
+    return runQuery(deps.store, appId, spec, new Date(), deps.analytics);
   });
 
   app.get('/v1/meta', async (req, reply) => {
@@ -165,7 +164,7 @@ export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void>
     const cached = badgeCache.get(metric);
     let svg = cached && Date.now() - cached.at < 600_000 ? cached.svg : undefined;
     if (!svg) {
-      const value = await badgeValue(deps.db, deps.config.appId, metric);
+      const value = await deps.store.query.badge(deps.config.appId, metric);
       svg = badgeSvg(
         label,
         value === null ? 'n/a' : new Intl.NumberFormat('en', { notation: 'compact' }).format(value),
