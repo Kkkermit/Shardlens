@@ -10,6 +10,8 @@ import { KeyStore, seedKey } from '../src/security/auth.js';
 import { buildServer } from '../src/server.js';
 import type { ClickHouseStore } from '../src/storage/clickhouse.js';
 import { ensurePartitions } from '../src/storage/maintenance.js';
+import { PostgresStore } from '../src/storage/postgres/store.js';
+import type { Store } from '../src/storage/store.js';
 
 export const APP_ID = '1234567890123456789';
 export const INGEST_KEY = `slk_ingest_${'A'.repeat(43)}`;
@@ -17,6 +19,7 @@ export const READ_KEY = `slk_read_${'B'.repeat(43)}`;
 
 export interface Harness {
   db: Db;
+  store: Store;
   app: FastifyInstance;
   live: LiveHub;
   config: Config;
@@ -38,9 +41,10 @@ export async function startHarness(
   const url = container.getConnectionUri();
   await migrate(url);
   const db = createPool(url, 8);
-  await db.query('INSERT INTO apps (app_id) VALUES ($1) ON CONFLICT DO NOTHING', [APP_ID]);
-  await seedKey(db, APP_ID, INGEST_KEY, 'test ingest');
-  await seedKey(db, APP_ID, READ_KEY, 'test read');
+  const store = new PostgresStore(db);
+  await store.apps.register(APP_ID);
+  await seedKey(store, APP_ID, INGEST_KEY, 'test ingest');
+  await seedKey(store, APP_ID, READ_KEY, 'test read');
   await ensurePartitions(db);
   const config: Config = {
     databaseUrl: url,
@@ -64,10 +68,11 @@ export async function startHarness(
   };
   const live = new LiveHub(db);
   await live.start();
-  const app = await buildServer({ config, db, keys: new KeyStore(db), live, analytics: opts.analytics });
+  const app = await buildServer({ config, store, db, keys: new KeyStore(store), live, analytics: opts.analytics });
   await app.ready();
   return {
     db,
+    store,
     app,
     live,
     config,

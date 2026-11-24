@@ -15,6 +15,7 @@ import { KeyStore, seedKey } from '../src/security/auth.js';
 import { buildServer } from '../src/server.js';
 import { activeSalts } from '../src/storage/maintenance.js';
 import { periodIdent } from '../src/storage/periods.js';
+import { PostgresStore } from '../src/storage/postgres/store.js';
 import {
   APP_ID,
   envelope,
@@ -273,27 +274,27 @@ describe('ingest', () => {
   });
 
   it('warns at start-up when the bot or its owner would have no way in, and says why Discord sign-in is refused', async () => {
-    expect(await signInProblems(h.db, h.config)).toEqual([]);
+    expect(await signInProblems(h.store, h.config)).toEqual([]);
     const fresh = { ...h.config, appId: '1234567890123456780' };
     await h.db.query('INSERT INTO apps (app_id) VALUES ($1) ON CONFLICT DO NOTHING', [fresh.appId]);
-    expect(await signInProblems(h.db, fresh)).toEqual([
+    expect(await signInProblems(h.store, fresh)).toEqual([
       expect.stringMatching(/^No ingest key/),
       expect.stringMatching(/^No way to open the dashboard/),
     ]);
     const discordOnly = { ...fresh, discord: { clientId: fresh.appId, clientSecret: 'x'.repeat(32) } };
-    expect(await signInProblems(h.db, discordOnly)).toEqual([
+    expect(await signInProblems(h.store, discordOnly)).toEqual([
       expect.stringMatching(/^No ingest key/),
       expect.stringMatching(/^Discord sign-in works once the bot has reported/),
     ]);
-    expect(await signInProblems(h.db, { ...discordOnly, extraAdmins: ['334455667788990011'] })).toHaveLength(1);
+    expect(await signInProblems(h.store, { ...discordOnly, extraAdmins: ['334455667788990011'] })).toHaveLength(1);
     // Without the dashboard there is no Settings page to create a key in: a collector nothing can read is said so.
-    expect(await signInProblems(h.db, { ...discordOnly, dashboard: false })).toEqual([
+    expect(await signInProblems(h.store, { ...discordOnly, dashboard: false })).toEqual([
       expect.stringMatching(/^No ingest key/),
       expect.stringMatching(/^No read key, and the dashboard is off/),
     ]);
-    expect(await signInProblems(h.db, { ...h.config, dashboard: false })).toEqual([]);
+    expect(await signInProblems(h.store, { ...h.config, dashboard: false })).toEqual([]);
 
-    const deps = { config: discordOnly, db: h.db } as unknown as Parameters<typeof allowedUser>[0];
+    const deps = { config: discordOnly, store: h.store } as unknown as Parameters<typeof allowedUser>[0];
     expect(await allowedUser(deps, fresh.appId, '334455667788990011')).toBe('bot_not_reported');
     await h.db.query(
       `INSERT INTO app_info (app_id, ts, name, dashboard_user_ids) VALUES ($1, now(), 'bot', ARRAY[334455667788990011]::bigint[])`,
@@ -1095,9 +1096,10 @@ describe('dashboard login', () => {
   it('signs in with Discord: state checked, PKCE sent, the secret to Discord only, no token kept', async () => {
     const admin = '334455667788990022';
     const app = await buildServer({
+      store: h.store,
       db: h.db,
       live: h.live,
-      keys: new KeyStore(h.db),
+      keys: new KeyStore(h.store),
       config: { ...h.config, discord: { clientId: APP_ID, clientSecret: 'shh-client-secret' }, extraAdmins: [admin] },
     });
     const calls: { url: string; init: RequestInit | undefined }[] = [];
@@ -1210,9 +1212,10 @@ describe('abuse limits', () => {
 
   it('counts a visitor behind one proxy by the address the proxy saw, not one the visitor wrote', async () => {
     const behindProxy = await buildServer({
+      store: h.store,
       db: h.db,
       live: h.live,
-      keys: new KeyStore(h.db),
+      keys: new KeyStore(h.store),
       config: { ...h.config, trustProxy: 1 },
     });
     try {
@@ -1237,9 +1240,10 @@ describe('abuse limits', () => {
     const logged = async (logLevel: string) => {
       const lines: string[] = [];
       const app = await buildServer({
+        store: h.store,
         db: h.db,
         live: h.live,
-        keys: new KeyStore(h.db),
+        keys: new KeyStore(h.store),
         config: { ...h.config, logLevel },
         logStream: { write: (line) => void lines.push(line) },
       });
@@ -1258,7 +1262,8 @@ describe('abuse limits', () => {
         throw new Error('connection to 10.0.0.5 refused');
       },
     } as unknown as typeof h.db;
-    const app = await buildServer({ db: broken, live: h.live, keys: new KeyStore(broken), config: h.config });
+    const store = new PostgresStore(broken);
+    const app = await buildServer({ store, db: broken, live: h.live, keys: new KeyStore(store), config: h.config });
     const res = await app.inject({ method: 'GET', url: '/v1/meta', headers: { authorization: `Bearer ${READ_KEY}` } });
     await app.close();
     expect(res.statusCode).toBe(500);
@@ -1304,7 +1309,8 @@ describe('abuse limits', () => {
         throw Object.assign(new Error('value "1e400" is out of range'), { code: '22003', severity: 'ERROR' });
       },
     } as unknown as typeof h.db;
-    const app = await buildServer({ db: refusing, live: h.live, keys: new KeyStore(refusing), config: h.config });
+    const store = new PostgresStore(refusing);
+    const app = await buildServer({ store, db: refusing, live: h.live, keys: new KeyStore(store), config: h.config });
     const res = await app.inject({ method: 'GET', url: '/v1/meta', headers: { authorization: `Bearer ${READ_KEY}` } });
     await app.close();
     expect(res.statusCode).toBe(400);
@@ -1324,9 +1330,10 @@ describe('abuse limits', () => {
       },
     } as unknown as typeof h.db;
     const app = await buildServer({
+      store: new PostgresStore(gone),
       db: gone,
       live: h.live,
-      keys: new KeyStore(gone),
+      keys: new KeyStore(new PostgresStore(gone)),
       config: { ...h.config, logLevel: 'info' },
       logStream: { write: (line) => void lines.push(line) },
     });
@@ -1349,7 +1356,7 @@ describe('keys from the environment', () => {
     const [first, second] = ['E', 'F'].map((c) => `slk_read_${c.repeat(43)}`) as [string, string];
     const reads = async (key: string) =>
       (await h.app.inject({ method: 'GET', url: '/v1/meta', headers: { authorization: `Bearer ${key}` } })).statusCode;
-    await seedKey(h.db, APP_ID, first, 'SHARDLENS_READ_KEY');
+    await seedKey(h.store, APP_ID, first, 'SHARDLENS_READ_KEY');
     const session = await h.app.inject({
       method: 'POST',
       url: '/auth/read-key',
@@ -1360,8 +1367,8 @@ describe('keys from the environment', () => {
     expect(await reads(first)).toBe(200);
 
     // The owner replaces a leaked key in .env and restarts.
-    await seedKey(h.db, APP_ID, second, 'SHARDLENS_READ_KEY');
-    const keys = new KeyStore(h.db);
+    await seedKey(h.store, APP_ID, second, 'SHARDLENS_READ_KEY');
+    const keys = new KeyStore(h.store);
     expect(await keys.verify(first, 'read')).toBeUndefined();
     expect(await keys.verify(second, 'read')).toBeDefined();
     const signedIn = await h.db.query<{ n: number }>(
@@ -1374,9 +1381,9 @@ describe('keys from the environment', () => {
     expect(audit.rows.map((r) => r.details)).toEqual([expect.objectContaining({ variable: 'SHARDLENS_READ_KEY' })]);
 
     // An instance still started with the old value can't take the new one away, nor bring the old one back.
-    await seedKey(h.db, APP_ID, first, 'SHARDLENS_READ_KEY');
-    expect(await new KeyStore(h.db).verify(first, 'read')).toBeUndefined();
-    expect(await new KeyStore(h.db).verify(second, 'read')).toBeDefined();
+    await seedKey(h.store, APP_ID, first, 'SHARDLENS_READ_KEY');
+    expect(await new KeyStore(h.store).verify(first, 'read')).toBeUndefined();
+    expect(await new KeyStore(h.store).verify(second, 'read')).toBeDefined();
     // Keys of other variables, and keys made in Settings, are left alone.
     expect(await reads(READ_KEY)).toBe(200);
   });
@@ -1390,9 +1397,10 @@ describe('dashboard files', () => {
     writeFileSync(join(dir, 'assets', 'index-abc123.js'), 'console.log(1)');
     writeFileSync(join(dir, 'favicon.svg'), '<svg/>');
     const app = await buildServer({
+      store: h.store,
       db: h.db,
       live: h.live,
-      keys: new KeyStore(h.db),
+      keys: new KeyStore(h.store),
       config: { ...h.config, dashboardDir: dir },
     });
     try {
@@ -1430,9 +1438,10 @@ describe('dashboard files', () => {
     const dir = mkdtempSync(join(tmpdir(), 'shardlens-dashboard-'));
     writeFileSync(join(dir, 'index.html'), '<!doctype html><title>Shardlens</title>');
     const app = await buildServer({
+      store: h.store,
       db: h.db,
       live: h.live,
-      keys: new KeyStore(h.db),
+      keys: new KeyStore(h.store),
       config: { ...h.config, dashboardDir: dir, dashboard: false },
     });
     try {

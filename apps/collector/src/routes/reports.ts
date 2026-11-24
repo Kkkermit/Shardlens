@@ -6,7 +6,7 @@ import { REPORT_SCHEDULES, type ReportSchedule, sendReportNow } from '../jobs/re
 import { auditCipher } from '../security/crypto.js';
 import type { Deps } from '../server.js';
 import { EnabledBody, IdParam } from './admin.js';
-import { adminAudit, requireAdmin } from './guard.js';
+import { requireAdmin } from './guard.js';
 
 const MAX_REPORTS = 10;
 
@@ -47,11 +47,9 @@ export async function reportRoutes(app: FastifyInstance, deps: Deps): Promise<vo
          FROM reports WHERE app_id = $1 ORDER BY id`,
       [admin.appId],
     );
-    const zone = await deps.db.query<{ timezone: string }>('SELECT timezone FROM apps WHERE app_id = $1', [
-      admin.appId,
-    ]);
+    const app = await deps.store.apps.get(admin.appId);
     return {
-      timezone: zone.rows[0]?.timezone ?? 'UTC',
+      timezone: app?.timezone ?? 'UTC',
       reports: rows.rows.map((r) => ({
         id: r.id,
         name: r.name,
@@ -81,7 +79,7 @@ export async function reportRoutes(app: FastifyInstance, deps: Deps): Promise<vo
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING id::text`,
       [admin.appId, body.name, body.schedule, body.hour, body.weekday, cipher.encrypt(body.webhookUrl)],
     );
-    await adminAudit(deps, admin.appId, admin.userId, 'report_create', {
+    await deps.store.adminAudit.record(admin.appId, admin.userId, 'report_create', {
       id: res.rows[0]?.id,
       schedule: body.schedule,
     });
@@ -108,7 +106,7 @@ export async function reportRoutes(app: FastifyInstance, deps: Deps): Promise<vo
     const { id } = IdParam.parse(req.params);
     const res = await deps.db.query('DELETE FROM reports WHERE app_id = $1 AND id = $2', [admin.appId, id]);
     if (!res.rowCount) return reply.code(404).send({ error: 'not_found' });
-    await adminAudit(deps, admin.appId, admin.userId, 'report_delete', { id });
+    await deps.store.adminAudit.record(admin.appId, admin.userId, 'report_delete', { id });
     return { ok: true };
   });
 

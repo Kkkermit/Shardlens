@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { batchJsonSchema } from '@shardlens/schema';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Db } from '../src/db.js';
-import { dashboardUrl, ENV_VARIABLES, loadConfig } from '../src/env.js';
+import { type Config, dashboardUrl, ENV_VARIABLES, loadConfig } from '../src/env.js';
 import { parseUserHash } from '../src/ingest/codes.js';
 import { startJobs } from '../src/jobs/scheduler.js';
 import { LiveHub } from '../src/live.js';
@@ -13,6 +13,7 @@ import { rollupSource } from '../src/query/rollup-source.js';
 import { KeyStore } from '../src/security/auth.js';
 import { buildServer, clientKey } from '../src/server.js';
 import { periodBounds, periodIdent } from '../src/storage/periods.js';
+import { PostgresStore } from '../src/storage/postgres/store.js';
 
 const base = {
   DATABASE_URL: 'postgres://localhost/shardlens',
@@ -21,6 +22,12 @@ const base = {
   SHARDLENS_SESSION_SECRET: 'x'.repeat(40),
   SHARDLENS_SETTINGS_KEY: Buffer.alloc(32, 1).toString('base64'),
 };
+
+/** A collector on a fake pool. */
+function serve(config: Config, db: Db) {
+  const store = new PostgresStore(db);
+  return buildServer({ config, store, db, keys: new KeyStore(store), live: new LiveHub(db) });
+}
 
 /** A pool connection that answers every query with `rows` and records how it was released. */
 function fakeClient(rows: object[] = []) {
@@ -374,7 +381,7 @@ describe('live tiles stream', () => {
   it('keeps slots for other visitors when one opens too many streams', { timeout: 10_000 }, async () => {
     const db = { query: () => new Promise(() => undefined) } as unknown as Db;
     const config = loadConfig({ ...base, SHARDLENS_DEMO: 'true', SHARDLENS_TRUST_PROXY: '1', LOG_LEVEL: 'silent' });
-    const app = await buildServer({ config, db, keys: new KeyStore(db), live: new LiveHub(db) });
+    const app = await serve(config, db);
     const address = await app.listen({ port: 0, host: '127.0.0.1' });
     const aborted = new AbortController();
     const open = (visitor: string) =>
@@ -393,7 +400,7 @@ describe('live tiles stream', () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     const db = { query: () => new Promise(() => undefined) } as unknown as Db;
     const config = loadConfig({ ...base, SHARDLENS_DEMO: 'true', LOG_LEVEL: 'silent' });
-    const app = await buildServer({ config, db, keys: new KeyStore(db), live: new LiveHub(db) });
+    const app = await serve(config, db);
     const address = await app.listen({ port: 0, host: '127.0.0.1' });
     const aborted = new AbortController();
     try {
@@ -418,7 +425,7 @@ describe('live tiles stream', () => {
     async () => {
       const db = { query: async () => ({ rows: [] }) } as unknown as Db;
       const config = loadConfig({ ...base, SHARDLENS_DEMO: 'true', LOG_LEVEL: 'silent' });
-      const app = await buildServer({ config, db, keys: new KeyStore(db), live: new LiveHub(db) });
+      const app = await serve(config, db);
       const address = await app.listen({ port: 0, host: '127.0.0.1' });
       const res = await fetch(`${address}/v1/live`);
       const reader = (res.body as ReadableStream<Uint8Array>).getReader();
@@ -440,7 +447,7 @@ describe('live tiles stream', () => {
       },
     } as unknown as Db;
     const config = loadConfig({ ...base, SHARDLENS_DEMO: 'true', LOG_LEVEL: 'silent' });
-    const app = await buildServer({ config, db, keys: new KeyStore(db), live: new LiveHub(db) });
+    const app = await serve(config, db);
     const address = await app.listen({ port: 0, host: '127.0.0.1' });
     const aborted = new AbortController();
     try {
@@ -469,7 +476,7 @@ describe('KeyStore', () => {
         return { rows: known ? [{ id: '1', app_id: '1234567890123456789', scope: 'ingest' }] : [] };
       },
     };
-    return { keys: new KeyStore(db as unknown as Db), lookups: () => lookups };
+    return { keys: new KeyStore(new PostgresStore(db as unknown as Db)), lookups: () => lookups };
   }
 
   it('looks a key up once a minute, whether it is known or not', async () => {

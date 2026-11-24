@@ -532,7 +532,7 @@ describe('audit mode', () => {
     h.app.inject({ method: 'GET', url, headers: { authorization: `Bearer ${key}` } });
 
   it('has nothing for an activity key to read while users are hashed', async () => {
-    await seedKey(h.db, APP_ID, ACTIVITY_KEY, 'SHARDLENS_ACTIVITY_KEY');
+    await seedKey(h.store, APP_ID, ACTIVITY_KEY, 'SHARDLENS_ACTIVITY_KEY');
     const settings = await h.app.inject({ method: 'GET', url: '/v1/settings', ...asAdmin() });
     expect(settings.json()).toMatchObject({ mode: 'privacy', modeSetByEnvironment: false });
     for (const url of ['/v1/audit/log', '/v1/audit/top-users']) {

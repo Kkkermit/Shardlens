@@ -86,11 +86,8 @@ export async function ingestRoutes(app: FastifyInstance, deps: Deps): Promise<vo
         const { envelope } = parsed;
         if (envelope.app.id !== auth.appId) return reply.code(403).send({ error: 'app_mismatch' });
 
-        const appRow = await deps.db.query<{ mode: string; raw_retention_days: number }>(
-          'SELECT mode, raw_retention_days FROM apps WHERE app_id = $1',
-          [auth.appId],
-        );
-        if (envelope.mode === 'audit' && appRow.rows[0]?.mode !== 'audit') {
+        const app = await deps.store.apps.get(auth.appId);
+        if (envelope.mode === 'audit' && app?.mode !== 'audit') {
           return reply.code(400).send({ error: 'audit_mode_disabled' });
         }
 
@@ -107,7 +104,7 @@ export async function ingestRoutes(app: FastifyInstance, deps: Deps): Promise<vo
         for (let i = 0; i < submitted; i++) if (!invalid.has(i)) positions.push(i);
 
         // Never older than raw retention (partitions further back are dropped).
-        const keepDays = Math.min(ACCEPT_BACK_DAYS, appRow.rows[0]?.raw_retention_days ?? ACCEPT_BACK_DAYS);
+        const keepDays = Math.min(ACCEPT_BACK_DAYS, app?.rawRetentionDays ?? ACCEPT_BACK_DAYS);
         const oldest = now - (keepDays - 1) * 86_400_000;
         // Events written to gauges must also fit the gauge table's shorter window, or the insert would fail the batch.
         const gaugeDays = Math.min(keepDays, RETENTION_DAYS.gauges as number);
@@ -126,11 +123,8 @@ export async function ingestRoutes(app: FastifyInstance, deps: Deps): Promise<vo
         const periods = await livePeriods(deps.db, auth.appId);
         let audit: { cipher: ReturnType<typeof auditCipher>; oldestMs: number } | undefined;
         if (envelope.mode === 'audit' && deps.config.auditKey) {
-          const days = await deps.db.query<{ days: number | null }>(
-            "SELECT (value #>> '{}')::int AS days FROM settings WHERE app_id = $1 AND key = 'audit_retention_days'",
-            [auth.appId],
-          );
-          const auditDays = Math.min(90, Math.max(1, days.rows[0]?.days ?? 30));
+          const days = await deps.store.settings.get(auth.appId, 'audit_retention_days');
+          const auditDays = Math.min(90, Math.max(1, days ?? 30));
           // Audit rows only within audit retention (older partitions don't exist).
           audit = { cipher: auditCipher(deps.config.auditKey), oldestMs: now - (auditDays - 1) * 86_400_000 };
         }

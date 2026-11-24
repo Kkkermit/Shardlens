@@ -11,7 +11,7 @@ const READER_KEYS = ['read', 'activity'] as const;
  * (`SHARDLENS_DEMO=true`). Sends 401 and returns `undefined` otherwise.
  */
 export async function requireReader(deps: Deps, req: FastifyRequest, reply: FastifyReply): Promise<string | undefined> {
-  const session = await readSession(deps.db, req);
+  const session = await readSession(deps.store, req);
   if (session) return session.appId;
   const key = await deps.keys.verify(bearerToken(req), READER_KEYS);
   if (key) return key.appId;
@@ -32,7 +32,7 @@ export async function requireAdmin(
   reply: FastifyReply,
   opts: { mutate?: boolean } = {},
 ): Promise<(SessionAuth & { userId: string }) | undefined> {
-  const session = await readSession(deps.db, req);
+  const session = await readSession(deps.store, req);
   if (!session) {
     await reply.code(401).send({ error: 'unauthorized' });
     return undefined;
@@ -52,14 +52,4 @@ export async function requireAdmin(
     return undefined;
   }
   return { ...session, userId: session.userId };
-}
-
-/** Writes an admin action to `admin_audit`. Details must never contain secrets. */
-export async function adminAudit(deps: Deps, appId: string, userId: string | null, action: string, details: object) {
-  await deps.db.query('INSERT INTO admin_audit (app_id, user_id, action, details) VALUES ($1, $2, $3, $4)', [
-    appId,
-    userId,
-    action,
-    JSON.stringify(details),
-  ]);
 }

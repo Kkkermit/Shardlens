@@ -6,7 +6,6 @@ import { QuerySpec } from '../query/spec.js';
 import { bearerToken } from '../security/auth.js';
 import { clientKey, type Deps } from '../server.js';
 import { activeSalts } from '../storage/maintenance.js';
-import type { SaltPeriod } from '../storage/periods.js';
 import { requireReader } from './guard.js';
 
 /** How often a live stream sends a heartbeat. `@shardlens/client` gives up on a stream that is quiet for three. */
@@ -16,25 +15,18 @@ export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void>
   app.get('/v1/config', { config: { rateLimit: { max: 120, timeWindow: '1 minute' } } }, async (req, reply) => {
     const auth = await deps.keys.verify(bearerToken(req), 'ingest');
     if (!auth) return reply.code(401).send({ error: 'unauthorized' });
-    const appRow = await deps.db.query<{ mode: 'privacy' | 'audit'; salt_period: SaltPeriod }>(
-      'SELECT mode, salt_period FROM apps WHERE app_id = $1',
-      [auth.appId],
-    );
-    const a = appRow.rows[0];
+    const a = await deps.store.apps.get(auth.appId);
     if (!a) return reply.code(404).send({ error: 'unknown_app' });
-    const sampling = await deps.db.query<{ value: Record<string, number> }>(
-      "SELECT value FROM settings WHERE app_id = $1 AND key = 'sampling'",
-      [auth.appId],
-    );
-    const salts = await activeSalts(deps.db, auth.appId, a.salt_period);
+    const sampling = await deps.store.settings.get(auth.appId, 'sampling');
+    const salts = await activeSalts(deps.db, auth.appId, a.saltPeriod);
     reply.header('cache-control', 'no-store');
     return {
       v: 1,
       appId: auth.appId,
       mode: a.mode,
-      saltPeriod: a.salt_period,
+      saltPeriod: a.saltPeriod,
       salts: salts.map((s) => ({ period: s.period, salt: s.secret.toString('base64url') })),
-      sampling: sampling.rows[0]?.value ?? {},
+      sampling: sampling ?? {},
       serverTime: new Date().toISOString(),
     };
   });
@@ -49,14 +41,8 @@ export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void>
   app.get('/v1/meta', async (req, reply) => {
     const appId = await requireReader(deps, req, reply);
     if (!appId) return;
-    const res = await deps.db.query(
-      `SELECT a.app_id::text AS "appId", coalesce(nullif(a.name, ''), i.name, 'Your bot') AS name, a.mode,
-              a.salt_period AS "saltPeriod", a.timezone, a.raw_retention_days AS "rawRetentionDays"
-         FROM apps a LEFT JOIN app_info i USING (app_id) WHERE a.app_id = $1`,
-      [appId],
-    );
     return {
-      ...res.rows[0],
+      ...(await deps.store.apps.meta(appId)),
       auditKeyConfigured: deps.config.auditKey !== undefined,
       discordLogin: deps.config.discord !== undefined,
       webhookEventsConfigured: deps.config.discordPublicKey !== undefined,
@@ -174,11 +160,8 @@ export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void>
     const metric = raw.replace(/\.svg$/, '');
     const label = BADGE_LABELS[metric];
     if (!label) return reply.code(404).send({ error: 'not_found' });
-    const enabled = await deps.db.query<{ on: boolean }>(
-      "SELECT value ? $2 AS on FROM settings WHERE app_id = $1 AND key = 'badges'",
-      [deps.config.appId, metric],
-    );
-    if (!enabled.rows[0]?.on) return reply.code(404).send({ error: 'badge_disabled' });
+    const enabled = await deps.store.settings.get(deps.config.appId, 'badges');
+    if (!enabled?.includes(metric)) return reply.code(404).send({ error: 'badge_disabled' });
     const cached = badgeCache.get(metric);
     let svg = cached && Date.now() - cached.at < 600_000 ? cached.svg : undefined;
     if (!svg) {
@@ -204,7 +187,7 @@ export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void>
   app.get('/healthz', async () => ({ ok: true }));
   app.get('/readyz', async (_req, reply) => {
     try {
-      await deps.db.query('SELECT 1 FROM pgmigrations LIMIT 1');
+      await deps.store.ready();
       return { ok: true };
     } catch {
       return reply.code(503).send({ ok: false });

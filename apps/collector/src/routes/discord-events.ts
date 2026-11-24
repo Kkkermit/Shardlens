@@ -115,11 +115,11 @@ export async function discordEventRoutes(app: FastifyInstance, deps: Deps): Prom
       const user = User.safeParse(data.user);
       const guild = Snowflake.safeParse((data.guild as { id?: unknown } | undefined)?.id);
       const hash = user.success ? await hashUserId(deps.db, appId, user.data.id, at) : undefined;
-      const mode = await deps.db.query<{ mode: string }>('SELECT mode FROM apps WHERE app_id = $1', [appId]);
+      const mode = (await deps.store.apps.get(appId))?.mode;
       await recordDelivery(item, at, {
         integrationType: typeof data.integration_type === 'number' ? data.integration_type : null,
         userHash: hash?.bytes,
-        actor: audit && mode.rows[0]?.mode === 'audit' && user.success ? audit.encrypt(user.data.id) : null,
+        actor: audit && mode === 'audit' && user.success ? audit.encrypt(user.data.id) : null,
         guildId: guild.success ? guild.data : null,
         scopes: Array.isArray(data.scopes) ? data.scopes.filter((s) => typeof s === 'string').slice(0, 20) : null,
       });

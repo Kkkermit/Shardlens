@@ -8,6 +8,7 @@ import { auditCipher } from '../security/crypto.js';
 import { csvRow } from '../security/csv.js';
 import { hmacUser } from '../security/userhash.js';
 import type { Deps } from '../server.js';
+import type { Store } from '../storage/store.js';
 import { hasCsrfHeader } from './auth.js';
 import { requireAdmin } from './guard.js';
 
@@ -49,9 +50,8 @@ function decryptOrNull(cipher: ReturnType<typeof auditCipher> | undefined, blob:
   }
 }
 
-async function appMode(db: Db, appId: string): Promise<string | undefined> {
-  const res = await db.query<{ mode: string }>('SELECT mode FROM apps WHERE app_id = $1', [appId]);
-  return res.rows[0]?.mode;
+async function appMode(store: Store, appId: string): Promise<string | undefined> {
+  return (await store.apps.get(appId))?.mode;
 }
 
 /** Who is reading audit data: a person signed in with Discord, or a backend holding an activity key. */
@@ -141,7 +141,7 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
     if (key) {
       appId = key.appId;
       // From the SDK, a raw ID is accepted only in audit mode (it is already stored, encrypted, there).
-      if (body.userId && (await appMode(deps.db, appId)) !== 'audit') {
+      if (body.userId && (await appMode(deps.store, appId)) !== 'audit') {
         return reply.code(400).send({ error: 'raw_id_only_in_audit_mode' });
       }
     } else {
@@ -162,7 +162,7 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
   });
 
   const auditOn = async (appId: string, reply: FastifyReply): Promise<boolean> => {
-    if (cipher && (await appMode(deps.db, appId)) === 'audit') return true;
+    if (cipher && (await appMode(deps.store, appId)) === 'audit') return true;
     await reply.code(404).send({ error: 'audit_mode_off' });
     return false;
   };
