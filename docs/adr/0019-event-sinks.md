@@ -1,6 +1,6 @@
 # 0019. Copy events into the owner's own database through sinks
 
-- Status: Accepted
+- Status: Accepted. The case against a second storage engine is revisited in [0021](0021-mongodb-storage-engine.md).
 - Date: 2026-11-15
 
 ## Context
