@@ -1,6 +1,6 @@
 # 0012. Run embedded mode on PGlite, not SQLite
 
-- Status: Accepted (open to revisiting: see Consequences). The case against a second storage engine is revisited in [0021](0021-mongodb-storage-engine.md).
+- Status: Accepted (open to revisiting: see Consequences). The case against a second storage engine is revisited in [0022](0022-mongodb-storage-engine.md).
 - Date: 2026-11-13
 
 ## Context

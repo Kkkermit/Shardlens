@@ -1,6 +1,6 @@
 import type { GuildInfo } from '@shardlens/schema';
-import { insertRows, type Tx } from '../db.js';
-import { GUILD_EVENT } from './codes.js';
+import { insertRows, type Tx } from '../../../db.js';
+import { GUILD_EVENT } from '../../../ingest/codes.js';
 
 const PROFILE_COLUMNS = `name = EXCLUDED.name, icon = EXCLUDED.icon, member_count = EXCLUDED.member_count,
   large = EXCLUDED.large, preferred_locale = EXCLUDED.preferred_locale, features = EXCLUDED.features,

@@ -4,15 +4,16 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { batchJsonSchema } from '@shardlens/schema';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Db } from '../src/db.js';
-import { dashboardUrl, ENV_VARIABLES, loadConfig } from '../src/env.js';
+import { type Config, dashboardUrl, ENV_VARIABLES, loadConfig } from '../src/env.js';
 import { parseUserHash } from '../src/ingest/codes.js';
 import { startJobs } from '../src/jobs/scheduler.js';
 import { LiveHub } from '../src/live.js';
 import { openApiDocument } from '../src/openapi.js';
-import { rollupSource } from '../src/query/rollup-source.js';
 import { KeyStore } from '../src/security/auth.js';
 import { buildServer, clientKey } from '../src/server.js';
 import { periodBounds, periodIdent } from '../src/storage/periods.js';
+import { rollupSource } from '../src/storage/postgres/query/rollup-source.js';
+import { PostgresStore } from '../src/storage/postgres/store.js';
 
 const base = {
   DATABASE_URL: 'postgres://localhost/shardlens',
@@ -21,6 +22,12 @@ const base = {
   SHARDLENS_SESSION_SECRET: 'x'.repeat(40),
   SHARDLENS_SETTINGS_KEY: Buffer.alloc(32, 1).toString('base64'),
 };
+
+/** A collector on a fake pool. */
+function serve(config: Config, db: Db) {
+  const store = new PostgresStore(db);
+  return buildServer({ config, store, keys: new KeyStore(store), live: new LiveHub(store.live.channel()) });
+}
 
 /** A pool connection that answers every query with `rows` and records how it was released. */
 function fakeClient(rows: object[] = []) {
@@ -248,7 +255,7 @@ describe('job scheduler', () => {
       }),
     } as unknown as Db;
     const jobs = startJobs(
-      db,
+      new PostgresStore(db),
       { info: () => undefined, error: (entry) => void errors.push(entry) },
       { settingsKey: Buffer.alloc(32, 1).toString('base64'), dashboardUrl: new URL('https://stats.example.com') },
     );
@@ -274,7 +281,7 @@ describe('job scheduler', () => {
         return c.client;
       },
     } as unknown as Db;
-    const jobs = startJobs(db, { info: () => undefined, error: () => undefined });
+    const jobs = startJobs(new PostgresStore(db), { info: () => undefined, error: () => undefined });
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(clients).toHaveLength(1);
     expect(clients[0]?.client.listenerCount('error')).toBe(1);
@@ -340,7 +347,7 @@ describe('LiveHub tiles', () => {
 
   it('gives a broken listening connection back to the pool, once', async () => {
     const { client, released } = fakeClient();
-    const hub = new LiveHub({ connect: async () => client } as unknown as Db);
+    const hub = new LiveHub(new PostgresStore({ connect: async () => client } as unknown as Db).live.channel());
     expect(await hub.start()).toBe(true);
     client.emit('error', new Error('Connection terminated unexpectedly'));
     client.emit('error', new Error('Connection terminated unexpectedly'));
@@ -358,7 +365,7 @@ describe('LiveHub tiles', () => {
         return { rows: [] };
       },
     } as unknown as Db;
-    const hub = new LiveHub(db);
+    const hub = new LiveHub(new PostgresStore(db).live.channel());
     await hub.start();
     const now = Date.now();
     for (let back = 0; back < 900; back++) hub.bump('1', now - back * 1_000, 1 / 3, 1 / 3);
@@ -374,7 +381,7 @@ describe('live tiles stream', () => {
   it('keeps slots for other visitors when one opens too many streams', { timeout: 10_000 }, async () => {
     const db = { query: () => new Promise(() => undefined) } as unknown as Db;
     const config = loadConfig({ ...base, SHARDLENS_DEMO: 'true', SHARDLENS_TRUST_PROXY: '1', LOG_LEVEL: 'silent' });
-    const app = await buildServer({ config, db, keys: new KeyStore(db), live: new LiveHub(db) });
+    const app = await serve(config, db);
     const address = await app.listen({ port: 0, host: '127.0.0.1' });
     const aborted = new AbortController();
     const open = (visitor: string) =>
@@ -393,7 +400,7 @@ describe('live tiles stream', () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     const db = { query: () => new Promise(() => undefined) } as unknown as Db;
     const config = loadConfig({ ...base, SHARDLENS_DEMO: 'true', LOG_LEVEL: 'silent' });
-    const app = await buildServer({ config, db, keys: new KeyStore(db), live: new LiveHub(db) });
+    const app = await serve(config, db);
     const address = await app.listen({ port: 0, host: '127.0.0.1' });
     const aborted = new AbortController();
     try {
@@ -418,7 +425,7 @@ describe('live tiles stream', () => {
     async () => {
       const db = { query: async () => ({ rows: [] }) } as unknown as Db;
       const config = loadConfig({ ...base, SHARDLENS_DEMO: 'true', LOG_LEVEL: 'silent' });
-      const app = await buildServer({ config, db, keys: new KeyStore(db), live: new LiveHub(db) });
+      const app = await serve(config, db);
       const address = await app.listen({ port: 0, host: '127.0.0.1' });
       const res = await fetch(`${address}/v1/live`);
       const reader = (res.body as ReadableStream<Uint8Array>).getReader();
@@ -440,7 +447,7 @@ describe('live tiles stream', () => {
       },
     } as unknown as Db;
     const config = loadConfig({ ...base, SHARDLENS_DEMO: 'true', LOG_LEVEL: 'silent' });
-    const app = await buildServer({ config, db, keys: new KeyStore(db), live: new LiveHub(db) });
+    const app = await serve(config, db);
     const address = await app.listen({ port: 0, host: '127.0.0.1' });
     const aborted = new AbortController();
     try {
@@ -469,7 +476,7 @@ describe('KeyStore', () => {
         return { rows: known ? [{ id: '1', app_id: '1234567890123456789', scope: 'ingest' }] : [] };
       },
     };
-    return { keys: new KeyStore(db as unknown as Db), lookups: () => lookups };
+    return { keys: new KeyStore(new PostgresStore(db as unknown as Db)), lookups: () => lookups };
   }
 
   it('looks a key up once a minute, whether it is known or not', async () => {

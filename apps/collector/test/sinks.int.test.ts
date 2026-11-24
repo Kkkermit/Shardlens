@@ -150,7 +150,13 @@ describe.each(['MongoDB', 'MySQL', 'MariaDB', 'PostgreSQL', 'SQLite'])('%s sink'
   beforeAll(async () => {
     const target = targets.find((t) => t.name === name) as Target;
     mirror = new SinkMirror(await createSink(target.url()));
-    app = await buildServer({ config: h.config, db: h.db, keys: new KeyStore(h.db), live: h.live, sink: mirror });
+    app = await buildServer({
+      config: h.config,
+      store: h.store,
+      keys: new KeyStore(h.store),
+      live: h.live,
+      sink: mirror,
+    });
     await app.ready();
     reader = await target.reader();
   }, 120_000);

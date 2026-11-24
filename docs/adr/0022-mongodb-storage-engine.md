@@ -1,4 +1,4 @@
-# 0021. Store everything in the bot's own MongoDB, as a second storage engine
+# 0022. Store everything in the bot's own MongoDB, as a second storage engine
 
 - Status: Accepted
 - Date: 2026-11-24
@@ -22,8 +22,8 @@ Constraints from the Atlas free tier, where many of these bots live: 100 operati
 
 ## Decision
 
-**One HTTP layer, two stores.** The collector's storage moves behind a domain-level `Store` interface
-(`apps/collector/src/storage/store.ts`). `PostgresStore` holds today's SQL unchanged; `MongoStore` implements the same
+**One HTTP layer, two stores.** The collector's storage is behind the `Store` interface
+([0021](0021-storage-behind-one-interface.md), `apps/collector/src/storage/store.ts`). `PostgresStore` holds today's SQL unchanged; `MongoStore` implements the same
 interface on MongoDB. Routes, validation, authentication, rate limits, CSRF, the dashboard, `@shardlens/client` and
 the OpenAPI document are shared, so the second engine is storage and queries only. The interface exposes no
 transactions, locks or SQL types, so neither engine leaks into the other.

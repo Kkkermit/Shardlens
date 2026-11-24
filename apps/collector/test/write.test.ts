@@ -2,7 +2,8 @@ import { uuidv7 } from '@shardlens/core';
 import { parseBatch } from '@shardlens/schema';
 import { describe, expect, it } from 'vitest';
 import type { Tx } from '../src/db.js';
-import { type Indexed, writeEvents } from '../src/ingest/write.js';
+import { writeEvents } from '../src/storage/postgres/ingest/write.js';
+import type { IngestItem } from '../src/storage/store.js';
 
 // Concurrent batches share unique-user rows and late minutes, and an insert waits for whichever batch inserted the
 // same row first. Two batches taking those rows in different orders deadlocked under load, so every batch must take
@@ -13,7 +14,7 @@ const PERIOD = '2026-11';
 const NOW = Date.UTC(2026, 10, 23, 12, 0);
 const USERS = Array.from({ length: 6 }, (_, i) => `h1:${PERIOD}:${String(i).repeat(32)}`);
 
-function batch(): Indexed[] {
+function batch(): IngestItem[] {
   const events = USERS.flatMap((user, i) =>
     ['ticket', 'help'].map((command, j) => ({
       id: uuidv7(),
@@ -48,7 +49,7 @@ function batch(): Indexed[] {
 }
 
 /** The parameters of each insert into `table`, as the writer sent them. */
-async function inserted(items: Indexed[], table: string): Promise<unknown[]> {
+async function inserted(items: IngestItem[], table: string): Promise<unknown[]> {
   const params: unknown[] = [];
   const tx = {
     query: async (sql: string, values?: unknown[]) => {

@@ -54,7 +54,7 @@ async function refusal(call: Promise<unknown>): Promise<ShardlensClientError> {
 
 beforeAll(async () => {
   h = await startHarness({ auditKey: Buffer.alloc(32, 9).toString('base64') });
-  await seedKey(h.db, APP_ID, ACTIVITY_KEY, 'my dashboard');
+  await seedKey(h.store, APP_ID, ACTIVITY_KEY, 'my dashboard');
   await h.app.listen({ port: 0, host: '127.0.0.1' });
   url = `http://127.0.0.1:${(h.app.server.address() as AddressInfo).port}`;
 });

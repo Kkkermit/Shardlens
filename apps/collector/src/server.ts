@@ -8,10 +8,9 @@ import fastifyStatic from '@fastify/static';
 import { containsNul } from '@shardlens/schema';
 import Fastify, { type FastifyInstance, type FastifyRequest, LogController } from 'fastify';
 import { ZodError } from 'zod';
-import { type Db, isRefusedInput } from './db.js';
 import type { Config } from './env.js';
 import type { LiveHub } from './live.js';
-import { QueryError } from './query/run.js';
+import { QueryError } from './query/error.js';
 import { adminRoutes } from './routes/admin.js';
 import { apiRoutes } from './routes/api.js';
 import { authRoutes } from './routes/auth.js';
@@ -22,10 +21,11 @@ import { reportRoutes } from './routes/reports.js';
 import type { KeyStore } from './security/auth.js';
 import type { ClickHouseStore } from './storage/clickhouse.js';
 import type { SinkMirror } from './storage/sink.js';
+import type { Store } from './storage/store.js';
 
 export interface Deps {
   config: Config;
-  db: Db;
+  store: Store;
   keys: KeyStore;
   live: LiveHub;
   /** Optional ClickHouse analytics store (preview). */
@@ -156,10 +156,11 @@ export async function buildServer(deps: Deps): Promise<FastifyInstance> {
       return reply.code(400).send({ error: 'invalid_request', issues: error.issues.slice(0, 20) });
     }
     if (error instanceof QueryError) return reply.code(400).send({ error: 'invalid_query', message: error.message });
-    if (isRefusedInput(error)) {
+    const refused = deps.store.refusedInput(error);
+    if (refused !== undefined) {
       // Input the database refused (a number out of range, text it can't store). Not a fault of the collector, and
       // answering 500 would make an SDK retry the same batch forever.
-      req.log.warn({ code: error.code, route: req.routeOptions.url }, 'input refused by the database');
+      req.log.warn({ code: refused, route: req.routeOptions.url }, 'input refused by the database');
       return reply.code(400).send({ error: 'invalid_request' });
     }
     const status = (error as { statusCode?: number }).statusCode;

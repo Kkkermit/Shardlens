@@ -1,42 +1,17 @@
 import type { Event } from '@shardlens/schema';
-import { insertRows, isRefusedInput, type Tx } from '../db.js';
-import type { auditCipher } from '../security/crypto.js';
-import type { MirroredCustom, MirroredInteraction } from '../storage/clickhouse.js';
-import { ensureUniquesPartition } from '../storage/maintenance.js';
-import { COMMAND_SCOPE, GUILD_EVENT, INSTALL, KIND, MEMBER_TIER, OUTCOME, parseUserHash } from './codes.js';
+import { type Db, insertRows, isRefusedInput, type Tx, transaction } from '../../../db.js';
+import {
+  COMMAND_SCOPE,
+  GUILD_EVENT,
+  INSTALL,
+  KIND,
+  MEMBER_TIER,
+  OUTCOME,
+  parseUserHash,
+} from '../../../ingest/codes.js';
+import type { IngestContext, IngestItem, IngestStorage, SealedActor, WriteResult } from '../../store.js';
+import { ensureUniquesPartition } from '../partitions.js';
 import { applyGuildJoin, applyGuildLeave, applyGuildUpdate, applySnapshot, recordGuildEvent } from './guilds.js';
-
-interface IngestContext {
-  appId: string;
-  env: string;
-  release: string | undefined;
-  instance: string;
-  shards: number[];
-  sdkVersion: string;
-  /** Salt periods whose salt is alive: hashes from any other period are refused. */
-  livePeriods: Set<string>;
-  /** Present only when the batch and the app are both in audit mode and the audit key is configured. */
-  audit?: { cipher: ReturnType<typeof auditCipher>; oldestMs: number } | undefined;
-  now: Date;
-  /** Collect accepted interactions and custom events for the ClickHouse analytics store. */
-  mirror?: boolean | undefined;
-}
-
-/** An event plus its position in the submitted batch (for per-event rejections). */
-export interface Indexed {
-  index: number;
-  event: Event;
-}
-
-interface WriteResult {
-  accepted: number;
-  duplicates: number;
-  rejected: { index: number; reason: string }[];
-  /** IDs (lower case) of the interactions and message commands this batch stored: retried ones are left out. */
-  stored: Set<string>;
-  /** Rows PostgreSQL accepted (never retries), when `ctx.mirror` is set. */
-  mirror?: { interactions: MirroredInteraction[]; custom: MirroredCustom[] } | undefined;
-}
 
 /** Minutes older than this when they arrive are marked dirty so the rollup job recomputes them. */
 const LATE_MS = 2 * 60_000;
@@ -83,7 +58,7 @@ const INTERACTION_COLUMNS = [
 ] as const;
 const GAUGE_COLUMNS = ['app_id', 'ts', 'name', 'shard', 'instance', 'value'];
 
-/** Entitlements come from the gateway (here) and from webhook events (`routes/discord-events.ts`). */
+/** Entitlements come from the gateway (here) and from webhook events (`webhook-events.ts`). */
 export const ENTITLEMENT_COLUMNS = [
   'app_id',
   'ts',
@@ -108,7 +83,7 @@ const AT = Object.fromEntries(INTERACTION_COLUMNS.map((c, i) => [c, i])) as Reco
  * Writes a batch one event at a time, each under a savepoint, after the batch as a whole failed on a value PostgreSQL
  * refused (a number wider than its column, say): only the events it refuses are rejected, not the whole batch.
  */
-export async function writeEachEvent(tx: Tx, ctx: IngestContext, items: readonly Indexed[]): Promise<WriteResult> {
+async function writeEachEvent(tx: Tx, ctx: IngestContext, items: readonly IngestItem[]): Promise<WriteResult> {
   const total: WriteResult = { accepted: 0, duplicates: 0, rejected: [], stored: new Set() };
   for (const item of items) {
     await tx.query('SAVEPOINT one_event');
@@ -139,7 +114,7 @@ export async function writeEachEvent(tx: Tx, ctx: IngestContext, items: readonly
  * Writes one validated batch in the caller's transaction. Every insert is idempotent (`ON CONFLICT DO NOTHING` on the
  * UUIDv7 event ID), so a retried batch is counted once.
  */
-export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly Indexed[]): Promise<WriteResult> {
+export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly IngestItem[]): Promise<WriteResult> {
   const result: WriteResult = { accepted: 0, duplicates: 0, rejected: [], stored: new Set() };
   const dirty = new Set<number>();
   const markLate = (ts: number) => {
@@ -175,7 +150,7 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
   let singleRowEvents = 0;
 
   // Guild lifecycle must be applied in order, inside the transaction.
-  const ordered: Indexed[] = [];
+  const ordered: IngestItem[] = [];
 
   /**
    * One run's unique-user rows (everyone, the command, the server, plus `extra` scopes) and, unless it was autocomplete,
@@ -211,27 +186,23 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
     }
   };
 
-  /** Who ran a command, encrypted: only when the batch and the app are both in audit mode, within audit retention. */
+  /** Who ran a command, already encrypted: only in audit mode, within audit retention. */
   const audit = (
+    actor: SealedActor | undefined,
     e: Extract<Event, { type: 'interaction' | 'message_command' }>,
     ts: Date,
     kind: number,
     customId: string | undefined,
     ackMs: number | undefined,
   ) => {
-    if (!ctx.audit || !e.actor || e.ts < ctx.audit.oldestMs) return;
-    const { cipher } = ctx.audit;
-    const profile =
-      e.actor.username !== undefined || e.actor.avatar !== undefined
-        ? cipher.encrypt(JSON.stringify({ username: e.actor.username, avatar: e.actor.avatar }))
-        : null;
+    if (!actor) return;
     auditRows.push([
       e.id,
       ts,
       ctx.appId,
-      cipher.lookupHash(e.actor.userId),
-      cipher.encrypt(e.actor.userId),
-      profile,
+      actor.lookup,
+      actor.userId,
+      actor.profile,
       e.guild ?? null,
       kind,
       e.command ?? null,
@@ -242,7 +213,7 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
     ]);
   };
 
-  for (const { index, event: e } of items) {
+  for (const { index, event: e, actor } of items) {
     const ts = new Date(e.ts);
     switch (e.type) {
       case 'interaction': {
@@ -292,7 +263,7 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
         const extra: [string, string][] = [['locale', e.locale]];
         if (e.install) extra.push(['install', e.install]);
         countRun(user, ts, command, e.guild, e.kind !== 'autocomplete', extra);
-        audit(e, ts, KIND[e.kind], e.customId, e.ackMs);
+        audit(actor, e, ts, KIND[e.kind], e.customId, e.ackMs);
         break;
       }
       case 'message_command': {
@@ -341,7 +312,7 @@ export async function writeEvents(tx: Tx, ctx: IngestContext, items: readonly In
           e.weight,
         ]);
         countRun(user, ts, e.command, e.guild, true, []);
-        audit(e, ts, KIND.message_command, undefined, undefined);
+        audit(actor, e, ts, KIND.message_command, undefined, undefined);
         break;
       }
       case 'interaction_error':
@@ -723,4 +694,11 @@ async function applyAppInfo(tx: Tx, ctx: IngestContext, e: Extract<Event, { type
     GAUGE_COLUMNS,
     gauges.filter(([, v]) => typeof v === 'number').map(([name, v]) => [ctx.appId, ts, name, -1, ctx.instance, v]),
   );
+}
+
+export function postgresIngest(db: Db): IngestStorage {
+  return {
+    write: (ctx, items) => transaction(db, (tx) => writeEvents(tx, ctx, items)),
+    writeEach: (ctx, items) => transaction(db, (tx) => writeEachEvent(tx, ctx, items)),
+  };
 }

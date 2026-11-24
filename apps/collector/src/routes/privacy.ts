@@ -1,13 +1,13 @@
 import { Snowflake } from '@shardlens/schema';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import type { Db } from '../db.js';
-import { KIND_NAME, OUTCOME, OUTCOME_NAME, parseUserHash } from '../ingest/codes.js';
+import { KIND_NAME, OUTCOME_NAME, parseUserHash } from '../ingest/codes.js';
 import { bearerToken } from '../security/auth.js';
 import { auditCipher } from '../security/crypto.js';
 import { csvRow } from '../security/csv.js';
 import { hmacUser } from '../security/userhash.js';
 import type { Deps } from '../server.js';
+import type { Store } from '../storage/store.js';
 import { hasCsrfHeader } from './auth.js';
 import { requireAdmin } from './guard.js';
 
@@ -49,9 +49,8 @@ function decryptOrNull(cipher: ReturnType<typeof auditCipher> | undefined, blob:
   }
 }
 
-async function appMode(db: Db, appId: string): Promise<string | undefined> {
-  const res = await db.query<{ mode: string }>('SELECT mode FROM apps WHERE app_id = $1', [appId]);
-  return res.rows[0]?.mode;
+async function appMode(store: Store, appId: string): Promise<string | undefined> {
+  return (await store.apps.get(appId))?.mode;
 }
 
 /** Who is reading audit data: a person signed in with Discord, or a backend holding an activity key. */
@@ -60,11 +59,14 @@ interface Viewer {
   keyId?: string | null;
 }
 
-async function logAccess(db: Db, appId: string, viewer: Viewer, action: string, details: object) {
-  await db.query(
-    'INSERT INTO audit_access_log (app_id, viewer_user_id, viewer_key_id, action, details) VALUES ($1, $2, $3, $4, $5)',
-    [appId, viewer.userId ?? '0', viewer.keyId ?? null, action, JSON.stringify(details)],
-  );
+async function logAccess(store: Store, appId: string, viewer: Viewer, action: string, details: object) {
+  await store.privacy.logAccess({
+    appId,
+    viewerUserId: viewer.userId ?? '0',
+    viewerKeyId: viewer.keyId ?? null,
+    action,
+    details,
+  });
 }
 
 /**
@@ -77,32 +79,15 @@ async function eraseUser(
   appId: string,
   input: { hashes: Buffer[]; userId?: string | undefined },
 ): Promise<number> {
-  const db = deps.db;
+  const { store } = deps;
   const hashes = [...input.hashes];
   if (input.userId) {
     // Hash the ID with every live salt, so an exact-ID erase covers all periods still linkable.
-    const salts = await db.query<{ secret: Buffer }>(
-      'SELECT secret FROM salts WHERE app_id = $1 AND secret IS NOT NULL',
-      [appId],
-    );
-    for (const s of salts.rows) hashes.push(hmacUser(s.secret, input.userId));
+    for (const secret of await store.salts.liveSecrets(appId)) hashes.push(hmacUser(secret, input.userId));
   }
   let erased = 0;
   if (hashes.length > 0) {
-    for (const table of [
-      'interactions',
-      'custom_events',
-      'uniques',
-      'entitlements',
-      'subscriptions',
-      'webhook_events',
-    ]) {
-      const res = await db.query(`DELETE FROM ${table} WHERE app_id = $1 AND user_hash = ANY($2::bytea[])`, [
-        appId,
-        hashes,
-      ]);
-      erased += res.rowCount ?? 0;
-    }
+    erased += await store.privacy.eraseHashes(appId, hashes);
     // The ClickHouse and sink copies too. If one fails the request fails, so the caller retries (deletes are
     // idempotent). Copies aren't added to `erased`, which counts the collector's own rows.
     await deps.analytics?.erase(appId, hashes);
@@ -110,18 +95,10 @@ async function eraseUser(
   }
   if (input.userId && deps.config.auditKey) {
     const cipher = auditCipher(deps.config.auditKey);
-    const res = await db.query('DELETE FROM audit_log WHERE app_id = $1 AND actor_lookup = $2', [
-      appId,
-      cipher.lookupHash(input.userId),
-    ]);
-    erased += res.rowCount ?? 0;
-    const installers = await db.query<{ id: string; ts: Date; actor_enc: Buffer }>(
-      'SELECT id, ts, actor_enc FROM webhook_events WHERE app_id = $1 AND actor_enc IS NOT NULL',
-      [appId],
-    );
-    for (const w of installers.rows) {
-      if (decryptOrNull(cipher, w.actor_enc) === input.userId) {
-        await db.query('UPDATE webhook_events SET actor_enc = NULL WHERE id = $1 AND ts = $2', [w.id, w.ts]);
+    erased += await store.privacy.eraseActivity(appId, cipher.lookupHash(input.userId));
+    for (const w of await store.privacy.installers(appId)) {
+      if (decryptOrNull(cipher, w.actor) === input.userId) {
+        await store.privacy.forgetInstaller(w.id, w.ts);
         erased++;
       }
     }
@@ -141,7 +118,7 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
     if (key) {
       appId = key.appId;
       // From the SDK, a raw ID is accepted only in audit mode (it is already stored, encrypted, there).
-      if (body.userId && (await appMode(deps.db, appId)) !== 'audit') {
+      if (body.userId && (await appMode(deps.store, appId)) !== 'audit') {
         return reply.code(400).send({ error: 'raw_id_only_in_audit_mode' });
       }
     } else {
@@ -153,7 +130,7 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
     const hashes = body.userHashes.map((h) => parseUserHash(h)?.bytes).filter((b): b is Buffer => b !== undefined);
     if (hashes.length === 0 && !body.userId) return reply.code(400).send({ error: 'nothing_to_erase' });
     const erased = await eraseUser(deps, appId, { hashes, userId: body.userId });
-    await logAccess(deps.db, appId, { userId: viewer }, 'erase', {
+    await logAccess(deps.store, appId, { userId: viewer }, 'erase', {
       via: key ? 'sdk' : 'dashboard',
       erased,
       byId: Boolean(body.userId),
@@ -162,7 +139,7 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
   });
 
   const auditOn = async (appId: string, reply: FastifyReply): Promise<boolean> => {
-    if (cipher && (await appMode(deps.db, appId)) === 'audit') return true;
+    if (cipher && (await appMode(deps.store, appId)) === 'audit') return true;
     await reply.code(404).send({ error: 'audit_mode_off' });
     return false;
   };
@@ -186,7 +163,7 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
       if (keyReads.size >= 5_000) keyReads.clear();
       keyReads.set(read, now);
     }
-    await logAccess(deps.db, viewer.appId, viewer, action, details);
+    await logAccess(deps.store, viewer.appId, viewer, action, details);
   };
 
   /**
@@ -212,65 +189,36 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
   };
 
   const fetchLog = async (appId: string, f: z.output<typeof AuditLogFilters>, maxRows: number) => {
-    const params: unknown[] = [appId];
-    const where = ['a.app_id = $1'];
-    const add = (sql: string, value: unknown) => {
-      params.push(value);
-      where.push(sql.replace('?', `$${params.length}`));
-    };
-    if (f.from) add('a.ts >= ?', f.from);
-    if (f.to) add('a.ts < ?', f.to);
-    if (f.before) {
-      // The row ID breaks ties, so rows sharing the last time on a page aren't skipped.
-      const [at, id] = f.before.split('~');
-      if (id) {
-        params.push(at, id);
-        where.push(`(a.ts, a.interaction_id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`);
-      } else add('a.ts < ?', at);
-    }
-    if (f.command) add('a.command = ?', f.command);
-    if (f.guild) add('a.guild_id = ?', f.guild);
-    if (f.user && cipher) add('a.actor_lookup = ?', cipher.lookupHash(f.user));
-    // Written as a literal for every failed outcome: it is the condition of the indexes that hold only failures.
-    if (f.outcome && f.outcome !== 'ok') where.push('a.outcome <> 0');
-    if (f.outcome && f.outcome !== 'failed') add('a.outcome = ?', OUTCOME[f.outcome]);
-    params.push(maxRows);
-    const res = await deps.db.query<{
-      interaction_id: string;
-      ts: Date;
-      guild_id: string | null;
-      guild_name: string | null;
-      kind: number;
-      command: string | null;
-      sub: string | null;
-      custom_id: string | null;
-      outcome: number;
-      ack_ms: number | null;
-      actor_enc: Buffer;
-      names_enc: Buffer | null;
-    }>(
-      `SELECT a.interaction_id, a.ts, a.guild_id::text, g.name AS guild_name, a.kind, a.command, a.sub, a.custom_id,
-              a.outcome, a.ack_ms, a.actor_enc, a.names_enc
-         FROM audit_log a LEFT JOIN guilds g ON g.app_id = a.app_id AND g.guild_id = a.guild_id
-        WHERE ${where.join(' AND ')}
-        ORDER BY a.ts DESC, a.interaction_id DESC LIMIT $${params.length}`,
-      params,
+    // The row ID breaks ties, so rows sharing the last time on a page aren't skipped.
+    const [before, beforeId] = (f.before?.split('~') ?? []) as [string?, string?];
+    const rows = await deps.store.privacy.activity(
+      appId,
+      {
+        from: f.from,
+        to: f.to,
+        before: before === undefined ? undefined : { ts: before, id: beforeId },
+        command: f.command,
+        guild: f.guild,
+        actorLookup: f.user && cipher ? cipher.lookupHash(f.user) : undefined,
+        outcome: f.outcome,
+      },
+      maxRows,
     );
-    return res.rows.map((r) => {
-      const names = decrypt(r.names_enc);
+    return rows.map((r) => {
+      const names = decrypt(r.profile);
       const profile = (names ? JSON.parse(names) : {}) as { username?: string; avatar?: string };
       return {
-        interactionId: r.interaction_id,
+        interactionId: r.interactionId,
         ts: r.ts,
-        guildId: r.guild_id,
-        guildName: r.guild_name,
+        guildId: r.guildId,
+        guildName: r.guildName,
         kind: KIND_NAME[r.kind] ?? String(r.kind),
         command: r.command,
         sub: r.sub,
-        customId: r.custom_id,
+        customId: r.customId,
         outcome: OUTCOME_NAME[r.outcome] ?? String(r.outcome),
-        ackMs: r.ack_ms,
-        userId: decrypt(r.actor_enc),
+        ackMs: r.ackMs,
+        userId: decrypt(r.userId),
         username: profile.username ?? null,
         avatar: profile.avatar ?? null,
       };
@@ -304,16 +252,11 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
     const viewer = await requireActivityReader(req, reply);
     if (!viewer) return;
     const { window } = z.object({ window: z.enum(['24h', '7d']).default('24h') }).parse(req.query);
-    const res = await deps.db.query<{ actor_enc: Buffer; runs: number }>(
-      `SELECT (array_agg(actor_enc ORDER BY ts DESC))[1] AS actor_enc, count(*)::int AS runs
-         FROM audit_log WHERE app_id = $1 AND ts >= now() - $2::interval
-        GROUP BY actor_lookup ORDER BY runs DESC LIMIT 25`,
-      [viewer.appId, window === '24h' ? '24 hours' : '7 days'],
-    );
+    const top = await deps.store.privacy.topActors(viewer.appId, window);
     await logRead(viewer, 'top_users', { window }, { window });
     return {
       window,
-      rows: res.rows.map((r) => ({ userId: decrypt(r.actor_enc), runs: r.runs })),
+      rows: top.map((r) => ({ userId: decrypt(r.userId), runs: r.runs })),
     };
   });
 
@@ -329,7 +272,7 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
       }
       const f = AuditLogFilters.parse(req.query);
       const rows = await fetchLog(admin.appId, f, 10_000);
-      await logAccess(deps.db, admin.appId, { userId: admin.userId }, 'export', {
+      await logAccess(deps.store, admin.appId, { userId: admin.userId }, 'export', {
         rows: rows.length,
         from: f.from ?? null,
         to: f.to ?? null,
@@ -376,12 +319,6 @@ export async function privacyRoutes(app: FastifyInstance, deps: Deps): Promise<v
   app.get('/v1/audit/access-log', async (req, reply) => {
     const admin = await requireAdmin(deps, req, reply);
     if (!admin) return;
-    const res = await deps.db.query(
-      `SELECT l.ts, l.viewer_user_id::text AS "viewerUserId", k.label AS "viewerKey", l.action, l.details
-         FROM audit_access_log l LEFT JOIN api_keys k ON k.id = l.viewer_key_id
-        WHERE l.app_id = $1 ORDER BY l.ts DESC LIMIT 200`,
-      [admin.appId],
-    );
-    return { rows: res.rows };
+    return { rows: await deps.store.privacy.accessLog(admin.appId) };
   });
 }

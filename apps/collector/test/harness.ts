@@ -9,21 +9,59 @@ import { LiveHub } from '../src/live.js';
 import { KeyStore, seedKey } from '../src/security/auth.js';
 import { buildServer } from '../src/server.js';
 import type { ClickHouseStore } from '../src/storage/clickhouse.js';
-import { ensurePartitions } from '../src/storage/maintenance.js';
+import { PostgresStore } from '../src/storage/postgres/store.js';
+import type { Store } from '../src/storage/store.js';
 
 export const APP_ID = '1234567890123456789';
 export const INGEST_KEY = `slk_ingest_${'A'.repeat(43)}`;
 export const READ_KEY = `slk_read_${'B'.repeat(43)}`;
 
+/** A store for the suites to run against, on a fresh database. */
+interface StoreUnderTest {
+  store: Store;
+  /** Its connection URL (`Config.databaseUrl`). */
+  databaseUrl: string;
+  /** The PostgreSQL pool behind the store, when it has one. */
+  db?: Db | undefined;
+  /** Stops the store and its database. */
+  close(): Promise<void>;
+}
+
+/** Builds a store on a database of its own, migrated and empty. */
+export type StoreFactory = () => Promise<StoreUnderTest>;
+
+/** PostgreSQL in a container (16 by default: the oldest supported), migrated. */
+const postgresStore: StoreFactory = async () => {
+  const image = process.env.SHARDLENS_TEST_PG_IMAGE ?? 'postgres:16-alpine';
+  const container = await new PostgreSqlContainer(image).start();
+  const url = container.getConnectionUri();
+  await migrate(url);
+  const db = createPool(url, 8);
+  return {
+    store: new PostgresStore(db),
+    databaseUrl: url,
+    db,
+    async close() {
+      await db.end();
+      await container.stop();
+    },
+  };
+};
+
 export interface Harness {
-  db: Db;
+  store: Store;
+  /**
+   * The PostgreSQL pool behind `store`, for tests that set up or check rows directly. Those tests are PostgreSQL's
+   * own: with another store, reading this throws.
+   */
+  readonly db: Db;
   app: FastifyInstance;
   live: LiveHub;
   config: Config;
   close(): Promise<void>;
 }
 
-/** Postgres in a container (16 by default: the oldest supported), migrated, with one app and two keys. */
+/** A collector on a fresh store (PostgreSQL unless `store` says otherwise), with one app and two keys. */
 export async function startHarness(
   opts: {
     discordPublicKey?: string;
@@ -31,19 +69,17 @@ export async function startHarness(
     demo?: boolean;
     analytics?: ClickHouseStore;
     extraAdmins?: string[];
+    store?: StoreFactory;
   } = {},
 ): Promise<Harness> {
-  const image = process.env.SHARDLENS_TEST_PG_IMAGE ?? 'postgres:16-alpine';
-  const container = await new PostgreSqlContainer(image).start();
-  const url = container.getConnectionUri();
-  await migrate(url);
-  const db = createPool(url, 8);
-  await db.query('INSERT INTO apps (app_id) VALUES ($1) ON CONFLICT DO NOTHING', [APP_ID]);
-  await seedKey(db, APP_ID, INGEST_KEY, 'test ingest');
-  await seedKey(db, APP_ID, READ_KEY, 'test read');
-  await ensurePartitions(db);
+  const backing = await (opts.store ?? postgresStore)();
+  const { store } = backing;
+  await store.apps.register(APP_ID);
+  await seedKey(store, APP_ID, INGEST_KEY, 'test ingest');
+  await seedKey(store, APP_ID, READ_KEY, 'test read');
+  await store.prepare();
   const config: Config = {
-    databaseUrl: url,
+    databaseUrl: backing.databaseUrl,
     publicUrl: new URL('https://stats.example.com'),
     appId: APP_ID,
     sessionSecret: 'x'.repeat(48),
@@ -62,20 +98,23 @@ export async function startHarness(
     host: '127.0.0.1',
     logLevel: process.env.SHARDLENS_TEST_LOG ?? 'silent',
   };
-  const live = new LiveHub(db);
+  const live = new LiveHub(store.live.channel());
   await live.start();
-  const app = await buildServer({ config, db, keys: new KeyStore(db), live, analytics: opts.analytics });
+  const app = await buildServer({ config, store, keys: new KeyStore(store), live, analytics: opts.analytics });
   await app.ready();
   return {
-    db,
+    store,
+    get db() {
+      if (!backing.db) throw new Error('This test needs PostgreSQL: it reads or writes rows directly.');
+      return backing.db;
+    },
     app,
     live,
     config,
     async close() {
       await app.close();
       await live.stop();
-      await db.end();
-      await container.stop();
+      await backing.close();
     },
   };
 }
@@ -185,14 +224,18 @@ export function snowflakeOnShard(shard: number, count: number, seq: number): str
 
 /** Creates a dashboard session directly (as if the user signed in) and returns the cookie value. */
 export async function testSession(
-  db: Db,
+  store: Store,
   method: 'discord' | 'read_key',
   userId: string | null = '987654321098765432',
 ) {
   const token = randomBytes(32).toString('base64url');
-  await db.query(
-    "INSERT INTO sessions (id_sha256, user_id, app_id, method, expires_at) VALUES ($1, $2, $3, $4, now() + interval '1 hour')",
-    [createHash('sha256').update(token).digest(), userId, APP_ID, method],
-  );
+  await store.sessions.create({
+    idSha256: createHash('sha256').update(token).digest(),
+    appId: APP_ID,
+    userId,
+    method,
+    keyId: null,
+    expiresAt: new Date(Date.now() + 3_600_000),
+  });
   return token;
 }

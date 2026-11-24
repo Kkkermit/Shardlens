@@ -7,14 +7,13 @@ import { bucketOf, uuidv7 } from '@shardlens/core';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { signInProblems } from '../src/app.js';
 import { createPool, migrate } from '../src/db.js';
-import { evaluateMetric } from '../src/jobs/alerts.js';
-import { backfillRollups, runRollups, runUniques } from '../src/jobs/rollups.js';
-import { runRetention, runSalts } from '../src/jobs/scheduler.js';
+import { runSalts } from '../src/jobs/scheduler.js';
 import { allowedUser } from '../src/routes/auth.js';
 import { KeyStore, seedKey } from '../src/security/auth.js';
 import { buildServer } from '../src/server.js';
-import { activeSalts } from '../src/storage/maintenance.js';
 import { periodIdent } from '../src/storage/periods.js';
+import { PostgresStore } from '../src/storage/postgres/store.js';
+import { activeSalts } from '../src/storage/salts.js';
 import {
   APP_ID,
   envelope,
@@ -258,7 +257,7 @@ describe('ingest', () => {
       APP_ID,
       ts,
     ]);
-    await runRollups(h.db, new Date());
+    await h.store.jobs.runRollups(new Date());
     const n = async (table: string) =>
       (
         await h.db.query(
@@ -273,27 +272,27 @@ describe('ingest', () => {
   });
 
   it('warns at start-up when the bot or its owner would have no way in, and says why Discord sign-in is refused', async () => {
-    expect(await signInProblems(h.db, h.config)).toEqual([]);
+    expect(await signInProblems(h.store, h.config)).toEqual([]);
     const fresh = { ...h.config, appId: '1234567890123456780' };
     await h.db.query('INSERT INTO apps (app_id) VALUES ($1) ON CONFLICT DO NOTHING', [fresh.appId]);
-    expect(await signInProblems(h.db, fresh)).toEqual([
+    expect(await signInProblems(h.store, fresh)).toEqual([
       expect.stringMatching(/^No ingest key/),
       expect.stringMatching(/^No way to open the dashboard/),
     ]);
     const discordOnly = { ...fresh, discord: { clientId: fresh.appId, clientSecret: 'x'.repeat(32) } };
-    expect(await signInProblems(h.db, discordOnly)).toEqual([
+    expect(await signInProblems(h.store, discordOnly)).toEqual([
       expect.stringMatching(/^No ingest key/),
       expect.stringMatching(/^Discord sign-in works once the bot has reported/),
     ]);
-    expect(await signInProblems(h.db, { ...discordOnly, extraAdmins: ['334455667788990011'] })).toHaveLength(1);
+    expect(await signInProblems(h.store, { ...discordOnly, extraAdmins: ['334455667788990011'] })).toHaveLength(1);
     // Without the dashboard there is no Settings page to create a key in: a collector nothing can read is said so.
-    expect(await signInProblems(h.db, { ...discordOnly, dashboard: false })).toEqual([
+    expect(await signInProblems(h.store, { ...discordOnly, dashboard: false })).toEqual([
       expect.stringMatching(/^No ingest key/),
       expect.stringMatching(/^No read key, and the dashboard is off/),
     ]);
-    expect(await signInProblems(h.db, { ...h.config, dashboard: false })).toEqual([]);
+    expect(await signInProblems(h.store, { ...h.config, dashboard: false })).toEqual([]);
 
-    const deps = { config: discordOnly, db: h.db } as unknown as Parameters<typeof allowedUser>[0];
+    const deps = { config: discordOnly, store: h.store } as unknown as Parameters<typeof allowedUser>[0];
     expect(await allowedUser(deps, fresh.appId, '334455667788990011')).toBe('bot_not_reported');
     await h.db.query(
       `INSERT INTO app_info (app_id, ts, name, dashboard_user_ids) VALUES ($1, now(), 'bot', ARRAY[334455667788990011]::bigint[])`,
@@ -446,8 +445,8 @@ describe('rollups, uniques and queries', () => {
     await h.db.query('DELETE FROM unique_counts');
     const res = await ingest(h.app, envelope(events));
     expect(res.json().accepted).toBe(100);
-    await runRollups(h.db, new Date());
-    await runUniques(h.db);
+    await h.store.jobs.runRollups(new Date());
+    await h.store.jobs.runUniques();
   });
 
   const range = () => ({
@@ -498,7 +497,7 @@ describe('rollups, uniques and queries', () => {
     const total = (res.json().points as { value: number }[]).reduce((a, p) => a + p.value, 0);
     expect(total).toBe(100);
     // Re-running the job must not double count.
-    await runRollups(h.db, new Date());
+    await h.store.jobs.runRollups(new Date());
     const again = await query(h.app, { kind: 'series', metric: 'interactions', range: range(), interval: 'hour' });
     expect((again.json().points as { value: number }[]).reduce((a, p) => a + p.value, 0)).toBe(100);
   });
@@ -664,7 +663,7 @@ describe('rollups, uniques and queries', () => {
 
     const reliability = (await query(h.app, { kind: 'reliability', range: range() })).json();
     expect(reliability.totals).toMatchObject({ runs: 105, missedDeadlines: 5, noResponse: 3 });
-    expect(await evaluateMetric(h.db, APP_ID, 'missed_deadline_rate', 3_600)).toBeCloseTo((100 * 5) / 105);
+    expect(await h.store.alerts.metricValue(APP_ID, 'missed_deadline_rate', 3_600)).toBeCloseTo((100 * 5) / 105);
     const detail = (await query(h.app, { kind: 'command', name: 'ping', range: range() })).json();
     // None succeeded, failed or deferred: that is 0, not unknown.
     expect(detail.totals).toMatchObject({ runs: 5, ok: 0, error: 0, timeout: 2, noResponse: 3, deferRate: 0 });
@@ -954,7 +953,7 @@ describe('database server settings', () => {
          VALUES ($1, $2, $3, 'production', 1, 'tz_probe', 'en-GB', $4, '2026-01', false, 0)`,
         [uuidv7(ts.getTime()), ts, APP_ID, Buffer.alloc(16)],
       );
-      await backfillRollups(db, new Date(`${day}T00:00:00Z`), new Date(ts.getTime() + 60_000));
+      await new PostgresStore(db).jobs.backfillRollups(new Date(`${day}T00:00:00Z`), new Date(ts.getTime() + 60_000));
       const buckets = await db.query<{ bucket: Date }>(
         "SELECT bucket FROM rollup_1d WHERE metric = 'interactions' AND dims->>'command' = 'tz_probe'",
       );
@@ -966,7 +965,7 @@ describe('database server settings', () => {
   });
 
   it('creates the unique-user partition in every database the process uses', async () => {
-    await activeSalts(h.db, APP_ID, 'month');
+    await activeSalts(h.store, APP_ID, 'month');
     await h.db.query('CREATE DATABASE shardlens_second');
     const url = new URL(h.config.databaseUrl);
     url.pathname = '/shardlens_second';
@@ -974,7 +973,7 @@ describe('database server settings', () => {
     const db = createPool(url.toString(), 1);
     try {
       await db.query('INSERT INTO apps (app_id) VALUES ($1)', [APP_ID]);
-      const [salt] = await activeSalts(db, APP_ID, 'month');
+      const [salt] = await activeSalts(new PostgresStore(db), APP_ID, 'month');
       const partition = await db.query<{ t: string | null }>('SELECT to_regclass($1) AS t', [
         `uniques_${periodIdent(salt?.period ?? '')}`,
       ]);
@@ -998,7 +997,7 @@ describe('salt lifecycle', () => {
        VALUES ($1, '2020-01', '2020-01-15', 'global', '*', '\\x01')`,
       [APP_ID],
     );
-    const destroyed = await runSalts(h.db, new Date());
+    const destroyed = await runSalts(h.store, new Date());
     expect(destroyed).toContain(`${APP_ID}:2020-01`);
     const salt = await h.db.query("SELECT secret, destroyed_at FROM salts WHERE period = '2020-01'");
     expect(salt.rows[0].secret).toBeNull();
@@ -1015,7 +1014,7 @@ describe('salt lifecycle', () => {
 describe('retention', () => {
   it('drops raw partitions past their retention', async () => {
     await h.db.query("SELECT shardlens_ensure_daily_partitions(ARRAY['interactions'], '2020-01-01', '2020-01-01')");
-    await runRetention(h.db, new Date());
+    await h.store.jobs.runRetention(new Date());
     const res = await h.db.query("SELECT to_regclass('interactions_20200101') AS t");
     expect(res.rows[0].t).toBeNull();
   });
@@ -1026,7 +1025,7 @@ describe('retention', () => {
        VALUES ($1, 'gone:1', now() - interval '31 days', 0, '{}', 0, '{}'), ($1, 'alive:2', now(), 0, '{}', 0, '{}')`,
       [APP_ID],
     );
-    await runRetention(h.db, new Date());
+    await h.store.jobs.runRetention(new Date());
     const left = await h.db.query<{ instance: string }>(
       "SELECT instance FROM sdk_health WHERE instance IN ('gone:1', 'alive:2')",
     );
@@ -1095,9 +1094,9 @@ describe('dashboard login', () => {
   it('signs in with Discord: state checked, PKCE sent, the secret to Discord only, no token kept', async () => {
     const admin = '334455667788990022';
     const app = await buildServer({
-      db: h.db,
+      store: h.store,
       live: h.live,
-      keys: new KeyStore(h.db),
+      keys: new KeyStore(h.store),
       config: { ...h.config, discord: { clientId: APP_ID, clientSecret: 'shh-client-secret' }, extraAdmins: [admin] },
     });
     const calls: { url: string; init: RequestInit | undefined }[] = [];
@@ -1210,9 +1209,9 @@ describe('abuse limits', () => {
 
   it('counts a visitor behind one proxy by the address the proxy saw, not one the visitor wrote', async () => {
     const behindProxy = await buildServer({
-      db: h.db,
+      store: h.store,
       live: h.live,
-      keys: new KeyStore(h.db),
+      keys: new KeyStore(h.store),
       config: { ...h.config, trustProxy: 1 },
     });
     try {
@@ -1237,9 +1236,9 @@ describe('abuse limits', () => {
     const logged = async (logLevel: string) => {
       const lines: string[] = [];
       const app = await buildServer({
-        db: h.db,
+        store: h.store,
         live: h.live,
-        keys: new KeyStore(h.db),
+        keys: new KeyStore(h.store),
         config: { ...h.config, logLevel },
         logStream: { write: (line) => void lines.push(line) },
       });
@@ -1258,7 +1257,8 @@ describe('abuse limits', () => {
         throw new Error('connection to 10.0.0.5 refused');
       },
     } as unknown as typeof h.db;
-    const app = await buildServer({ db: broken, live: h.live, keys: new KeyStore(broken), config: h.config });
+    const store = new PostgresStore(broken);
+    const app = await buildServer({ store, live: h.live, keys: new KeyStore(store), config: h.config });
     const res = await app.inject({ method: 'GET', url: '/v1/meta', headers: { authorization: `Bearer ${READ_KEY}` } });
     await app.close();
     expect(res.statusCode).toBe(500);
@@ -1304,7 +1304,8 @@ describe('abuse limits', () => {
         throw Object.assign(new Error('value "1e400" is out of range'), { code: '22003', severity: 'ERROR' });
       },
     } as unknown as typeof h.db;
-    const app = await buildServer({ db: refusing, live: h.live, keys: new KeyStore(refusing), config: h.config });
+    const store = new PostgresStore(refusing);
+    const app = await buildServer({ store, live: h.live, keys: new KeyStore(store), config: h.config });
     const res = await app.inject({ method: 'GET', url: '/v1/meta', headers: { authorization: `Bearer ${READ_KEY}` } });
     await app.close();
     expect(res.statusCode).toBe(400);
@@ -1323,10 +1324,11 @@ describe('abuse limits', () => {
         throw Object.assign(new Error('Premature close'), { code: 'ERR_STREAM_PREMATURE_CLOSE' });
       },
     } as unknown as typeof h.db;
+    const store = new PostgresStore(gone);
     const app = await buildServer({
-      db: gone,
+      store,
       live: h.live,
-      keys: new KeyStore(gone),
+      keys: new KeyStore(store),
       config: { ...h.config, logLevel: 'info' },
       logStream: { write: (line) => void lines.push(line) },
     });
@@ -1349,7 +1351,7 @@ describe('keys from the environment', () => {
     const [first, second] = ['E', 'F'].map((c) => `slk_read_${c.repeat(43)}`) as [string, string];
     const reads = async (key: string) =>
       (await h.app.inject({ method: 'GET', url: '/v1/meta', headers: { authorization: `Bearer ${key}` } })).statusCode;
-    await seedKey(h.db, APP_ID, first, 'SHARDLENS_READ_KEY');
+    await seedKey(h.store, APP_ID, first, 'SHARDLENS_READ_KEY');
     const session = await h.app.inject({
       method: 'POST',
       url: '/auth/read-key',
@@ -1360,8 +1362,8 @@ describe('keys from the environment', () => {
     expect(await reads(first)).toBe(200);
 
     // The owner replaces a leaked key in .env and restarts.
-    await seedKey(h.db, APP_ID, second, 'SHARDLENS_READ_KEY');
-    const keys = new KeyStore(h.db);
+    await seedKey(h.store, APP_ID, second, 'SHARDLENS_READ_KEY');
+    const keys = new KeyStore(h.store);
     expect(await keys.verify(first, 'read')).toBeUndefined();
     expect(await keys.verify(second, 'read')).toBeDefined();
     const signedIn = await h.db.query<{ n: number }>(
@@ -1374,9 +1376,9 @@ describe('keys from the environment', () => {
     expect(audit.rows.map((r) => r.details)).toEqual([expect.objectContaining({ variable: 'SHARDLENS_READ_KEY' })]);
 
     // An instance still started with the old value can't take the new one away, nor bring the old one back.
-    await seedKey(h.db, APP_ID, first, 'SHARDLENS_READ_KEY');
-    expect(await new KeyStore(h.db).verify(first, 'read')).toBeUndefined();
-    expect(await new KeyStore(h.db).verify(second, 'read')).toBeDefined();
+    await seedKey(h.store, APP_ID, first, 'SHARDLENS_READ_KEY');
+    expect(await new KeyStore(h.store).verify(first, 'read')).toBeUndefined();
+    expect(await new KeyStore(h.store).verify(second, 'read')).toBeDefined();
     // Keys of other variables, and keys made in Settings, are left alone.
     expect(await reads(READ_KEY)).toBe(200);
   });
@@ -1390,9 +1392,9 @@ describe('dashboard files', () => {
     writeFileSync(join(dir, 'assets', 'index-abc123.js'), 'console.log(1)');
     writeFileSync(join(dir, 'favicon.svg'), '<svg/>');
     const app = await buildServer({
-      db: h.db,
+      store: h.store,
       live: h.live,
-      keys: new KeyStore(h.db),
+      keys: new KeyStore(h.store),
       config: { ...h.config, dashboardDir: dir },
     });
     try {
@@ -1430,9 +1432,9 @@ describe('dashboard files', () => {
     const dir = mkdtempSync(join(tmpdir(), 'shardlens-dashboard-'));
     writeFileSync(join(dir, 'index.html'), '<!doctype html><title>Shardlens</title>');
     const app = await buildServer({
-      db: h.db,
+      store: h.store,
       live: h.live,
-      keys: new KeyStore(h.db),
+      keys: new KeyStore(h.store),
       config: { ...h.config, dashboardDir: dir, dashboard: false },
     });
     try {

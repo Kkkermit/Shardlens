@@ -1,7 +1,5 @@
 import { uuidv7 } from '@shardlens/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { evaluateMetric } from '../src/jobs/alerts.js';
-import { runRollups, runUniques } from '../src/jobs/rollups.js';
 import { APP_ID, envelope, type Harness, ingest, interaction, query, sdkHasher, startHarness } from './harness.js';
 
 const GUILD = '112233445566778899';
@@ -42,8 +40,8 @@ beforeAll(async () => {
     ]),
   );
   expect(res.json()).toMatchObject({ accepted: 5, rejected: [] });
-  await runRollups(h.db, new Date());
-  await runUniques(h.db);
+  await h.store.jobs.runRollups(new Date());
+  await h.store.jobs.runUniques();
 });
 
 afterAll(async () => {
@@ -94,9 +92,9 @@ describe('message (prefix) commands', () => {
   it('leaves them out of deadline, response and premium figures, which only interactions have', async () => {
     const reliability = (await query(h.app, { kind: 'reliability', range: range() })).json();
     expect(reliability.totals).toMatchObject({ runs: 2, missedDeadlines: 1 });
-    expect(await evaluateMetric(h.db, APP_ID, 'missed_deadline_rate', 3_600)).toBeCloseTo(50);
+    expect(await h.store.alerts.metricValue(APP_ID, 'missed_deadline_rate', 3_600)).toBeCloseTo(50);
     // The error rate is about every command, prefix ones included: one timeout and one prefix error of five.
-    expect(await evaluateMetric(h.db, APP_ID, 'error_rate', 3_600)).toBeCloseTo(40);
+    expect(await h.store.alerts.metricValue(APP_ID, 'error_rate', 3_600)).toBeCloseTo(40);
 
     const detail = (await query(h.app, { kind: 'command', name: 'ban', range: range() })).json();
     // Shares count the 2 interactions only: 1 deferred, neither by a premium user.

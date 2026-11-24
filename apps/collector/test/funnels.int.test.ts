@@ -1,7 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { uuidv7 } from '@shardlens/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { runRollups } from '../src/jobs/rollups.js';
 import { APP_ID, envelope, type Harness, ingest, interaction, query, sdkHasher, startHarness } from './harness.js';
 
 const HOUR = 3_600_000;
@@ -55,7 +54,7 @@ beforeAll(async () => {
   const res = await ingest(h.app, envelope(events));
   expect(res.statusCode).toBe(202);
   expect(res.json()).toMatchObject({ rejected: [] });
-  await runRollups(h.db, new Date());
+  await h.store.jobs.runRollups(new Date());
 }, 120_000);
 
 afterAll(async () => {
