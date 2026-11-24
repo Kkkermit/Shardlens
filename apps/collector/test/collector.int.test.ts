@@ -7,7 +7,6 @@ import { bucketOf, uuidv7 } from '@shardlens/core';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { signInProblems } from '../src/app.js';
 import { createPool, migrate } from '../src/db.js';
-import { evaluateMetric } from '../src/jobs/alerts.js';
 import { backfillRollups, runRollups, runUniques } from '../src/jobs/rollups.js';
 import { runRetention, runSalts } from '../src/jobs/scheduler.js';
 import { allowedUser } from '../src/routes/auth.js';
@@ -665,7 +664,7 @@ describe('rollups, uniques and queries', () => {
 
     const reliability = (await query(h.app, { kind: 'reliability', range: range() })).json();
     expect(reliability.totals).toMatchObject({ runs: 105, missedDeadlines: 5, noResponse: 3 });
-    expect(await evaluateMetric(h.db, APP_ID, 'missed_deadline_rate', 3_600)).toBeCloseTo((100 * 5) / 105);
+    expect(await h.store.alerts.metricValue(APP_ID, 'missed_deadline_rate', 3_600)).toBeCloseTo((100 * 5) / 105);
     const detail = (await query(h.app, { kind: 'command', name: 'ping', range: range() })).json();
     // None succeeded, failed or deferred: that is 0, not unknown.
     expect(detail.totals).toMatchObject({ runs: 5, ok: 0, error: 0, timeout: 2, noResponse: 3, deferRate: 0 });

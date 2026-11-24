@@ -56,6 +56,7 @@ export async function runSalts(db: Db, now: Date): Promise<string[]> {
  * session ends, the lock is released and another collector takes over within 30 seconds.
  */
 export function startJobs(db: Db, log: JobLogger, opts?: { settingsKey: string; dashboardUrl: URL | undefined }): Jobs {
+  const store = new PostgresStore(db);
   let lockClient: pg.PoolClient | undefined;
   let leader = false;
   let stopped = false;
@@ -109,8 +110,8 @@ export function startJobs(db: Db, log: JobLogger, opts?: { settingsKey: string; 
   const tick = () => {
     if (!leader) return;
     void serial('rollups', rollups);
-    if (opts) void serial('alerts', () => runAlerts(db, opts));
-    if (opts && due('reports', 5 * MINUTE)) void serial('reports', () => runReports(db, opts));
+    if (opts) void serial('alerts', () => runAlerts(store, opts));
+    if (opts && due('reports', 5 * MINUTE)) void serial('reports', () => runReports(store, opts));
     if (due('uniques', 5 * MINUTE)) void serial('uniques', () => runUniques(db));
     if (due('partitions', HOUR)) {
       void serial('partitions', async () => ensurePartitionsPatiently(db, new Date(), await retentionSettings(db)));

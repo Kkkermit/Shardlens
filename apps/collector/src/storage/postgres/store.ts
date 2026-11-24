@@ -1,10 +1,13 @@
 import { type Db, isRefusedInput } from '../../db.js';
 import type {
   AdminAuditStorage,
+  AlertStorage,
   AppStorage,
   IngestStorage,
   KeyStorage,
+  PrivacyStorage,
   QueryStorage,
+  ReportStorage,
   SaltStorage,
   SessionStorage,
   SettingStorage,
@@ -12,12 +15,15 @@ import type {
   WebhookEventStorage,
 } from '../store.js';
 import { postgresAdminAudit } from './admin-audit.js';
+import { postgresAlerts } from './alerts.js';
 import { postgresApps } from './apps.js';
 import { postgresIngest } from './ingest/write.js';
 import { postgresKeys } from './keys.js';
 import { ensurePartitions } from './partitions.js';
+import { postgresPrivacy } from './privacy.js';
 import { postgresQueries } from './queries.js';
 import { postgresSalts } from './salts.js';
+import { postgresReports } from './scheduled-reports.js';
 import { postgresSessions } from './sessions.js';
 import { postgresSettings } from './settings.js';
 import { postgresWebhookEvents } from './webhook-events.js';
@@ -35,6 +41,9 @@ export class PostgresStore implements Store {
   readonly ingest: IngestStorage;
   readonly webhookEvents: WebhookEventStorage;
   readonly query: QueryStorage;
+  readonly alerts: AlertStorage;
+  readonly reports: ReportStorage;
+  readonly privacy: PrivacyStorage;
   readonly adminAudit: AdminAuditStorage;
   readonly #db: Db;
 
@@ -48,6 +57,9 @@ export class PostgresStore implements Store {
     this.ingest = postgresIngest(db);
     this.webhookEvents = postgresWebhookEvents(db);
     this.query = postgresQueries(db);
+    this.alerts = postgresAlerts(db);
+    this.reports = postgresReports(db);
+    this.privacy = postgresPrivacy(db);
     this.adminAudit = postgresAdminAudit(db);
   }
 

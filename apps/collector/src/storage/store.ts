@@ -1,5 +1,6 @@
 import type { QueryResults } from '@shardlens/client';
 import type { Event } from '@shardlens/schema';
+import type { ReportSchedule } from '../jobs/reports.js';
 import type { QuerySpec, Spec } from '../query/spec.js';
 import type { ApiKeyScope } from '../security/keys.js';
 import type { MirroredCustom, MirroredInteraction } from './clickhouse.js';
@@ -382,6 +383,201 @@ export interface QueryStorage {
   badge(appId: string, metric: string): Promise<number | null>;
 }
 
+export interface AlertRule {
+  id: string;
+  name: string;
+  /** One of `ALERT_METRICS` (`routes/admin.ts`). */
+  metric: string;
+  comparator: '>' | '>=' | '<' | '<=';
+  threshold: number;
+  /** 60 to 86,400. */
+  windowS: number;
+  /** The Discord webhook URL, encrypted with the settings key. */
+  webhook: Buffer;
+  enabled: boolean;
+  lastFired: Date | null;
+}
+
+/** An enabled rule, for the alert job, which checks every app's. */
+export interface ActiveAlertRule extends Omit<AlertRule, 'enabled'> {
+  appId: string;
+}
+
+/** A rule firing, as the Alerts page lists it. */
+export interface AlertFiring {
+  ts: Date;
+  ruleId: string;
+  /** The rule's name. */
+  name: string;
+  value: number;
+  delivered: boolean;
+  error: string | null;
+}
+
+export interface AlertStorage {
+  /** The app's rules, oldest first. */
+  list(appId: string): Promise<AlertRule[]>;
+  /** The app's last 50 firings, newest first. */
+  history(appId: string): Promise<AlertFiring[]>;
+  get(appId: string, id: string): Promise<Pick<AlertRule, 'name' | 'webhook'> | undefined>;
+  /** Returns the new rule's ID. */
+  create(appId: string, rule: Omit<AlertRule, 'id' | 'enabled' | 'lastFired'>): Promise<string>;
+  /** `false` when the app has no such rule. */
+  setEnabled(appId: string, id: string, enabled: boolean): Promise<boolean>;
+  /** Deletes the rule and its history. `false` when the app has no such rule. */
+  delete(appId: string, id: string): Promise<boolean>;
+  /** Every app's enabled rules. */
+  active(): Promise<ActiveAlertRule[]>;
+  /**
+   * The metric's value over the trailing `windowS` seconds (`invalid_requests_pct` always over 10 minutes: Discord's
+   * own window), or `null` when there is no data to judge: no rule fires on missing data.
+   */
+  metricValue(appId: string, metric: string, windowS: number): Promise<number | null>;
+  /** Records that the rule fired at `at`, and whether Discord took the message. */
+  recordFiring(
+    rule: { id: string; appId: string },
+    at: Date,
+    value: number,
+    delivered: boolean,
+    error: string | null,
+  ): Promise<void>;
+}
+
+export interface Report {
+  id: string;
+  name: string;
+  schedule: ReportSchedule;
+  /** Hour of the day to send at, in the app's time zone. */
+  hour: number;
+  /** ISO weekday (1 Monday to 7 Sunday), for weekly reports. */
+  weekday: number;
+  /** The Discord webhook URL, encrypted with the settings key. */
+  webhook: Buffer;
+  enabled: boolean;
+  lastSent: Date | null;
+  lastError: string | null;
+}
+
+/** A report to send now, with the period it covers worked out in the app's time zone. */
+export interface ReportToSend {
+  id: string;
+  appId: string;
+  name: string;
+  schedule: ReportSchedule;
+  webhook: Buffer;
+  timezone: string;
+  /** The app's name, as `AppMeta.name`. */
+  bot: string;
+  /** Midnight starting the local day before `dayEnd`. */
+  dayStart: Date;
+  /** Midnight starting the local day seven days before `dayEnd`. */
+  weekStart: Date;
+  /** The midnight that started the local day `now` is in. */
+  dayEnd: Date;
+}
+
+export interface ReportStorage {
+  /** The app's reports, oldest first. */
+  list(appId: string): Promise<Report[]>;
+  count(appId: string): Promise<number>;
+  /** Returns the new report's ID. */
+  create(appId: string, report: Omit<Report, 'id' | 'enabled' | 'lastSent' | 'lastError'>): Promise<string>;
+  /** `false` when the app has no such report. */
+  setEnabled(appId: string, id: string, enabled: boolean): Promise<boolean>;
+  /** `false` when the app has no such report. */
+  delete(appId: string, id: string): Promise<boolean>;
+  /**
+   * Every enabled report whose hour has come in its app's time zone at `now` (on its weekday, for weekly ones) and that
+   * has not been sent since the local day began. In ID order.
+   */
+  due(now: Date): Promise<ReportToSend[]>;
+  /** One report, due or not, for its last finished period at `now`. */
+  find(appId: string, id: string, now: Date): Promise<ReportToSend | undefined>;
+  /** Records an attempt: `error` is `null` when Discord took the message. */
+  recordSent(id: string, at: Date, error: string | null): Promise<void>;
+}
+
+/** A read of audit data, or an erase, for the access log. */
+export interface AccessLogEntry {
+  appId: string;
+  /** The person's Discord ID, `'0'` for an activity key or the SDK. */
+  viewerUserId: string;
+  /** The activity key that read, if one did. */
+  viewerKeyId: string | null;
+  action: string;
+  details: object;
+}
+
+/** The access log as `GET /v1/audit/access-log` answers it. */
+export interface AccessLogRow {
+  ts: Date;
+  viewerUserId: string;
+  /** The label of the key that read, if one did. */
+  viewerKey: string | null;
+  action: string;
+  details: unknown;
+}
+
+/** Filters of the activity log. Every one given must match. */
+export interface ActivityFilter {
+  from?: string | undefined;
+  to?: string | undefined;
+  /** Rows before this time, or before this time and row ID together (paging: the row ID breaks ties). */
+  before?: { ts: string; id?: string | undefined } | undefined;
+  command?: string | undefined;
+  guild?: string | undefined;
+  /** `SealedActor.lookup` of the user looked up. */
+  actorLookup?: Buffer | undefined;
+  /** One outcome, or `failed` for every outcome but `ok`. */
+  outcome?: 'ok' | 'error' | 'timeout' | 'no_response' | 'failed' | undefined;
+}
+
+/** One run in the activity log (audit mode), its identity still encrypted. */
+export interface ActivityRecord {
+  interactionId: string;
+  ts: Date;
+  guildId: string | null;
+  /** From the server's profile, if the store has one. */
+  guildName: string | null;
+  /** Code from `KIND`. */
+  kind: number;
+  command: string | null;
+  sub: string | null;
+  customId: string | null;
+  /** Code from `OUTCOME`. */
+  outcome: number;
+  ackMs: number | null;
+  /** `SealedActor.userId`. */
+  userId: Buffer;
+  /** `SealedActor.profile`. */
+  profile: Buffer | null;
+}
+
+/** Erasure, audit mode's activity log and the access log of who read it (ADR 0002, 0011). */
+export interface PrivacyStorage {
+  logAccess(entry: AccessLogEntry): Promise<void>;
+  /** The app's last 200 access log entries, newest first. */
+  accessLog(appId: string): Promise<AccessLogRow[]>;
+  /**
+   * Deletes the app's single events, unique-user rows, entitlements, subscriptions and webhook deliveries with any of
+   * these salted hashes. Rollups stay: they are anonymous counts. Returns the rows deleted.
+   */
+  eraseHashes(appId: string, hashes: readonly Buffer[]): Promise<number>;
+  /** Deletes the user's activity log. Returns the rows deleted. */
+  eraseActivity(appId: string, actorLookup: Buffer): Promise<number>;
+  /** The app's webhook deliveries that keep an encrypted installing user. */
+  installers(appId: string): Promise<{ id: string; ts: Date; actor: Buffer }[]>;
+  /** Forgets the installing user of one delivery. */
+  forgetInstaller(id: string, ts: Date): Promise<void>;
+  /** Newest first (by time, then row ID), at most `limit` rows. */
+  activity(appId: string, filter: ActivityFilter, limit: number): Promise<ActivityRecord[]>;
+  /**
+   * The 25 users with the most runs in the last 24 hours or 7 days, by `SealedActor.lookup`, each with their latest
+   * encrypted ID. Read only through the access-logged activity routes.
+   */
+  topActors(appId: string, window: '24h' | '7d'): Promise<{ userId: Buffer; runs: number }[]>;
+}
+
 export interface AdminAuditStorage {
   /** Records something a person (`userId`), or the collector's configuration (`null`), changed. No secrets in `details`. */
   record(appId: string, userId: string | null, action: string, details?: object): Promise<void>;
@@ -396,6 +592,9 @@ export interface Store {
   readonly ingest: IngestStorage;
   readonly webhookEvents: WebhookEventStorage;
   readonly query: QueryStorage;
+  readonly alerts: AlertStorage;
+  readonly reports: ReportStorage;
+  readonly privacy: PrivacyStorage;
   readonly adminAudit: AdminAuditStorage;
   /**
    * Makes ready, at start-up, whatever the coming week's events need (PostgreSQL: daily partitions from the start of

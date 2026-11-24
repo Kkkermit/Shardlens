@@ -1,7 +1,7 @@
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { uuidv7 } from '@shardlens/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { evaluateMetric, runAlerts } from '../src/jobs/alerts.js';
+import { runAlerts } from '../src/jobs/alerts.js';
 import { runReports } from '../src/jobs/reports.js';
 import { backfillRollups, runRollups, runUniques } from '../src/jobs/rollups.js';
 import { ALERT_METRICS } from '../src/routes/admin.js';
@@ -342,7 +342,7 @@ describe('alerts', () => {
   });
 
   it('evaluates every metric, notifies once and then debounces', async () => {
-    for (const metric of ALERT_METRICS) await evaluateMetric(h.db, APP_ID, metric, 600);
+    for (const metric of ALERT_METRICS) await h.store.alerts.metricValue(APP_ID, metric, 600);
     const { hasher, period } = await sdkHasher(h.app);
     await ingest(
       h.app,
@@ -354,8 +354,8 @@ describe('alerts', () => {
       return new Response(null, { status: 204 });
     }) as typeof fetch;
     const opts = { settingsKey: h.config.settingsKey, dashboardUrl: h.config.publicUrl, fetchImpl };
-    expect(await runAlerts(h.db, opts)).toBe(1);
-    expect(await runAlerts(h.db, opts)).toBe(0);
+    expect(await runAlerts(h.store, opts)).toBe(1);
+    expect(await runAlerts(h.store, opts)).toBe(0);
     expect(calls).toHaveLength(1);
     expect(calls[0]).toContain('with_components=true');
     expect(calls[0]).toContain('"parse":[]');
@@ -369,7 +369,7 @@ describe('alerts', () => {
       return new Response(null, { status: 204 });
     }) as typeof fetch;
     const rotatedKey = Buffer.alloc(32, 9).toString('base64');
-    expect(await runAlerts(h.db, { settingsKey: rotatedKey, dashboardUrl: h.config.publicUrl, fetchImpl })).toBe(0);
+    expect(await runAlerts(h.store, { settingsKey: rotatedKey, dashboardUrl: h.config.publicUrl, fetchImpl })).toBe(0);
     expect(calls).toEqual([]);
     const history = await h.db.query<{ delivered: boolean; error: string }>(
       'SELECT delivered, error FROM alert_events ORDER BY id DESC LIMIT 1',
@@ -453,9 +453,9 @@ describe('scheduled reports', () => {
     await runUniques(h.db);
 
     const { calls, opts } = discord();
-    expect(await runReports(h.db, opts, tomorrow(8))).toBe(0);
-    expect(await runReports(h.db, opts, tomorrow(9))).toBe(1);
-    expect(await runReports(h.db, opts, tomorrow(15))).toBe(0);
+    expect(await runReports(h.store, opts, tomorrow(8))).toBe(0);
+    expect(await runReports(h.store, opts, tomorrow(9))).toBe(1);
+    expect(await runReports(h.store, opts, tomorrow(15))).toBe(0);
     expect(calls).toHaveLength(1);
     expect(calls[0]).toContain('Daily report');
     expect(calls[0]).toContain('Commands run');
@@ -474,18 +474,18 @@ describe('scheduled reports', () => {
     const otherDay = (today % 7) + 1;
     await create({ name: 'Wrong day', schedule: 'weekly', hour: 0, weekday: otherDay, webhookUrl: WEBHOOK });
     const { calls, opts } = discord();
-    expect(await runReports(h.db, opts, when)).toBe(0);
+    expect(await runReports(h.store, opts, when)).toBe(0);
     await create({ name: 'Right day', schedule: 'weekly', hour: 0, weekday: today, webhookUrl: WEBHOOK });
-    expect(await runReports(h.db, opts, when)).toBe(1);
+    expect(await runReports(h.store, opts, when)).toBe(1);
     expect(calls[0]).toContain('Weekly report');
   });
 
   it('records why a delivery failed and does not retry all day', async () => {
     await h.db.query('UPDATE reports SET last_sent = NULL');
     const { calls, opts } = discord(404);
-    expect(await runReports(h.db, opts, tomorrow())).toBe(0);
+    expect(await runReports(h.store, opts, tomorrow())).toBe(0);
     const attempts = calls.length;
-    expect(await runReports(h.db, opts, tomorrow())).toBe(0);
+    expect(await runReports(h.store, opts, tomorrow())).toBe(0);
     expect(calls).toHaveLength(attempts);
     expect((await list()).map((r) => r.lastError)).toContain('discord returned 404');
   });
@@ -517,7 +517,7 @@ describe('scheduled reports', () => {
     try {
       await create({ name: 'New York', schedule: 'daily', hour: 0, webhookUrl: WEBHOOK });
       const { calls, opts } = discord();
-      expect(await runReports(h.db, opts, tomorrow(15))).toBe(1);
+      expect(await runReports(h.store, opts, tomorrow(15))).toBe(1);
       expect(calls[0]).toContain('(America/New_York)');
       expect(calls[0]).toContain('Unique users: **22**');
     } finally {

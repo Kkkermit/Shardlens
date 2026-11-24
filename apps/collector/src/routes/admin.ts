@@ -205,39 +205,21 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
   app.get('/v1/alerts', async (req, reply) => {
     const admin = await requireAdmin(deps, req, reply);
     if (!admin) return;
-    const rules = await deps.db.query<{
-      id: string;
-      name: string;
-      metric: string;
-      comparator: string;
-      threshold: number;
-      window_s: number;
-      webhook_enc: Buffer;
-      enabled: boolean;
-      last_fired: Date | null;
-    }>(
-      'SELECT id::text, name, metric, comparator, threshold, window_s, webhook_enc, enabled, last_fired FROM alert_rules WHERE app_id = $1 ORDER BY id',
-      [admin.appId],
-    );
-    const history = await deps.db.query(
-      `SELECT e.ts, e.rule_id::text AS "ruleId", r.name, e.value, e.delivered, e.error
-         FROM alert_events e JOIN alert_rules r ON r.id = e.rule_id
-        WHERE e.app_id = $1 ORDER BY e.ts DESC LIMIT 50`,
-      [admin.appId],
-    );
+    const rules = await deps.store.alerts.list(admin.appId);
+    const history = await deps.store.alerts.history(admin.appId);
     return {
-      rules: rules.rows.map((r) => ({
+      rules: rules.map((r) => ({
         id: r.id,
         name: r.name,
         metric: r.metric,
         comparator: r.comparator,
         threshold: r.threshold,
-        windowS: r.window_s,
-        webhook: maskStoredWebhook(settingsCipher, r.webhook_enc),
+        windowS: r.windowS,
+        webhook: maskStoredWebhook(settingsCipher, r.webhook),
         enabled: r.enabled,
-        lastFired: r.last_fired,
+        lastFired: r.lastFired,
       })),
-      history: history.rows,
+      history,
     };
   });
 
@@ -245,24 +227,16 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
     const admin = await requireAdmin(deps, req, reply, { mutate: true });
     if (!admin) return;
     const body = AlertBody.parse(req.body ?? {});
-    const res = await deps.db.query<{ id: string }>(
-      `INSERT INTO alert_rules (app_id, name, metric, comparator, threshold, window_s, webhook_enc)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id::text`,
-      [
-        admin.appId,
-        body.name,
-        body.metric,
-        body.comparator,
-        body.threshold,
-        body.windowS,
-        settingsCipher.encrypt(body.webhookUrl),
-      ],
-    );
-    await deps.store.adminAudit.record(admin.appId, admin.userId, 'alert_create', {
-      id: res.rows[0]?.id,
+    const id = await deps.store.alerts.create(admin.appId, {
+      name: body.name,
       metric: body.metric,
+      comparator: body.comparator,
+      threshold: body.threshold,
+      windowS: body.windowS,
+      webhook: settingsCipher.encrypt(body.webhookUrl),
     });
-    return reply.code(201).send({ id: res.rows[0]?.id });
+    await deps.store.adminAudit.record(admin.appId, admin.userId, 'alert_create', { id, metric: body.metric });
+    return reply.code(201).send({ id });
   });
 
   app.patch('/v1/alerts/:id', async (req, reply) => {
@@ -270,12 +244,9 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
     if (!admin) return;
     const { id } = IdParam.parse(req.params);
     const { enabled } = EnabledBody.parse(req.body ?? {});
-    const res = await deps.db.query('UPDATE alert_rules SET enabled = $3 WHERE app_id = $1 AND id = $2', [
-      admin.appId,
-      id,
-      enabled,
-    ]);
-    if (!res.rowCount) return reply.code(404).send({ error: 'not_found' });
+    if (!(await deps.store.alerts.setEnabled(admin.appId, id, enabled))) {
+      return reply.code(404).send({ error: 'not_found' });
+    }
     return { ok: true };
   });
 
@@ -283,8 +254,7 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
     const admin = await requireAdmin(deps, req, reply, { mutate: true });
     if (!admin) return;
     const { id } = IdParam.parse(req.params);
-    const res = await deps.db.query('DELETE FROM alert_rules WHERE app_id = $1 AND id = $2', [admin.appId, id]);
-    if (!res.rowCount) return reply.code(404).send({ error: 'not_found' });
+    if (!(await deps.store.alerts.delete(admin.appId, id))) return reply.code(404).send({ error: 'not_found' });
     await deps.store.adminAudit.record(admin.appId, admin.userId, 'alert_delete', { id });
     return { ok: true };
   });
@@ -296,15 +266,11 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
       const admin = await requireAdmin(deps, req, reply, { mutate: true });
       if (!admin) return;
       const { id } = IdParam.parse(req.params);
-      const rule = await deps.db.query<{ name: string; webhook_enc: Buffer }>(
-        'SELECT name, webhook_enc FROM alert_rules WHERE app_id = $1 AND id = $2',
-        [admin.appId, id],
-      );
-      const row = rule.rows[0];
+      const row = await deps.store.alerts.get(admin.appId, id);
       if (!row) return reply.code(404).send({ error: 'not_found' });
       let url: string;
       try {
-        url = settingsCipher.decrypt(row.webhook_enc);
+        url = settingsCipher.decrypt(row.webhook);
       } catch {
         return reply.code(502).send({ error: 'webhook_failed', message: UNREADABLE_WEBHOOK });
       }
