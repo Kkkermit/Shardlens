@@ -153,7 +153,6 @@ describe.each(['MongoDB', 'MySQL', 'MariaDB', 'PostgreSQL', 'SQLite'])('%s sink'
     app = await buildServer({
       config: h.config,
       store: h.store,
-      db: h.db,
       keys: new KeyStore(h.store),
       live: h.live,
       sink: mirror,

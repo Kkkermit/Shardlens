@@ -1,12 +1,13 @@
 import { startCollector } from './app.js';
 import { createPool, migrate } from './db.js';
 import { loadConfig } from './env.js';
+import { PostgresStore } from './storage/postgres/store.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
   const migrationsApplied = await migrate(config.databaseUrl);
   const db = createPool(config.databaseUrl);
-  const collector = await startCollector(config, db, migrationsApplied);
+  const collector = await startCollector(config, new PostgresStore(db), migrationsApplied);
 
   let stopping = false;
   const stop = async (signal: string) => {

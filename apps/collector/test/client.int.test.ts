@@ -12,7 +12,6 @@ import {
 import { uuidv7 } from '@shardlens/core';
 import { afterAll, beforeAll, describe, expect, expectTypeOf, it } from 'vitest';
 import { z } from 'zod';
-import { backfillRollups, runUniques } from '../src/jobs/rollups.js';
 import {
   APP_ID,
   envelope,
@@ -662,8 +661,8 @@ async function seed() {
     JSON.stringify({ [SKU]: { amount: 4.99, currency: 'USD' } }),
   ]);
 
-  await backfillRollups(h.db, new Date(t0 - HOUR), new Date(now + MINUTE));
-  await runUniques(h.db);
+  await h.store.jobs.backfillRollups(new Date(t0 - HOUR), new Date(now + MINUTE));
+  await h.store.jobs.runUniques();
 }
 
 beforeAll(async () => {

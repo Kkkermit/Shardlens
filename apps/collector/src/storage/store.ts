@@ -14,6 +14,37 @@ import type { SaltPeriod } from './periods.js';
  * hashes and values encrypted outside it.
  */
 
+export interface Store {
+  readonly apps: AppStorage;
+  readonly keys: KeyStorage;
+  readonly sessions: SessionStorage;
+  readonly settings: SettingStorage;
+  readonly salts: SaltStorage;
+  readonly ingest: IngestStorage;
+  readonly webhookEvents: WebhookEventStorage;
+  readonly query: QueryStorage;
+  readonly alerts: AlertStorage;
+  readonly reports: ReportStorage;
+  readonly privacy: PrivacyStorage;
+  readonly adminAudit: AdminAuditStorage;
+  readonly live: LiveStorage;
+  readonly jobs: JobStorage;
+  readonly demo: DemoStorage;
+  /**
+   * Makes ready, at start-up, whatever the coming week's events need (PostgreSQL: daily partitions from the start of
+   * each table's retention to a week ahead). Several collectors may run it at once.
+   */
+  prepare(): Promise<void>;
+  /** Resolves when the store can serve (`GET /readyz`); rejects when it can't. */
+  ready(): Promise<void>;
+  /**
+   * The store's code for an error that means it refused the input itself (a number out of range, text it can't hold),
+   * which no retry can fix: the request is answered 400, and an ingest batch is written event by event. `undefined`
+   * for any other error.
+   */
+  refusedInput(error: unknown): string | undefined;
+}
+
 export type AppMode = 'privacy' | 'audit';
 
 /** An app's own settings, kept with the app. */
@@ -56,7 +87,7 @@ export interface AppStorage {
   hasReported(appId: string): Promise<boolean>;
 }
 
-export interface ApiKeyRecord {
+interface ApiKeyRecord {
   id: string;
   appId: string;
   scope: ApiKeyScope;
@@ -73,7 +104,7 @@ export interface ApiKeyListing {
 }
 
 /** A key to store. Only its SHA-256 is ever stored: the plaintext is shown once and forgotten. */
-export interface NewApiKey {
+interface NewApiKey {
   appId: string;
   scope: ApiKeyScope;
   sha256: Buffer;
@@ -104,7 +135,7 @@ export interface KeyStorage {
 
 export type SessionMethod = 'discord' | 'read_key';
 
-export interface NewSession {
+interface NewSession {
   /** SHA-256 of the cookie's token: the token itself is never stored. */
   idSha256: Buffer;
   appId: string;
@@ -152,7 +183,7 @@ export interface SettingStorage {
 }
 
 /** A period's salt, made outside the store (`storage/salts.ts`). */
-export interface NewSalt {
+interface NewSalt {
   /** Salt period label: `2026-11`, `2026-W46` or `2026-11-13`. */
   period: string;
   /** 32 random bytes. */
@@ -231,7 +262,7 @@ export interface WriteResult {
   /** Events already stored by an earlier attempt of the batch. */
   duplicates: number;
   rejected: { index: number; reason: string }[];
-  /** IDs, lower case, of the interactions and message commands stored now (retried ones left out): live tiles count them. */
+  /** IDs, lower case, of the interactions and message commands stored now, not retried ones: live tiles count these. */
   stored: Set<string>;
   /** With `IngestContext.mirror`: the interactions and custom events stored now, never retried ones. */
   mirror?: { interactions: MirroredInteraction[]; custom: MirroredCustom[] } | undefined;
@@ -253,7 +284,7 @@ export interface IngestStorage {
 }
 
 /** One Discord webhook event delivery (an install or an entitlement change). */
-export interface WebhookDelivery {
+interface WebhookDelivery {
   /** Derived from the body, so Discord's retry of a delivery has the same ID and is stored once. */
   id: string;
   ts: Date;
@@ -269,8 +300,8 @@ export interface WebhookDelivery {
   scopes: string[] | null;
 }
 
-/** An entitlement created, updated or deleted, from the gateway (ingest) or a webhook event. */
-export interface EntitlementChange {
+/** An entitlement created, updated or deleted, as a webhook event reports it (the gateway's come through ingest). */
+interface EntitlementChange {
   appId: string;
   ts: Date;
   action: 'create' | 'update' | 'delete';
@@ -295,7 +326,7 @@ export interface WebhookEventStorage {
  * since JSON writes it as the ISO 8601 string the client reads. Other strings keep the format the client documents
  * (days as `YYYY-MM-DD`, chart points without an offset).
  */
-export type Stored<T> = T extends string
+type Stored<T> = T extends string
   ? string extends T
     ? string | Date
     : T
@@ -399,7 +430,7 @@ export interface AlertRule {
 }
 
 /** An enabled rule, for the alert job, which checks every app's. */
-export interface ActiveAlertRule extends Omit<AlertRule, 'enabled'> {
+interface ActiveAlertRule extends Omit<AlertRule, 'enabled'> {
   appId: string;
 }
 
@@ -443,7 +474,7 @@ export interface AlertStorage {
   ): Promise<void>;
 }
 
-export interface Report {
+interface Report {
   id: string;
   name: string;
   schedule: ReportSchedule;
@@ -498,7 +529,7 @@ export interface ReportStorage {
 }
 
 /** A read of audit data, or an erase, for the access log. */
-export interface AccessLogEntry {
+interface AccessLogEntry {
   appId: string;
   /** The person's Discord ID, `'0'` for an activity key or the SDK. */
   viewerUserId: string;
@@ -519,7 +550,7 @@ export interface AccessLogRow {
 }
 
 /** Filters of the activity log. Every one given must match. */
-export interface ActivityFilter {
+interface ActivityFilter {
   from?: string | undefined;
   to?: string | undefined;
   /** Rows before this time, or before this time and row ID together (paging: the row ID breaks ties). */
@@ -533,7 +564,7 @@ export interface ActivityFilter {
 }
 
 /** One run in the activity log (audit mode), its identity still encrypted. */
-export interface ActivityRecord {
+interface ActivityRecord {
   interactionId: string;
   ts: Date;
   guildId: string | null;
@@ -578,35 +609,97 @@ export interface PrivacyStorage {
   topActors(appId: string, window: '24h' | '7d'): Promise<{ userId: Buffer; runs: number }[]>;
 }
 
+/** Live tile counts one collector instance shares with the others: interactions and failures per second. */
+export interface LiveShare {
+  /** The instance that counted them: random, per process. */
+  instance: string;
+  appId: string;
+  /** `[epoch second, interactions, failures]`. Not validated on the way in: whatever receives a share checks it. */
+  counts: [number, number, number][];
+}
+
+/** Carries live tile counts between the collector instances on one store, so every instance shows the same tiles. */
+export interface LiveChannel {
+  /**
+   * Starts handing `receive` what instances publish (an instance's own shares may come back; they are ignored).
+   * Resolves `false` when it could not subscribe yet: it keeps trying in the background, and tells `warn` once per
+   * outage when a subscription is lost. A store with no way to push (PostgreSQL has `LISTEN`) may poll here.
+   */
+  subscribe(receive: (share: LiveShare) => void, warn: (message: string) => void): Promise<boolean>;
+  /** Sends counts to the other instances, about once a second. Best effort: a lost share costs a second of tiles. */
+  publish(share: LiveShare): Promise<void>;
+  stop(): Promise<void>;
+}
+
+/** What the live stream reads from the store about every 10 seconds, besides the counts it keeps in memory. */
+interface LiveRecent {
+  /** 95th percentile of the time to the first response over the last 5 minutes. */
+  p95Ms5m: number | null;
+  /** Each shard's latest ping in the last hour. `fresh` when under 2 minutes old. */
+  shards: { shard: number; ping: number; fresh: boolean }[];
+  /** Servers the bot is in now. */
+  servers: number;
+}
+
+export interface LiveStorage {
+  /** A channel for one live hub: one per collector process. */
+  channel(): LiveChannel;
+  recent(appId: string): Promise<LiveRecent>;
+}
+
+/** One contender for job leadership: one collector instance on a store runs the scheduled jobs. */
+export interface JobLeader {
+  /**
+   * Tries to become the leader; `true` when this instance is now. Called every 30 seconds while it isn't. Staying leader
+   * is the store's job (PostgreSQL: a session advisory lock on a connection of its own; elsewhere, for example, a lease
+   * the store renews): if leadership ends without `release`, the store calls `onLost` once, and the scheduler tries
+   * again. Another instance must not lead while this one does.
+   */
+  tryLead(onLost: () => void): Promise<boolean>;
+  /** Gives leadership up, at shutdown. Nothing tries to lead with this contender afterwards. */
+  release(): Promise<void>;
+}
+
+/** The scheduled jobs' storage work. Only the leader runs them, one at a time. */
+export interface JobStorage {
+  leader(): JobLeader;
+  /**
+   * The every-minute rollup run: recomputes minute, hour and day rollups for recent minutes and for minutes late events
+   * marked (at most 6 hours of those per run), newest first. A rollup that fails on its data (an overflowing sum) is
+   * skipped and listed instead of stopping the others. `since` is when the previous run started.
+   */
+  runRollups(now?: Date, opts?: { since?: Date | undefined }): Promise<{ windows: number; skipped: string[] }>;
+  /**
+   * Recomputes rollups for [from, to): minutes for the last 14 days, hours and days from those, and from single events
+   * while they are kept for older periods. Periods older than raw retention are left alone.
+   */
+  backfillRollups(from: Date, to: Date, now?: Date): Promise<void>;
+  /**
+   * Unique-user counts for every live salt period (or one app, or one period): per day with new users, per ISO week
+   * wholly inside the period, and for the whole period. `final` marks them final; a final count is never rewritten.
+   */
+  runUniques(appId?: string, period?: string, final?: boolean): Promise<void>;
+  /** The hourly job: what `Store.prepare` does, for retention as set, giving up rather than wait on busy storage. */
+  ensurePartitions(now: Date): Promise<void>;
+  /**
+   * The daily job: hourly rollups after 13 months, servers left 90 days ago, expired sessions, access and admin logs
+   * after a year, SDK health of processes silent for 30 days, then single events and minute rollups past retention.
+   * Throws when something could not be deleted yet, so it runs again soon.
+   */
+  runRetention(now: Date): Promise<void>;
+}
+
+/** For the demo seeder (`cli/seed.ts`): fictional data must never be mixed into a real bot's. */
+export interface DemoStorage {
+  /** Whether the app has no interactions stored. */
+  isEmpty(appId: string): Promise<boolean>;
+  /** Keeps the period's salt alive for another hour, so last period's demo users can still be hashed. */
+  extendSalt(appId: string, period: string): Promise<void>;
+  /** Forgets the minutes late events marked for the rollup job, once a backfill has recomputed everything. */
+  clearLateMarks(): Promise<void>;
+}
+
 export interface AdminAuditStorage {
   /** Records something a person (`userId`), or the collector's configuration (`null`), changed. No secrets in `details`. */
   record(appId: string, userId: string | null, action: string, details?: object): Promise<void>;
-}
-
-export interface Store {
-  readonly apps: AppStorage;
-  readonly keys: KeyStorage;
-  readonly sessions: SessionStorage;
-  readonly settings: SettingStorage;
-  readonly salts: SaltStorage;
-  readonly ingest: IngestStorage;
-  readonly webhookEvents: WebhookEventStorage;
-  readonly query: QueryStorage;
-  readonly alerts: AlertStorage;
-  readonly reports: ReportStorage;
-  readonly privacy: PrivacyStorage;
-  readonly adminAudit: AdminAuditStorage;
-  /**
-   * Makes ready, at start-up, whatever the coming week's events need (PostgreSQL: daily partitions from the start of
-   * each table's retention to a week ahead). Several collectors may run it at once.
-   */
-  prepare(): Promise<void>;
-  /** Resolves when the store can serve (`GET /readyz`); rejects when it can't. */
-  ready(): Promise<void>;
-  /**
-   * The store's code for an error that means it refused the input itself (a number out of range, text it can't hold),
-   * which no retry can fix: the request is answered 400, and an ingest batch is written event by event. `undefined`
-   * for any other error.
-   */
-  refusedInput(error: unknown): string | undefined;
 }

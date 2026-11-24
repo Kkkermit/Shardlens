@@ -26,7 +26,7 @@ const base = {
 /** A collector on a fake pool. */
 function serve(config: Config, db: Db) {
   const store = new PostgresStore(db);
-  return buildServer({ config, store, db, keys: new KeyStore(store), live: new LiveHub(db) });
+  return buildServer({ config, store, keys: new KeyStore(store), live: new LiveHub(store.live.channel()) });
 }
 
 /** A pool connection that answers every query with `rows` and records how it was released. */
@@ -255,7 +255,7 @@ describe('job scheduler', () => {
       }),
     } as unknown as Db;
     const jobs = startJobs(
-      db,
+      new PostgresStore(db),
       { info: () => undefined, error: (entry) => void errors.push(entry) },
       { settingsKey: Buffer.alloc(32, 1).toString('base64'), dashboardUrl: new URL('https://stats.example.com') },
     );
@@ -281,7 +281,7 @@ describe('job scheduler', () => {
         return c.client;
       },
     } as unknown as Db;
-    const jobs = startJobs(db, { info: () => undefined, error: () => undefined });
+    const jobs = startJobs(new PostgresStore(db), { info: () => undefined, error: () => undefined });
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(clients).toHaveLength(1);
     expect(clients[0]?.client.listenerCount('error')).toBe(1);
@@ -347,7 +347,7 @@ describe('LiveHub tiles', () => {
 
   it('gives a broken listening connection back to the pool, once', async () => {
     const { client, released } = fakeClient();
-    const hub = new LiveHub({ connect: async () => client } as unknown as Db);
+    const hub = new LiveHub(new PostgresStore({ connect: async () => client } as unknown as Db).live.channel());
     expect(await hub.start()).toBe(true);
     client.emit('error', new Error('Connection terminated unexpectedly'));
     client.emit('error', new Error('Connection terminated unexpectedly'));
@@ -365,7 +365,7 @@ describe('LiveHub tiles', () => {
         return { rows: [] };
       },
     } as unknown as Db;
-    const hub = new LiveHub(db);
+    const hub = new LiveHub(new PostgresStore(db).live.channel());
     await hub.start();
     const now = Date.now();
     for (let back = 0; back < 900; back++) hub.bump('1', now - back * 1_000, 1 / 3, 1 / 3);

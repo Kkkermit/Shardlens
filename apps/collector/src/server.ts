@@ -8,7 +8,6 @@ import fastifyStatic from '@fastify/static';
 import { containsNul } from '@shardlens/schema';
 import Fastify, { type FastifyInstance, type FastifyRequest, LogController } from 'fastify';
 import { ZodError } from 'zod';
-import type { Db } from './db.js';
 import type { Config } from './env.js';
 import type { LiveHub } from './live.js';
 import { QueryError } from './query/error.js';
@@ -27,7 +26,6 @@ import type { Store } from './storage/store.js';
 export interface Deps {
   config: Config;
   store: Store;
-  db: Db;
   keys: KeyStore;
   live: LiveHub;
   /** Optional ClickHouse analytics store (preview). */

@@ -33,9 +33,9 @@ export async function reportRoutes(app: FastifyInstance, deps: Deps): Promise<vo
     const admin = await requireAdmin(deps, req, reply);
     if (!admin) return;
     const reports = await deps.store.reports.list(admin.appId);
-    const app = await deps.store.apps.get(admin.appId);
+    const appRecord = await deps.store.apps.get(admin.appId);
     return {
-      timezone: app?.timezone ?? 'UTC',
+      timezone: appRecord?.timezone ?? 'UTC',
       reports: reports.map((r) => ({
         id: r.id,
         name: r.name,

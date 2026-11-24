@@ -1,6 +1,5 @@
 import { uuidv7 } from '@shardlens/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { runRollups, runUniques } from '../src/jobs/rollups.js';
 import { APP_ID, envelope, type Harness, ingest, interaction, query, sdkHasher, startHarness } from './harness.js';
 
 const GUILD = '112233445566778899';
@@ -41,8 +40,8 @@ beforeAll(async () => {
     ]),
   );
   expect(res.json()).toMatchObject({ accepted: 5, rejected: [] });
-  await runRollups(h.db, new Date());
-  await runUniques(h.db);
+  await h.store.jobs.runRollups(new Date());
+  await h.store.jobs.runUniques();
 });
 
 afterAll(async () => {

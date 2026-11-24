@@ -3,7 +3,6 @@ import { readFileSync } from 'node:fs';
 import { uuidv7 } from '@shardlens/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createPool, transaction } from '../src/db.js';
-import { runRollups, runUniques } from '../src/jobs/rollups.js';
 import {
   dropExpiredPartitions,
   ensurePartitions,
@@ -48,7 +47,7 @@ describe('rollup runs', () => {
     const ts = arrived - 115_000;
     await custom('almost_late', ts);
     // The next run, even one that starts a while after the event arrived.
-    await runRollups(h.db, new Date(arrived + 90_000));
+    await h.store.jobs.runRollups(new Date(arrived + 90_000));
     expect(await rolledUp('almost_late', minuteOf(ts))).toBe(1);
   });
 
@@ -57,7 +56,7 @@ describe('rollup runs', () => {
     const ts = previousRun - 100_000;
     await custom('behind', ts);
     // The scheduler was busy: this run starts ten minutes after the previous one.
-    await runRollups(h.db, new Date(previousRun + 10 * MINUTE), { since: new Date(previousRun) });
+    await h.store.jobs.runRollups(new Date(previousRun + 10 * MINUTE), { since: new Date(previousRun) });
     expect(await rolledUp('behind', minuteOf(ts))).toBe(1);
   });
 
@@ -82,13 +81,13 @@ describe('rollup runs', () => {
     const blocker = await h.db.connect();
     await blocker.query('BEGIN');
     await blocker.query('LOCK TABLE rollup_1d IN EXCLUSIVE MODE');
-    const run = runRollups(h.db);
+    const run = h.store.jobs.runRollups();
     await new Promise((resolve) => setTimeout(resolve, 1_000));
     await late(2_000);
     await blocker.query('COMMIT');
     blocker.release();
     await run;
-    await runRollups(h.db);
+    await h.store.jobs.runRollups();
     expect(await rolledUp('raced', bucket)).toBe(2);
   });
 
@@ -110,7 +109,7 @@ describe('rollup runs', () => {
     }
     await custom('beside_poison', ts);
     try {
-      const { skipped } = await runRollups(h.db);
+      const { skipped } = await h.store.jobs.runRollups();
       expect(skipped.length).toBeGreaterThan(0);
       expect(await rolledUp('beside_poison', minuteOf(ts))).toBe(1);
       const rest = await h.db.query<{ hist: number[] }>(
@@ -199,7 +198,7 @@ describe('unique users', () => {
     await seen('2026-11', '2026-11-10', users(4));
     await seen('2026-11', '2026-11-30', users(10));
     await seen('2026-12', '2026-12-01', users(3));
-    await runUniques(h.db, APP_ID);
+    await h.store.jobs.runUniques(APP_ID);
     expect(await weekRow('2026-11-09')).toEqual({ users: 4 });
     expect(await weekRow('2026-11-30')).toBeUndefined();
 
@@ -211,10 +210,10 @@ describe('unique users', () => {
           [APP_ID],
         )
       ).rows[0];
-    await runUniques(h.db, APP_ID, '2026-11', true);
+    await h.store.jobs.runUniques(APP_ID, '2026-11', true);
     expect(await month()).toEqual({ users: 14, final: true });
     await h.db.query("DELETE FROM uniques WHERE app_id = $1 AND period = '2026-11' AND day = '2026-11-30'", [APP_ID]);
-    await runUniques(h.db, APP_ID);
+    await h.store.jobs.runUniques(APP_ID);
     expect(await month()).toEqual({ users: 14, final: true });
   });
 });

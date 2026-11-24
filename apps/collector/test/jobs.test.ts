@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Db } from '../src/db.js';
 import { startJobs } from '../src/jobs/scheduler.js';
 import { LiveHub } from '../src/live.js';
+import { PostgresStore } from '../src/storage/postgres/store.js';
 import { type EventSink, SinkMirror, type StoredEvent } from '../src/storage/sink.js';
 
 const APP = '1234567890123456789';
@@ -33,7 +34,7 @@ describe('job scheduler', () => {
     };
     const client = Object.assign(new EventEmitter(), { query, release: () => undefined });
     const db = { query, connect: async () => client } as unknown as Db;
-    const jobs = startJobs(db, silent);
+    const jobs = startJobs(new PostgresStore(db), silent);
     await vi.advanceTimersByTimeAsync(5 * 60_000);
     expect(claims).toBe(1);
     release();
@@ -54,7 +55,7 @@ describe('job scheduler', () => {
     const client = Object.assign(new EventEmitter(), { query, release: () => undefined });
     // The lock connection takes 20 seconds, so the election's run is 20 seconds behind the minute ticks.
     const connect = () => new Promise((resolve) => setTimeout(() => resolve(client), 20_000));
-    const jobs = startJobs({ query, connect } as unknown as Db, silent);
+    const jobs = startJobs(new PostgresStore({ query, connect } as unknown as Db), silent);
     await vi.advanceTimersByTimeAsync(21_000);
     expect(uniques).toBe(1);
     await vi.advanceTimersByTimeAsync(5 * 60_000);
@@ -83,7 +84,7 @@ describe('live tiles subscription', () => {
       query: async () => ({ rows: [] }),
     } as unknown as Db;
     const warnings: string[] = [];
-    const hub = new LiveHub(db);
+    const hub = new LiveHub(new PostgresStore(db).live.channel());
     hub.onWarning((message) => warnings.push(message));
     expect(await hub.start()).toBe(true);
     clients[0]?.emit('error', new Error('terminating connection due to administrator command'));

@@ -26,6 +26,7 @@ one rather than editing history.
 | [0018](0018-message-commands.md)                     | Record message (prefix) commands the bot reports                   | Accepted |
 | [0019](0019-event-sinks.md)                          | Copy events into the owner's own database through sinks            | Accepted |
 | [0020](0020-optional-dashboard-and-activity-keys.md) | The dashboard is optional, and every number can be read with a key | Accepted |
+| [0021](0021-storage-behind-one-interface.md)         | Put the collector's storage behind one interface                   | Accepted |
 
 Early records mention "the spec" and milestones M0 to M4: the private build specification Shardlens was first written
 from. It is not part of this repository; these records and the docs site are the public account.

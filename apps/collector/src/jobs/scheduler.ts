@@ -1,14 +1,8 @@
-import type pg from 'pg';
-import type { Db } from '../db.js';
-import { dropExpiredPartitions, ensurePartitionsPatiently } from '../storage/postgres/partitions.js';
-import { PostgresStore } from '../storage/postgres/store.js';
 import { createUpcomingSalts, destroyExpiredSalts } from '../storage/salts.js';
+import type { Store } from '../storage/store.js';
 import { runAlerts } from './alerts.js';
 import { runReports } from './reports.js';
-import { rawRetentionDays, runRollups, runUniques } from './rollups.js';
 
-/** Advisory lock key for the single job leader (any constant; shared by every collector). */
-const LEADER_LOCK = 727_274_001;
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 
@@ -21,43 +15,21 @@ export interface Jobs {
   stop(): Promise<void>;
 }
 
-async function retentionSettings(db: Db): Promise<{ rawDays: number; auditDays: number }> {
-  const audit = await db.query<{ days: number | null }>(
-    "SELECT max((value #>> '{}')::int) AS days FROM settings WHERE key = 'audit_retention_days'",
-  );
-  return {
-    rawDays: await rawRetentionDays(db),
-    auditDays: Math.min(90, Math.max(1, audit.rows[0]?.days ?? 30)),
-  };
-}
-
-export async function runRetention(db: Db, now: Date): Promise<void> {
-  await db.query("DELETE FROM rollup_1h WHERE bucket < $1::timestamptz - interval '13 months'", [now]);
-  await db.query("DELETE FROM guilds WHERE left_at < $1::timestamptz - interval '90 days'", [now]);
-  await db.query('DELETE FROM sessions WHERE expires_at < $1', [now]);
-  await db.query("DELETE FROM audit_access_log WHERE ts < $1::timestamptz - interval '1 year'", [now]);
-  await db.query("DELETE FROM admin_audit WHERE ts < $1::timestamptz - interval '1 year'", [now]);
-  await db.query("DELETE FROM snapshot_pending WHERE ts < $1::timestamptz - interval '1 day'", [now]);
-  // One row per bot process, and a restarted process is a new one.
-  await db.query("DELETE FROM sdk_health WHERE ts < $1::timestamptz - interval '30 days'", [now]);
-  // Last, and failing the job when a partition was busy, so it runs again in a minute rather than tomorrow.
-  const { busy } = await dropExpiredPartitions(db, now, await retentionSettings(db));
-  if (busy.length > 0) throw new Error(`partitions in use, dropped on a later run: ${busy.join(', ')}`);
-}
-
-export async function runSalts(db: Db, now: Date): Promise<string[]> {
-  const store = new PostgresStore(db);
+export async function runSalts(store: Store, now: Date): Promise<string[]> {
   await createUpcomingSalts(store, now);
-  return destroyExpiredSalts(store, now, (appId, period) => runUniques(db, appId, period, true));
+  return destroyExpiredSalts(store, now, (appId, period) => store.jobs.runUniques(appId, period, true));
 }
 
 /**
- * Background jobs, run only by the collector holding the Postgres advisory lock. If the leader dies, its
- * session ends, the lock is released and another collector takes over within 30 seconds.
+ * Background jobs, run only by the collector that leads (`JobStorage.leader`). If the leader dies, another collector
+ * takes over within 30 seconds.
  */
-export function startJobs(db: Db, log: JobLogger, opts?: { settingsKey: string; dashboardUrl: URL | undefined }): Jobs {
-  const store = new PostgresStore(db);
-  let lockClient: pg.PoolClient | undefined;
+export function startJobs(
+  store: Store,
+  log: JobLogger,
+  opts?: { settingsKey: string; dashboardUrl: URL | undefined },
+): Jobs {
+  const contender = store.jobs.leader();
   let leader = false;
   let stopped = false;
   let running: Promise<void> = Promise.resolve();
@@ -96,7 +68,7 @@ export function startJobs(db: Db, log: JobLogger, opts?: { settingsKey: string; 
 
   const rollups = async () => {
     const started = new Date();
-    const { skipped } = await runRollups(db, started, { since: lastRollups });
+    const { skipped } = await store.jobs.runRollups(started, { since: lastRollups });
     lastRollups = started;
     if (skipped.length > 0)
       log.error({ job: 'rollups', skipped }, 'rows the database could not aggregate were skipped');
@@ -112,44 +84,26 @@ export function startJobs(db: Db, log: JobLogger, opts?: { settingsKey: string; 
     void serial('rollups', rollups);
     if (opts) void serial('alerts', () => runAlerts(store, opts));
     if (opts && due('reports', 5 * MINUTE)) void serial('reports', () => runReports(store, opts));
-    if (due('uniques', 5 * MINUTE)) void serial('uniques', () => runUniques(db));
-    if (due('partitions', HOUR)) {
-      void serial('partitions', async () => ensurePartitionsPatiently(db, new Date(), await retentionSettings(db)));
-    }
-    if (due('salts', HOUR)) void serial('salts', () => runSalts(db, new Date()));
-    if (due('retention', 24 * HOUR)) void serial('retention', () => runRetention(db, new Date()));
-  };
-
-  const dropLock = (client: pg.PoolClient) => {
-    if (lockClient !== client) return;
-    lockClient = undefined;
-    leader = false;
-    client.release(true);
+    if (due('uniques', 5 * MINUTE)) void serial('uniques', () => store.jobs.runUniques());
+    if (due('partitions', HOUR)) void serial('partitions', () => store.jobs.ensurePartitions(new Date()));
+    if (due('salts', HOUR)) void serial('salts', () => runSalts(store, new Date()));
+    if (due('retention', 24 * HOUR)) void serial('retention', () => store.jobs.runRetention(new Date()));
   };
 
   let electing: Promise<void> | undefined;
   const elect = async () => {
     if (stopped || leader) return;
     try {
-      if (!lockClient) {
-        const client = await db.connect();
-        if (stopped) {
-          client.release();
-          return;
-        }
-        // The lock lives and dies with this connection's session.
-        client.on('error', () => dropLock(client));
-        lockClient = client;
-      }
-      const res = await lockClient.query<{ ok: boolean }>('SELECT pg_try_advisory_lock($1) AS ok', [LEADER_LOCK]);
-      if (res.rows[0]?.ok && !stopped) {
+      const won = await contender.tryLead(() => {
+        leader = false;
+      });
+      if (won && !stopped) {
         leader = true;
         log.info({}, 'this collector is now the job leader');
         tick();
       }
     } catch (error) {
       log.error({ err: error }, 'leader election failed');
-      if (lockClient) dropLock(lockClient);
     }
   };
   // One attempt at a time: while the database is unreachable, a connection attempt can outlast the 30-second timer.
@@ -170,14 +124,7 @@ export function startJobs(db: Db, log: JobLogger, opts?: { settingsKey: string; 
       stopped = true;
       for (const t of timers) clearInterval(t);
       await running.catch(() => undefined);
-      const client = lockClient;
-      if (client) {
-        await client.query('SELECT pg_advisory_unlock($1)', [LEADER_LOCK]).catch(() => undefined);
-        if (lockClient === client) {
-          lockClient = undefined;
-          client.release();
-        }
-      }
+      await contender.release();
     },
   };
 }

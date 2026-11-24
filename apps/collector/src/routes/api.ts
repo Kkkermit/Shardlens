@@ -77,28 +77,13 @@ export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void>
     let slow: Record<string, unknown> = {};
     let slowAt = 0;
     const refreshSlow = async () => {
-      const [p95, shards, servers] = await Promise.all([
-        deps.db.query<{ p95: number | null }>(
-          `SELECT shardlens_hist_quantile(shardlens_hist_sum(shardlens_hist_one(ack_ms, weight)), 0.95)::float8 AS p95
-             FROM interactions WHERE app_id = $1 AND ts > now() - interval '5 minutes'`,
-          [appId],
-        ),
-        deps.db.query<{ shard: number; ping: number; fresh: boolean }>(
-          `SELECT DISTINCT ON (shard) shard, value::float8 AS ping, ts > now() - interval '2 minutes' AS fresh
-             FROM gauges WHERE app_id = $1 AND name = 'shard.ping_ms' AND ts > now() - interval '1 hour'
-            ORDER BY shard, ts DESC`,
-          [appId],
-        ),
-        deps.db.query<{ n: number }>('SELECT count(*)::int AS n FROM guilds WHERE app_id = $1 AND left_at IS NULL', [
-          appId,
-        ]),
-      ]);
+      const { p95Ms5m, shards, servers } = await deps.store.live.recent(appId);
       slow = {
-        p95Ms5m: p95.rows[0]?.p95 ?? null,
-        shards: shards.rows,
-        activeShards: shards.rows.filter((s) => s.fresh).length,
-        staleShards: shards.rows.filter((s) => !s.fresh).map((s) => s.shard),
-        servers: servers.rows[0]?.n ?? 0,
+        p95Ms5m,
+        shards,
+        activeShards: shards.filter((s) => s.fresh).length,
+        staleShards: shards.filter((s) => !s.fresh).map((s) => s.shard),
+        servers,
       };
       slowAt = Date.now();
     };

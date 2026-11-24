@@ -7,8 +7,7 @@ import { bucketOf, uuidv7 } from '@shardlens/core';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { signInProblems } from '../src/app.js';
 import { createPool, migrate } from '../src/db.js';
-import { backfillRollups, runRollups, runUniques } from '../src/jobs/rollups.js';
-import { runRetention, runSalts } from '../src/jobs/scheduler.js';
+import { runSalts } from '../src/jobs/scheduler.js';
 import { allowedUser } from '../src/routes/auth.js';
 import { KeyStore, seedKey } from '../src/security/auth.js';
 import { buildServer } from '../src/server.js';
@@ -258,7 +257,7 @@ describe('ingest', () => {
       APP_ID,
       ts,
     ]);
-    await runRollups(h.db, new Date());
+    await h.store.jobs.runRollups(new Date());
     const n = async (table: string) =>
       (
         await h.db.query(
@@ -446,8 +445,8 @@ describe('rollups, uniques and queries', () => {
     await h.db.query('DELETE FROM unique_counts');
     const res = await ingest(h.app, envelope(events));
     expect(res.json().accepted).toBe(100);
-    await runRollups(h.db, new Date());
-    await runUniques(h.db);
+    await h.store.jobs.runRollups(new Date());
+    await h.store.jobs.runUniques();
   });
 
   const range = () => ({
@@ -498,7 +497,7 @@ describe('rollups, uniques and queries', () => {
     const total = (res.json().points as { value: number }[]).reduce((a, p) => a + p.value, 0);
     expect(total).toBe(100);
     // Re-running the job must not double count.
-    await runRollups(h.db, new Date());
+    await h.store.jobs.runRollups(new Date());
     const again = await query(h.app, { kind: 'series', metric: 'interactions', range: range(), interval: 'hour' });
     expect((again.json().points as { value: number }[]).reduce((a, p) => a + p.value, 0)).toBe(100);
   });
@@ -954,7 +953,7 @@ describe('database server settings', () => {
          VALUES ($1, $2, $3, 'production', 1, 'tz_probe', 'en-GB', $4, '2026-01', false, 0)`,
         [uuidv7(ts.getTime()), ts, APP_ID, Buffer.alloc(16)],
       );
-      await backfillRollups(db, new Date(`${day}T00:00:00Z`), new Date(ts.getTime() + 60_000));
+      await new PostgresStore(db).jobs.backfillRollups(new Date(`${day}T00:00:00Z`), new Date(ts.getTime() + 60_000));
       const buckets = await db.query<{ bucket: Date }>(
         "SELECT bucket FROM rollup_1d WHERE metric = 'interactions' AND dims->>'command' = 'tz_probe'",
       );
@@ -998,7 +997,7 @@ describe('salt lifecycle', () => {
        VALUES ($1, '2020-01', '2020-01-15', 'global', '*', '\\x01')`,
       [APP_ID],
     );
-    const destroyed = await runSalts(h.db, new Date());
+    const destroyed = await runSalts(h.store, new Date());
     expect(destroyed).toContain(`${APP_ID}:2020-01`);
     const salt = await h.db.query("SELECT secret, destroyed_at FROM salts WHERE period = '2020-01'");
     expect(salt.rows[0].secret).toBeNull();
@@ -1015,7 +1014,7 @@ describe('salt lifecycle', () => {
 describe('retention', () => {
   it('drops raw partitions past their retention', async () => {
     await h.db.query("SELECT shardlens_ensure_daily_partitions(ARRAY['interactions'], '2020-01-01', '2020-01-01')");
-    await runRetention(h.db, new Date());
+    await h.store.jobs.runRetention(new Date());
     const res = await h.db.query("SELECT to_regclass('interactions_20200101') AS t");
     expect(res.rows[0].t).toBeNull();
   });
@@ -1026,7 +1025,7 @@ describe('retention', () => {
        VALUES ($1, 'gone:1', now() - interval '31 days', 0, '{}', 0, '{}'), ($1, 'alive:2', now(), 0, '{}', 0, '{}')`,
       [APP_ID],
     );
-    await runRetention(h.db, new Date());
+    await h.store.jobs.runRetention(new Date());
     const left = await h.db.query<{ instance: string }>(
       "SELECT instance FROM sdk_health WHERE instance IN ('gone:1', 'alive:2')",
     );
@@ -1096,7 +1095,6 @@ describe('dashboard login', () => {
     const admin = '334455667788990022';
     const app = await buildServer({
       store: h.store,
-      db: h.db,
       live: h.live,
       keys: new KeyStore(h.store),
       config: { ...h.config, discord: { clientId: APP_ID, clientSecret: 'shh-client-secret' }, extraAdmins: [admin] },
@@ -1212,7 +1210,6 @@ describe('abuse limits', () => {
   it('counts a visitor behind one proxy by the address the proxy saw, not one the visitor wrote', async () => {
     const behindProxy = await buildServer({
       store: h.store,
-      db: h.db,
       live: h.live,
       keys: new KeyStore(h.store),
       config: { ...h.config, trustProxy: 1 },
@@ -1240,7 +1237,6 @@ describe('abuse limits', () => {
       const lines: string[] = [];
       const app = await buildServer({
         store: h.store,
-        db: h.db,
         live: h.live,
         keys: new KeyStore(h.store),
         config: { ...h.config, logLevel },
@@ -1262,7 +1258,7 @@ describe('abuse limits', () => {
       },
     } as unknown as typeof h.db;
     const store = new PostgresStore(broken);
-    const app = await buildServer({ store, db: broken, live: h.live, keys: new KeyStore(store), config: h.config });
+    const app = await buildServer({ store, live: h.live, keys: new KeyStore(store), config: h.config });
     const res = await app.inject({ method: 'GET', url: '/v1/meta', headers: { authorization: `Bearer ${READ_KEY}` } });
     await app.close();
     expect(res.statusCode).toBe(500);
@@ -1309,7 +1305,7 @@ describe('abuse limits', () => {
       },
     } as unknown as typeof h.db;
     const store = new PostgresStore(refusing);
-    const app = await buildServer({ store, db: refusing, live: h.live, keys: new KeyStore(store), config: h.config });
+    const app = await buildServer({ store, live: h.live, keys: new KeyStore(store), config: h.config });
     const res = await app.inject({ method: 'GET', url: '/v1/meta', headers: { authorization: `Bearer ${READ_KEY}` } });
     await app.close();
     expect(res.statusCode).toBe(400);
@@ -1328,11 +1324,11 @@ describe('abuse limits', () => {
         throw Object.assign(new Error('Premature close'), { code: 'ERR_STREAM_PREMATURE_CLOSE' });
       },
     } as unknown as typeof h.db;
+    const store = new PostgresStore(gone);
     const app = await buildServer({
-      store: new PostgresStore(gone),
-      db: gone,
+      store,
       live: h.live,
-      keys: new KeyStore(new PostgresStore(gone)),
+      keys: new KeyStore(store),
       config: { ...h.config, logLevel: 'info' },
       logStream: { write: (line) => void lines.push(line) },
     });
@@ -1397,7 +1393,6 @@ describe('dashboard files', () => {
     writeFileSync(join(dir, 'favicon.svg'), '<svg/>');
     const app = await buildServer({
       store: h.store,
-      db: h.db,
       live: h.live,
       keys: new KeyStore(h.store),
       config: { ...h.config, dashboardDir: dir },
@@ -1438,7 +1433,6 @@ describe('dashboard files', () => {
     writeFileSync(join(dir, 'index.html'), '<!doctype html><title>Shardlens</title>');
     const app = await buildServer({
       store: h.store,
-      db: h.db,
       live: h.live,
       keys: new KeyStore(h.store),
       config: { ...h.config, dashboardDir: dir, dashboard: false },

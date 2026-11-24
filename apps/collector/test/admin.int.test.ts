@@ -3,7 +3,6 @@ import { uuidv7 } from '@shardlens/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runAlerts } from '../src/jobs/alerts.js';
 import { runReports } from '../src/jobs/reports.js';
-import { backfillRollups, runRollups, runUniques } from '../src/jobs/rollups.js';
 import { ALERT_METRICS } from '../src/routes/admin.js';
 import { seedKey } from '../src/security/auth.js';
 import { auditCipher } from '../src/security/crypto.js';
@@ -58,8 +57,8 @@ const settle = () => new Promise((r) => setTimeout(r, 150));
 
 beforeAll(async () => {
   h = await startHarness({ discordPublicKey: PUBLIC_KEY_HEX, auditKey: AUDIT_KEY, extraAdmins: [ADMIN] });
-  adminCookie = await testSession(h.db, 'discord', ADMIN);
-  readCookie = await testSession(h.db, 'read_key', null);
+  adminCookie = await testSession(h.store, 'discord', ADMIN);
+  readCookie = await testSession(h.store, 'read_key', null);
 });
 
 afterAll(async () => {
@@ -299,7 +298,7 @@ describe('admin access', () => {
   });
 
   it('takes admin access away from someone no longer on the team, without waiting for the session to end', async () => {
-    const former = await testSession(h.db, 'discord', FORMER_ADMIN);
+    const former = await testSession(h.store, 'discord', FORMER_ADMIN);
     const settings = await h.app.inject({ method: 'GET', url: '/v1/settings', cookies: { shardlens_session: former } });
     expect(settings.statusCode).toBe(403);
     expect(settings.json()).toEqual({ error: 'not_a_team_member' });
@@ -449,8 +448,8 @@ describe('scheduled reports', () => {
         ...[1, 2, 3].map(() => interaction(user, { command: hostile })),
       ]),
     );
-    await runRollups(h.db, new Date());
-    await runUniques(h.db);
+    await h.store.jobs.runRollups(new Date());
+    await h.store.jobs.runUniques();
 
     const { calls, opts } = discord();
     expect(await runReports(h.store, opts, tomorrow(8))).toBe(0);
@@ -499,7 +498,7 @@ describe('scheduled reports', () => {
     const user = (await hasher.hash('565656565656565656', period))!;
     const ran = Date.parse(`${today}T17:00:00Z`);
     await ingest(h.app, envelope([interaction(user, { command: 'ticket', ts: ran })]));
-    await backfillRollups(h.db, new Date(ran), new Date(ran + 60_000));
+    await h.store.jobs.backfillRollups(new Date(ran), new Date(ran + 60_000));
     for (const [day, users] of [
       [utcDay(-1), 11],
       [today, 22],

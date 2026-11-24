@@ -1,12 +1,10 @@
 import type { FastifyInstance } from 'fastify';
-import type { Db } from './db.js';
 import { type Config, dashboardUrl } from './env.js';
 import { type Jobs, startJobs } from './jobs/scheduler.js';
 import { LiveHub } from './live.js';
 import { KeyStore, seedKey } from './security/auth.js';
 import { buildServer } from './server.js';
 import type { ClickHouseStore } from './storage/clickhouse.js';
-import { PostgresStore } from './storage/postgres/store.js';
 import { activeSalts } from './storage/salts.js';
 import { createSink, SinkMirror } from './storage/sink.js';
 import type { Store } from './storage/store.js';
@@ -61,10 +59,9 @@ interface RunningCollector {
  */
 export async function startCollector(
   config: Config,
-  db: Db,
+  store: Store,
   migrationsApplied: readonly string[],
 ): Promise<RunningCollector> {
-  const store = new PostgresStore(db);
   await store.apps.register(config.appId);
   if (config.ingestKey) await seedKey(store, config.appId, config.ingestKey, 'SHARDLENS_INGEST_KEY');
   if (config.readKey) await seedKey(store, config.appId, config.readKey, 'SHARDLENS_READ_KEY');
@@ -76,7 +73,7 @@ export async function startCollector(
   const appRow = await store.apps.get(config.appId);
   await activeSalts(store, config.appId, appRow?.saltPeriod ?? 'month');
 
-  const live = new LiveHub(db);
+  const live = new LiveHub(store.live.channel());
   const liveShared = await live.start();
   // Loaded only when configured: embedded mode and most installs never need the ClickHouse client.
   const analytics: ClickHouseStore | undefined = config.clickhouseUrl
@@ -105,7 +102,7 @@ export async function startCollector(
         config.sink,
       );
     }
-    const app = await buildServer({ config, store, db, keys: new KeyStore(store), live, analytics, sink });
+    const app = await buildServer({ config, store, keys: new KeyStore(store), live, analytics, sink });
     server = app;
     sink?.start((message) => app.log.warn({ component: 'sink' }, message));
     if (analytics) {
@@ -120,7 +117,7 @@ export async function startCollector(
     if (!liveShared) {
       app.log.warn('Live tiles are not shared between collector instances yet: LISTEN failed on PostgreSQL. Retrying.');
     }
-    jobs = startJobs(db, app.log, { settingsKey: config.settingsKey, dashboardUrl: dashboardUrl(config) });
+    jobs = startJobs(store, app.log, { settingsKey: config.settingsKey, dashboardUrl: dashboardUrl(config) });
     const address = await app.listen({ port: config.port, host: config.host });
     app.log.info(
       {
