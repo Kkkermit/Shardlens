@@ -23,10 +23,9 @@ Constraints from the Atlas free tier, where many of these bots live: 100 operati
 ## Decision
 
 **One HTTP layer, two stores.** The collector's storage is behind the `Store` interface
-([0021](0021-storage-behind-one-interface.md), `apps/collector/src/storage/store.ts`). `PostgresStore` holds today's SQL unchanged; `MongoStore` implements the same
-interface on MongoDB. Routes, validation, authentication, rate limits, CSRF, the dashboard, `@shardlens/client` and
-the OpenAPI document are shared, so the second engine is storage and queries only. The interface exposes no
-transactions, locks or SQL types, so neither engine leaks into the other.
+([0021](0021-storage-behind-one-interface.md), `apps/collector/src/storage/store.ts`). `PostgresStore` holds today's
+SQL; `MongoStore` implements the same interface on MongoDB. Routes, validation, authentication, rate limits, CSRF, the
+dashboard, `@shardlens/client` and the OpenAPI document are shared, so the second engine is storage and queries only.
 
 **Three ways to run it, all on the owner's MongoDB:**
 
