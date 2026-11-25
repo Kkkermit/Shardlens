@@ -52,6 +52,7 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --project unit",
     "test:int": "vitest run --project integration",
+    "test:int:mongodb": "SHARDLENS_TEST_STORE=mongodb vitest run --project integration",
     "lint:package": "publint --strict"
   },
   "dependencies": {
@@ -89,6 +90,7 @@
     "@types/node": "catalog:",
     "@types/pg": "^8.23.1",
     "publint": "catalog:",
+    "testcontainers": "^12.2.1",
     "tsdown": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

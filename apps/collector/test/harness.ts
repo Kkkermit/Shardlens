@@ -3,12 +3,15 @@ import { gzipSync } from 'node:zlib';
 import { UserHasher, uuidv7 } from '@shardlens/core';
 import { PostgreSqlContainer } from '@testcontainers/postgresql';
 import type { FastifyInstance } from 'fastify';
+import { GenericContainer, Wait } from 'testcontainers';
 import { createPool, type Db, migrate } from '../src/db.js';
 import type { Config } from '../src/env.js';
 import { LiveHub } from '../src/live.js';
 import { KeyStore, seedKey } from '../src/security/auth.js';
 import { buildServer } from '../src/server.js';
 import type { ClickHouseStore } from '../src/storage/clickhouse.js';
+import { openMongo } from '../src/storage/mongodb/connect.js';
+import { MongoStore } from '../src/storage/mongodb/store.js';
 import { PostgresStore } from '../src/storage/postgres/store.js';
 import type { Store } from '../src/storage/store.js';
 
@@ -48,11 +51,36 @@ const postgresStore: StoreFactory = async () => {
   };
 };
 
+/**
+ * A standalone MongoDB server in a container (7.0 by default: the oldest supported), not a replica set: MongoStore
+ * must need neither transactions nor change streams.
+ */
+export const mongoStore: StoreFactory = async () => {
+  const image = process.env.SHARDLENS_TEST_MONGO_IMAGE ?? 'mongo:7.0';
+  const container = await new GenericContainer(image)
+    .withExposedPorts(27017)
+    .withWaitStrategy(Wait.forLogMessage(/Waiting for connections/))
+    .start();
+  const url = `mongodb://${container.getHost()}:${container.getMappedPort(27017)}/shardlens_test`;
+  const m = await openMongo(url);
+  return {
+    store: new MongoStore(m),
+    databaseUrl: url,
+    async close() {
+      await m.client.close();
+      await container.stop();
+    },
+  };
+};
+
+/** The store the suites run on: MongoDB with `SHARDLENS_TEST_STORE=mongodb` (`pnpm test:int:mongodb`), else PostgreSQL. */
+export const onPostgres = process.env.SHARDLENS_TEST_STORE !== 'mongodb';
+
 export interface Harness {
   store: Store;
   /**
    * The PostgreSQL pool behind `store`, for tests that set up or check rows directly. Those tests are PostgreSQL's
-   * own: with another store, reading this throws.
+   * own (`it.runIf(onPostgres)`): with another store, reading this throws.
    */
   readonly db: Db;
   app: FastifyInstance;
@@ -61,7 +89,7 @@ export interface Harness {
   close(): Promise<void>;
 }
 
-/** A collector on a fresh store (PostgreSQL unless `store` says otherwise), with one app and two keys. */
+/** A collector on a fresh store (as `onPostgres` says, unless `store` does), with one app and two keys. */
 export async function startHarness(
   opts: {
     discordPublicKey?: string;
@@ -72,7 +100,7 @@ export async function startHarness(
     store?: StoreFactory;
   } = {},
 ): Promise<Harness> {
-  const backing = await (opts.store ?? postgresStore)();
+  const backing = await (opts.store ?? (onPostgres ? postgresStore : mongoStore))();
   const { store } = backing;
   await store.apps.register(APP_ID);
   await seedKey(store, APP_ID, INGEST_KEY, 'test ingest');
