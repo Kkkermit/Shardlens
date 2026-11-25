@@ -6,7 +6,15 @@ import type { QueryAnswer, QueryStorage } from '../../store.js';
 import type { Mongo } from '../connect.js';
 import { ACK_WEIGHTS, ackQuantile } from '../histogram.js';
 import { rawFrom, rollupSource } from './read-window.js';
-import { type CountsByWeight, type KeyWeights, realRatio, realSumOf, summed, weightsBy } from './real-sums.js';
+import {
+  type CountsByWeight,
+  countWhenRan,
+  type KeyWeights,
+  realRatio,
+  realSumOf,
+  summed,
+  weightsBy,
+} from './real-sums.js';
 import { HIST_ARRAY, HIST_SUMS, histQuantile } from './rollup-reads.js';
 import { sdkInstances } from './sdk-instances.js';
 import { clockText, truncWall, wallClock } from './zoned-buckets.js';
@@ -271,13 +279,11 @@ function runTotals(
   ack: readonly { _id: number; w: number }[],
 ): Reliability['totals'] {
   const sum = (figure: RunFigure) => realSumOf(runs, figure);
-  // `countWhenRan`: 0 when no run matched, `null` only when nothing ran.
-  const counted = (figure: RunFigure) => (runs.length > 0 ? (sum(figure) ?? 0) : null);
   return {
     runs: sum('runs'),
-    missedDeadlines: counted('missed'),
-    noResponse: counted('noResponse'),
-    errors: counted('errors'),
+    missedDeadlines: countWhenRan(runs, 'missed'),
+    noResponse: countWhenRan(runs, 'noResponse'),
+    errors: countWhenRan(runs, 'errors'),
     over3sRate: realRatio(sum('slow') ?? 0, sum('answered')),
     p50Ms: ackQuantile(ack, 0.5),
     p95Ms: ackQuantile(ack, 0.95),

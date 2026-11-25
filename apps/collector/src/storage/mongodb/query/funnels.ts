@@ -160,7 +160,7 @@ async function funnel(m: Mongo, appId: string, spec: Spec<'funnel'>): Promise<Qu
       {
         $project: {
           _id: 0,
-          day: { $dateToString: { date: '$t1', format: '%Y-%m-%d', timezone: { $literal: spec.timezone } } },
+          day: dayText(wallClock('$t1', spec.timezone)),
           ...Object.fromEntries(
             later.map((n) => [
               `d${n}`,

@@ -1,5 +1,5 @@
 import { Binary, type Document, ObjectId } from 'mongodb';
-import { KIND } from '../../ingest/codes.js';
+import { KIND, OUTCOME } from '../../ingest/codes.js';
 import type { AlertFiring, AlertRule, AlertStorage } from '../store.js';
 import type { AlertRuleDoc } from './collections.js';
 import type { Mongo } from './connect.js';
@@ -8,6 +8,7 @@ import { compareIds, nextId } from './ids.js';
 import { type CountsByWeight, realSumOf } from './query/real-sums.js';
 
 const MINUTE = 60_000;
+const DAY = 1440 * MINUTE;
 
 function toRule(doc: AlertRuleDoc): Omit<AlertRule, 'enabled'> {
   return {
@@ -33,7 +34,9 @@ async function evaluateMetric({ c }: Mongo, appId: string, metric: string, windo
     case 'missed_deadline_rate':
     case 'error_rate': {
       const missed = metric === 'missed_deadline_rate';
-      const failed: Document = missed ? { $in: ['$outcome', [2, 3]] } : { $ne: ['$outcome', 0] };
+      const failed: Document = missed
+        ? { $in: ['$outcome', [OUTCOME.timeout, OUTCOME.no_response]] }
+        : { $ne: ['$outcome', OUTCOME.ok] };
       // Message commands have no deadline to miss, so they don't count towards that rate.
       const scope = missed ? { kind: { $ne: KIND.message_command } } : {};
       const runs = await c.interactions
@@ -70,7 +73,7 @@ async function evaluateMetric({ c }: Mongo, appId: string, metric: string, windo
             $match: {
               '_id.appId': appId,
               '_id.name': 'shard.ping_ms',
-              '_id.ts': { $gt: new Date(now - 1440 * MINUTE) },
+              '_id.ts': { $gt: new Date(now - DAY) },
             },
           },
           { $group: { _id: '$_id.shard', last: { $max: '$_id.ts' } } },

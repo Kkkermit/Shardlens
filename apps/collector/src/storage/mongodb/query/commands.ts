@@ -10,7 +10,15 @@ import { guildProfiles } from './guild-profiles.js';
 import { idPrefix } from './id-prefix.js';
 import { byteOrder, jsonText, roundTenths } from './pg-values.js';
 import { rawFrom, rollupSource } from './read-window.js';
-import { type CountsByWeight, type KeyWeights, realRatio, realSumOf, summed, weightsBy } from './real-sums.js';
+import {
+  type CountsByWeight,
+  countWhenRan,
+  type KeyWeights,
+  realRatio,
+  realSumOf,
+  summed,
+  weightsBy,
+} from './real-sums.js';
 import { dim, HIST_ARRAY, HIST_SUMS, histQuantile } from './rollup-reads.js';
 import { currentPeriodStart } from './salt-period-start.js';
 
@@ -302,8 +310,6 @@ async function command(m: Mongo, appId: string, spec: Spec<'command'>, now: Date
 
   const runs = f.totals;
   const sum = (figure: TotalsFigure) => realSumOf(runs, figure);
-  // `countWhenRan`: 0 when no run matched, `null` only when nothing ran.
-  const counted = (figure: TotalsFigure) => (runs.length > 0 ? (sum(figure) ?? 0) : null);
   // `shardlens_hist_sum(shardlens_hist_one(ack_ms, weight))`: `NULL` when no run has a response time.
   let latency: number[] | null = null;
   for (const row of f.ack) {
@@ -317,10 +323,10 @@ async function command(m: Mongo, appId: string, spec: Spec<'command'>, now: Date
     from: from.toISOString(),
     totals: {
       runs: sum('runs'),
-      ok: counted('ok'),
-      error: counted('error'),
-      timeout: counted('timeout'),
-      noResponse: counted('noResponse'),
+      ok: countWhenRan(runs, 'ok'),
+      error: countWhenRan(runs, 'error'),
+      timeout: countWhenRan(runs, 'timeout'),
+      noResponse: countWhenRan(runs, 'noResponse'),
       deferRate: realRatio(sum('deferred') ?? 0, sum('interactions')),
       ephemeralRate: realRatio(sum('ephemeral') ?? 0, sum('interactions')),
       premiumShare: realRatio(sum('premium') ?? 0, sum('interactions')),

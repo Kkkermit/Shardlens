@@ -20,8 +20,9 @@ import { mongoStore } from './harness.js';
 
 /*
  * MongoStore's admin side: keys, sessions, settings, alerts, reports, privacy, the admin audit, live tiles and the job
- * leader. Where PostgreSQL computes an answer from the same rows, the same scenario runs through `PostgresStore` too and
- * the answers must be equal, down to the last bit of a float.
+ * leader, and the single-event reads a sampled bot's weights reach. Where PostgreSQL computes an answer from the same
+ * rows, the same scenario runs through `PostgresStore` too and the answers must be equal, down to the last bit of a
+ * float.
  */
 
 const DAY = 86_400_000;
@@ -35,21 +36,13 @@ let db: Db;
 let pg: PostgresStore;
 let appSeq = 0;
 
-/** A new app in both stores, as `apps.register` adds one (the write side's `apps` is not in this branch). */
+/** A new app in both stores. */
 async function addApp(opts: { timezone?: string; name?: string } = {}): Promise<string> {
   const appId = String(3_000_000_000_000_000_000n + BigInt(++appSeq));
-  await pg.apps.register(appId, opts.name);
-  if (opts.timezone) await pg.apps.update(appId, { timezone: opts.timezone });
-  await m.c.apps.insertOne({
-    _id: appId,
-    name: opts.name ?? '',
-    mode: 'privacy',
-    saltPeriod: 'month',
-    timezone: opts.timezone ?? 'UTC',
-    rawRetentionDays: 35,
-    baselineDone: false,
-    createdAt: new Date(),
-  });
+  for (const store of [pg, mongo]) {
+    await store.apps.register(appId, opts.name);
+    if (opts.timezone) await store.apps.update(appId, { timezone: opts.timezone });
+  }
   return appId;
 }
 

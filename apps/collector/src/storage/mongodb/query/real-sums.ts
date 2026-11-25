@@ -71,6 +71,11 @@ export function realSumOf<F extends string>(groups: readonly CountsByWeight<F>[]
   return realSum(groups.map((g) => ({ w: g._id, n: g[figure] })));
 }
 
+/** PostgreSQL's `countWhenRan` (`totals-sql.ts`): {@link realSumOf}, but 0 when no row counts, `null` for no rows. */
+export function countWhenRan<F extends string>(groups: readonly CountsByWeight<F>[], figure: F): number | null {
+  return groups.length > 0 ? (realSumOf(groups, figure) ?? 0) : null;
+}
+
 /** A key and its rows by weight, as {@link weightsBy} groups them. */
 export interface KeyWeights<K> {
   _id: K;
