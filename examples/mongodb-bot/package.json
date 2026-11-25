@@ -1,6 +1,6 @@
 {
   "name": "mongodb-bot",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "private": true,
   "description": "A discord.js bot that keeps its Shardlens data in its own MongoDB, with nothing else to run.",
   "license": "MIT",
