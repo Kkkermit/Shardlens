@@ -626,8 +626,18 @@ export interface LiveChannel {
    * outage when a subscription is lost. A store with no way to push (PostgreSQL has `LISTEN`) may poll here.
    */
   subscribe(receive: (share: LiveShare) => void, warn: (message: string) => void): Promise<boolean>;
-  /** Sends counts to the other instances, about once a second. Best effort: a lost share costs a second of tiles. */
+  /**
+   * Sends counts to the other instances, about once a second. Best effort: a lost share costs a second of tiles. A
+   * store may hold counts back while no other instance has a live stream open (`listen`), as long as the last 15
+   * minutes of them reach an instance whose stream opens.
+   */
   publish(share: LiveShare): Promise<void>;
+  /**
+   * Whether this instance has a live stream open: `true` when the first one opens, `false` when the last one closes. A
+   * store that pays for every read may poll, and have the others send their counts, only while one is. A store that
+   * pushes (PostgreSQL's `LISTEN`) needs no telling.
+   */
+  listen?(active: boolean): void;
   stop(): Promise<void>;
 }
 

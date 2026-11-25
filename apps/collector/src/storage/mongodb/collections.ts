@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { Binary, type Collection, type Db, type IndexDescription, type UUID } from 'mongodb';
+import { Binary, type Collection, type Db, type IndexDescription, type ObjectId, type UUID } from 'mongodb';
 import type { ApiKeyScope } from '../../security/keys.js';
 import type { SaltPeriod } from '../periods.js';
 import type { AppMode, SessionMethod } from '../store.js';
@@ -14,6 +14,8 @@ import type { AppMode, SessionMethod } from '../store.js';
  * - A single event's `_id` is its UUIDv7 as a BSON UUID, so a retried batch is a duplicate-key no-op.
  * - A column that is NULL is left out of the document, and reads treat a missing field as NULL.
  * - Codes (`kind`, `outcome`, `install`, ...) are the numbers in `ingest/codes.ts`, as in PostgreSQL.
+ * - Log rows nothing refers to by ID (access log, admin audit, alert firings) take an ObjectId: no sequence to bump, and
+ *   it breaks ties between rows of the same millisecond in the order they were written.
  * - Nothing needs a transaction or a change stream: MongoStore runs on a standalone server as well as a replica set or
  *   Atlas. Where PostgreSQL relies on a transaction, the MongoDB write is idempotent instead, so a retry completes it.
  */
@@ -173,7 +175,7 @@ export interface AuditLogDoc {
 }
 
 export interface AccessLogDoc {
-  _id: string;
+  _id: ObjectId;
   ts: Date;
   appId: string;
   viewerUserId: string;
@@ -353,11 +355,11 @@ export interface AlertRuleDoc {
 }
 
 export interface AlertEventDoc {
-  _id: string;
+  _id: ObjectId;
   ruleId: string;
   appId: string;
   ts: Date;
-  value?: number;
+  value: number;
   delivered: boolean;
   error?: string;
 }
@@ -386,7 +388,7 @@ export interface SessionDoc {
 }
 
 export interface AdminAuditDoc {
-  _id: string;
+  _id: ObjectId;
   ts: Date;
   appId: string;
   userId?: string;
@@ -394,7 +396,7 @@ export interface AdminAuditDoc {
   details: object;
 }
 
-/** Sequences for the decimal IDs of keys, rules, reports and logs ({@link nextId}). */
+/** Sequences for the decimal IDs of keys, rules and reports ({@link nextId}). */
 export interface CounterDoc {
   _id: string;
   n: number;
@@ -407,12 +409,23 @@ export interface LeaseDoc {
   expiresAt: Date;
 }
 
-/** Live tile counts shared between collector instances, read by polling (no change streams). */
+/**
+ * Live tile counts shared between collector instances, read by polling (no change streams). Kept for the 15 minutes the
+ * tiles show, so an instance whose dashboard opens reads them back.
+ */
 export interface LiveShareDoc {
   _id: string;
   instance: string;
   appId: string;
   counts: [number, number, number][];
+  /** The server's time when it was written, so readers and the TTL index go by one clock. */
+  at: Date;
+}
+
+/** An instance with a live stream open, so the others know to publish their counts (`live.ts`). */
+export interface LiveListenerDoc {
+  _id: string;
+  /** Renewed while the stream is open; the server's time. */
   at: Date;
 }
 
@@ -469,6 +482,7 @@ export interface Collections {
   counters: Collection<CounterDoc>;
   leases: Collection<LeaseDoc>;
   liveShares: Collection<LiveShareDoc>;
+  liveListeners: Collection<LiveListenerDoc>;
   secrets: Collection<SecretDoc>;
 }
 
@@ -504,13 +518,26 @@ const LAYOUT: { [K in keyof Collections]: { name: string; indexes: IndexDescript
   gauges: { name: 'shardlens_gauges', indexes: [{ key: { '_id.appId': 1, '_id.name': 1, '_id.ts': 1 } }] },
   auditLog: {
     name: 'shardlens_audit_log',
+    // The activity log reads newest first by time and then `_id`: with `_id` in the index, a page is read from it in
+    // order instead of sorting every row that matches. Failures are a small share of the log, so the two indexes that
+    // hold only failures stay small (PostgreSQL's `WHERE outcome <> 0`; outcomes are 0 to 3).
     indexes: [
-      { key: { appId: 1, ts: -1 } },
-      { key: { appId: 1, actorLookup: 1, ts: -1 } },
-      { key: { appId: 1, guildId: 1, ts: -1 } },
+      { key: { appId: 1, ts: -1, _id: -1 } },
+      { key: { appId: 1, actorLookup: 1, ts: -1, _id: -1 } },
+      { key: { appId: 1, guildId: 1, ts: -1, _id: -1 } },
+      {
+        key: { appId: 1, ts: -1, _id: -1 },
+        name: 'failed_appId_ts_id',
+        partialFilterExpression: { outcome: { $gt: 0 } },
+      },
+      {
+        key: { appId: 1, guildId: 1, ts: -1, _id: -1 },
+        name: 'failed_appId_guildId_ts_id',
+        partialFilterExpression: { outcome: { $gt: 0 } },
+      },
     ],
   },
-  accessLog: { name: 'shardlens_audit_access_log', indexes: [{ key: { appId: 1, ts: -1 } }] },
+  accessLog: { name: 'shardlens_audit_access_log', indexes: [{ key: { appId: 1, ts: -1, _id: -1 } }] },
   guilds: { name: 'shardlens_guilds', indexes: [{ key: { '_id.appId': 1, leftAt: 1 } }] },
   guildEvents: { name: 'shardlens_guild_events', indexes: [{ key: { '_id.appId': 1, '_id.ts': 1 } }] },
   snapshotPending: { name: 'shardlens_snapshot_pending', indexes: [] },
@@ -529,7 +556,10 @@ const LAYOUT: { [K in keyof Collections]: { name: string; indexes: IndexDescript
   sdkHealth: { name: 'shardlens_sdk_health', indexes: [] },
   settings: { name: 'shardlens_settings', indexes: [] },
   alertRules: { name: 'shardlens_alert_rules', indexes: [{ key: { appId: 1 } }] },
-  alertEvents: { name: 'shardlens_alert_events', indexes: [{ key: { appId: 1, ts: -1 } }, { key: { ruleId: 1 } }] },
+  alertEvents: {
+    name: 'shardlens_alert_events',
+    indexes: [{ key: { appId: 1, ts: -1, _id: -1 } }, { key: { ruleId: 1 } }],
+  },
   reports: { name: 'shardlens_reports', indexes: [{ key: { appId: 1 } }] },
   sessions: {
     name: 'shardlens_sessions',
@@ -542,7 +572,8 @@ const LAYOUT: { [K in keyof Collections]: { name: string; indexes: IndexDescript
   adminAudit: { name: 'shardlens_admin_audit', indexes: [{ key: { appId: 1, ts: -1 } }] },
   counters: { name: 'shardlens_counters', indexes: [] },
   leases: { name: 'shardlens_leases', indexes: [] },
-  liveShares: { name: 'shardlens_live', indexes: [{ key: { at: 1 }, expireAfterSeconds: 60 }] },
+  liveShares: { name: 'shardlens_live', indexes: [{ key: { at: 1 }, expireAfterSeconds: 16 * 60 }] },
+  liveListeners: { name: 'shardlens_live_listeners', indexes: [{ key: { at: 1 }, expireAfterSeconds: 120 }] },
   secrets: { name: 'shardlens_secrets', indexes: [] },
 };
 

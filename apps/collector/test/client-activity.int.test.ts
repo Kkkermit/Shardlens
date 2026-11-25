@@ -78,7 +78,7 @@ describe('the activity log through @shardlens/client', () => {
   });
 
   it('reads who ran what with an activity key: filtered, page by page, and counted', async () => {
-    await h.db.query("UPDATE apps SET mode = 'audit' WHERE app_id = $1", [APP_ID]);
+    await h.store.apps.setMode(APP_ID, 'audit');
     const { hasher, period } = await sdkHasher(h.app);
     const now = Date.now();
     const run = async (userId: string, username: string, secondsAgo: number, overrides: Record<string, unknown>) =>

@@ -338,6 +338,23 @@ describe('LiveHub tiles', () => {
     expect(hub.tiles('2', now)).toMatchObject({ perMinute: 0, errors15m: 0 });
   });
 
+  it('tells the channel when the first live stream opens and when the last one closes, once each', () => {
+    const listening: boolean[] = [];
+    const hub = new LiveHub({ listen: (active: boolean) => void listening.push(active) } as never);
+    const first = hub.watch();
+    const second = hub.watch();
+    expect(listening).toEqual([true]);
+    first();
+    first();
+    expect(listening).toEqual([true]);
+    second();
+    expect(listening).toEqual([true, false]);
+    hub.watch();
+    expect(listening).toEqual([true, false, true]);
+    // A channel that needs no telling (PostgreSQL's) has no `listen`.
+    expect(() => new LiveHub({} as never).watch()()).not.toThrow();
+  });
+
   it('keeps counting after 2038, when epoch seconds no longer fit 32 bits', () => {
     const hub = new LiveHub({} as never);
     const at = Date.UTC(2040, 0, 1);
@@ -395,6 +412,32 @@ describe('live tiles stream', () => {
       await app.close();
     }
   });
+
+  it(
+    'says a stream is open for as long as it is, so a polling store polls only then',
+    { timeout: 10_000 },
+    async () => {
+      const db = { query: async () => ({ rows: [] }) } as unknown as Db;
+      const store = new PostgresStore(db);
+      const listening: boolean[] = [];
+      const channel = Object.assign(store.live.channel(), { listen: (active: boolean) => void listening.push(active) });
+      const config = loadConfig({ ...base, SHARDLENS_DEMO: 'true', LOG_LEVEL: 'silent' });
+      const app = await buildServer({ config, store, keys: new KeyStore(store), live: new LiveHub(channel) });
+      const address = await app.listen({ port: 0, host: '127.0.0.1' });
+      const aborted = new AbortController();
+      try {
+        const res = await fetch(`${address}/v1/live`, { signal: aborted.signal });
+        await (res.body as ReadableStream<Uint8Array>).getReader().read();
+        expect(listening).toEqual([true]);
+        aborted.abort();
+        while (listening.length < 2) await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(listening).toEqual([true, false]);
+      } finally {
+        aborted.abort();
+        await app.close();
+      }
+    },
+  );
 
   it('sends a heartbeat every 15 seconds, also while the database keeps updates from going out', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });

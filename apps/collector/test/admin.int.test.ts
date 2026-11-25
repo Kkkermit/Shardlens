@@ -13,6 +13,7 @@ import {
   INGEST_KEY,
   ingest,
   interaction,
+  onPostgres,
   query,
   READ_KEY,
   sdkHasher,
@@ -206,8 +207,11 @@ describe('admin access', () => {
       payload: { password: 'x' },
     });
     expect(unknown.statusCode).toBe(400);
-    const audit = await h.db.query("SELECT count(*)::int AS n FROM admin_audit WHERE action = 'settings_update'");
-    expect(audit.rows[0].n).toBeGreaterThan(0);
+    // No store method reads the admin audit back; MongoDB's is checked in mongodb-admin.int.test.ts.
+    if (onPostgres) {
+      const audit = await h.db.query("SELECT count(*)::int AS n FROM admin_audit WHERE action = 'settings_update'");
+      expect(audit.rows[0].n).toBeGreaterThan(0);
+    }
   });
 
   it('accepts every spelling of a time zone the database knows, and nothing else', async () => {
@@ -243,11 +247,14 @@ describe('admin access', () => {
       h.app.inject({ method: 'PUT', url: '/v1/settings', ...asAdmin(), payload: { requiredPermissions } });
     expect((await save('9223372036854775808')).statusCode).toBe(400);
     expect((await save('2048')).statusCode).toBe(200);
-    await h.db.query(
-      `INSERT INTO guilds (app_id, guild_id, joined_at, bot_permissions) VALUES ($1, 400000000000000001, now(), 18446744073709551615)
-       ON CONFLICT DO NOTHING`,
-      [APP_ID],
-    );
+    // A server with all 64 bits set, which only a direct write can make; the query runs on every store.
+    if (onPostgres) {
+      await h.db.query(
+        `INSERT INTO guilds (app_id, guild_id, joined_at, bot_permissions) VALUES ($1, 400000000000000001, now(), 18446744073709551615)
+         ON CONFLICT DO NOTHING`,
+        [APP_ID],
+      );
+    }
     const res = await h.app.inject({
       method: 'POST',
       url: '/v1/query',
@@ -361,36 +368,38 @@ describe('alerts', () => {
   });
 
   it('records an alert whose webhook can no longer be decrypted, instead of skipping it silently', async () => {
-    await h.db.query('UPDATE alert_rules SET last_fired = NULL');
     const calls: string[] = [];
     const fetchImpl = (async (url: string | URL | Request) => {
       calls.push(String(url));
       return new Response(null, { status: 204 });
     }) as typeof fetch;
     const rotatedKey = Buffer.alloc(32, 9).toString('base64');
-    expect(await runAlerts(h.store, { settingsKey: rotatedKey, dashboardUrl: h.config.publicUrl, fetchImpl })).toBe(0);
+    // Past the 30 minutes the rule waits after firing in the test before.
+    const later = new Date(Date.now() + 31 * 60_000);
+    const opts = { settingsKey: rotatedKey, dashboardUrl: h.config.publicUrl, fetchImpl };
+    expect(await runAlerts(h.store, opts, later)).toBe(0);
     expect(calls).toEqual([]);
-    const history = await h.db.query<{ delivered: boolean; error: string }>(
-      'SELECT delivered, error FROM alert_events ORDER BY id DESC LIMIT 1',
-    );
-    expect(history.rows[0]).toMatchObject({ delivered: false });
-    expect(history.rows[0]?.error).toMatch(/could not be decrypted/);
+    const [latest] = await h.store.alerts.history(APP_ID);
+    expect(latest).toMatchObject({ ts: later, delivered: false });
+    expect(latest?.error).toMatch(/could not be decrypted/);
   });
 
   it('answers a test of an alert whose webhook can no longer be decrypted with the reason, not a 500', async () => {
     const stale = auditCipher(Buffer.alloc(32, 9).toString('base64')).encrypt(WEBHOOK);
-    const rule = await h.db.query<{ id: string }>(
-      `INSERT INTO alert_rules (app_id, name, metric, comparator, threshold, window_s, webhook_enc)
-       VALUES ($1, 'stale key', 'error_rate', '>', 1, 300, $2) RETURNING id::text`,
-      [APP_ID, stale],
-    );
-    const id = rule.rows[0]?.id;
+    const id = await h.store.alerts.create(APP_ID, {
+      name: 'stale key',
+      metric: 'error_rate',
+      comparator: '>',
+      threshold: 1,
+      windowS: 300,
+      webhook: stale,
+    });
     try {
       const res = await h.app.inject({ method: 'POST', url: `/v1/alerts/${id}/test`, ...asAdmin() });
       expect(res.statusCode).toBe(502);
       expect(res.json()).toMatchObject({ error: 'webhook_failed', message: expect.stringMatching(/decrypted/) });
     } finally {
-      await h.db.query('DELETE FROM alert_rules WHERE id = $1', [id]);
+      await h.store.alerts.delete(APP_ID, id);
     }
   });
 });
@@ -467,7 +476,7 @@ describe('scheduled reports', () => {
   });
 
   it('sends a weekly report on its weekday only', async () => {
-    await h.db.query('DELETE FROM reports');
+    for (const report of await h.store.reports.list(APP_ID)) await h.store.reports.delete(APP_ID, report.id);
     const when = tomorrow();
     const today = when.getUTCDay() || 7;
     const otherDay = (today % 7) + 1;
@@ -479,7 +488,8 @@ describe('scheduled reports', () => {
     expect(calls[0]).toContain('Weekly report');
   });
 
-  it('records why a delivery failed and does not retry all day', async () => {
+  // Clearing `last_sent` takes a direct write: MongoDB's errors and sends are checked in mongodb-admin.int.test.ts.
+  it.runIf(onPostgres)('records why a delivery failed and does not retry all day', async () => {
     await h.db.query('UPDATE reports SET last_sent = NULL');
     const { calls, opts } = discord(404);
     expect(await runReports(h.store, opts, tomorrow())).toBe(0);
@@ -489,7 +499,9 @@ describe('scheduled reports', () => {
     expect((await list()).map((r) => r.lastError)).toContain('discord returned 404');
   });
 
-  it('reports the unique users of the local day, for a bot whose time zone is not UTC', async () => {
+  // Writes unique counts directly. MongoDB's local days, across DST changes, are compared with PostgreSQL's in
+  // mongodb-admin.int.test.ts.
+  it.runIf(onPostgres)('reports the unique users of the local day, for a bot whose time zone is not UTC', async () => {
     // Run at 15:00 UTC tomorrow, New York's finished day is today's date: 05:00 UTC today to 05:00 UTC tomorrow
     // (04:00 in summer). Unique users are counted per UTC day, and three of those touch it.
     const today = new Date().toISOString().slice(0, 10);
@@ -572,8 +584,8 @@ describe('audit mode', () => {
       ),
     );
     expect(res.json()).toMatchObject({ accepted: 1 });
-    const stored = await h.db.query<{ actor_enc: Buffer }>('SELECT actor_enc FROM audit_log');
-    expect(stored.rows[0]?.actor_enc.toString('utf8')).not.toContain(USER);
+    const [stored] = await h.store.privacy.activity(APP_ID, {}, 1);
+    expect(stored?.userId.toString('utf8')).not.toContain(USER);
 
     expect(
       (await h.app.inject({ method: 'GET', url: '/v1/audit/log', cookies: { shardlens_session: readCookie } }))
@@ -602,12 +614,9 @@ describe('audit mode', () => {
     expect(csv.statusCode).toBe(200);
     expect(csv.body).toContain(USER);
 
-    const access = await h.db.query<{ action: string }>('SELECT action FROM audit_access_log ORDER BY id');
-    expect(access.rows.map((r) => r.action)).toEqual(expect.arrayContaining(['lookup_user', 'top_users', 'export']));
-    const lookups = await h.db.query<{ details: { user: string } }>(
-      "SELECT details FROM audit_access_log WHERE action = 'lookup_user'",
-    );
-    expect(JSON.stringify(lookups.rows)).not.toContain(USER);
+    const access = await h.store.privacy.accessLog(APP_ID);
+    expect(access.map((r) => r.action)).toEqual(expect.arrayContaining(['lookup_user', 'top_users', 'export']));
+    expect(JSON.stringify(access.filter((r) => r.action === 'lookup_user'))).not.toContain(USER);
   });
 
   it('records who ran a prefix command the same way', async () => {
@@ -727,13 +736,15 @@ describe('audit mode', () => {
     expect(csv.body.trim().split('\n')).toHaveLength(4);
     expect(csv.body).not.toContain(',ok,');
 
-    const views = await h.db.query<{ details: { outcome: string | null } }>(
-      "SELECT details FROM audit_access_log WHERE action = 'view_log' AND details->>'command' = 'flaky'",
-    );
-    expect(views.rows.map((row) => row.details.outcome)).toEqual(expect.arrayContaining(['failed', 'timeout', 'ok']));
+    const views = (await h.store.privacy.accessLog(APP_ID))
+      .filter((row) => row.action === 'view_log')
+      .map((row) => row.details as { command: string | null; outcome: string | null })
+      .filter((details) => details.command === 'flaky');
+    expect(views.map((details) => details.outcome)).toEqual(expect.arrayContaining(['failed', 'timeout', 'ok']));
   });
 
-  it('reads the newest failures from the indexes that hold only failures', async () => {
+  // PostgreSQL's plans; MongoDB's indexes that hold only failures are checked in mongodb-admin.int.test.ts.
+  it.runIf(onPostgres)('reads the newest failures from the indexes that hold only failures', async () => {
     const failureIndexes = await h.db.query<{ indexname: string; indexdef: string }>(
       `SELECT indexname, indexdef FROM pg_indexes
         WHERE tablename LIKE 'audit_log\\_%' AND indexdef LIKE '%WHERE (outcome <> 0)'`,
@@ -805,15 +816,13 @@ describe('audit mode', () => {
     });
     expect(overview.statusCode).toBe(200);
 
-    const reads = await h.db.query<{ action: string; viewer_user_id: string; label: string }>(
-      `SELECT l.action, l.viewer_user_id::text, k.label
-         FROM audit_access_log l JOIN api_keys k ON k.id = l.viewer_key_id ORDER BY l.id`,
-    );
-    expect(reads.rows).toEqual([
-      { action: 'view_log', viewer_user_id: '0', label: 'my dashboard' },
-      { action: 'top_users', viewer_user_id: '0', label: 'my dashboard' },
-      { action: 'view_log', viewer_user_id: '0', label: 'my dashboard' },
-      { action: 'view_log', viewer_user_id: '0', label: 'my dashboard' },
+    // Oldest first: the access log lists the newest first.
+    const reads = (await h.store.privacy.accessLog(APP_ID)).filter((row) => row.viewerKey !== null).reverse();
+    expect(reads.map(({ action, viewerUserId, viewerKey }) => ({ action, viewerUserId, viewerKey }))).toEqual([
+      { action: 'view_log', viewerUserId: '0', viewerKey: 'my dashboard' },
+      { action: 'top_users', viewerUserId: '0', viewerKey: 'my dashboard' },
+      { action: 'view_log', viewerUserId: '0', viewerKey: 'my dashboard' },
+      { action: 'view_log', viewerUserId: '0', viewerKey: 'my dashboard' },
     ]);
     const shown = await h.app.inject({ method: 'GET', url: '/v1/audit/access-log', ...asAdmin() });
     expect(shown.json().rows).toEqual(
@@ -878,13 +887,16 @@ describe('audit mode', () => {
     });
     expect(erase.statusCode).toBe(200);
     expect(erase.json().erased).toBeGreaterThan(0);
-    const left = await h.db.query('SELECT count(*)::int AS n FROM audit_log');
-    expect(left.rows[0].n).toBe(0);
-    const { hasher, period } = await sdkHasher(h.app);
-    const bytes = Buffer.from((await hasher.hash(USER, period))!.split(':')[2]!, 'hex');
-    for (const table of ['interactions', 'uniques', 'webhook_events', 'entitlements']) {
-      const r = await h.db.query(`SELECT count(*)::int AS n FROM ${table} WHERE user_hash = $1`, [bytes]);
-      expect(r.rows[0].n, table).toBe(0);
+    expect(await h.store.privacy.activity(APP_ID, {}, 200)).toEqual([]);
+    // Rows by hash are read back only by SQL; MongoDB's erase of each collection is checked in
+    // mongodb-admin.int.test.ts.
+    if (onPostgres) {
+      const { hasher, period } = await sdkHasher(h.app);
+      const bytes = Buffer.from((await hasher.hash(USER, period))!.split(':')[2]!, 'hex');
+      for (const table of ['interactions', 'uniques', 'webhook_events', 'entitlements']) {
+        const r = await h.db.query(`SELECT count(*)::int AS n FROM ${table} WHERE user_hash = $1`, [bytes]);
+        expect(r.rows[0].n, table).toBe(0);
+      }
     }
   });
 
@@ -907,8 +919,10 @@ describe('audit mode', () => {
       payload: { userHashes: [hash] },
     });
     expect(ok.json().erased).toBeGreaterThan(0);
-    const left = await h.db.query("SELECT count(*)::int AS n FROM interactions WHERE command = 'to_forget'");
-    expect(left.rows[0].n).toBe(0);
+    if (onPostgres) {
+      const left = await h.db.query("SELECT count(*)::int AS n FROM interactions WHERE command = 'to_forget'");
+      expect(left.rows[0].n).toBe(0);
+    }
   });
 });
 

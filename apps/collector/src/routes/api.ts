@@ -73,6 +73,7 @@ export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void>
       'x-accel-buffering': 'no',
     });
     res.write('retry: 5000\n\n');
+    const unwatch = deps.live.watch();
 
     let slow: Record<string, unknown> = {};
     let slowAt = 0;
@@ -123,6 +124,7 @@ export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void>
     streams.add(end);
     req.raw.on('close', () => {
       streams.delete(end);
+      unwatch();
       closed = true;
       clearInterval(timer);
       clearInterval(heartbeat);
