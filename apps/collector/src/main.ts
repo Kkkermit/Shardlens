@@ -36,6 +36,11 @@ async function onPostgres() {
  * used, and its keys keep working beside any set here.
  */
 async function onMongo(url: string) {
+  // Its mirror is fed and read alongside PostgreSQL's tables only: on MongoDB it would serve charts the store never
+  // checked against.
+  if (process.env.CLICKHOUSE_URL?.trim()) {
+    throw new Error('Invalid collector configuration: CLICKHOUSE_URL needs PostgreSQL, not a MongoDB DATABASE_URL');
+  }
   const m = await openMongo(url);
   try {
     const appId = process.env.SHARDLENS_APP_ID?.trim() ?? '';
