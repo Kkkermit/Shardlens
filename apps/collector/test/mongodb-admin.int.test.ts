@@ -73,6 +73,7 @@ interface Run {
   /** Milliseconds before now. */
   ago: number;
   kind?: number;
+  command?: string;
   outcome?: number;
   ackMs?: number;
   weight?: number;
@@ -87,9 +88,20 @@ async function addInteractions(appId: string, runs: Run[]) {
     const id = uuidv7(ts);
     const userHash = r.userHash ?? Buffer.alloc(16, 1);
     await db.query(
-      `INSERT INTO interactions (id, ts, app_id, env, kind, locale, user_hash, salt_period, premium, outcome, ack_ms, weight)
-       VALUES ($1, $2, $3, 'production', $4, 'en-GB', $5, '2026-11', false, $6, $7, $8)`,
-      [id, new Date(ts), appId, r.kind ?? 1, userHash, r.outcome ?? 0, r.ackMs ?? null, r.weight ?? 1],
+      `INSERT INTO interactions (id, ts, app_id, env, kind, command, locale, user_hash, salt_period, premium, outcome,
+                                 ack_ms, weight)
+       VALUES ($1, $2, $3, 'production', $4, $5, 'en-GB', $6, '2026-11', false, $7, $8, $9)`,
+      [
+        id,
+        new Date(ts),
+        appId,
+        r.kind ?? 1,
+        r.command ?? null,
+        userHash,
+        r.outcome ?? 0,
+        r.ackMs ?? null,
+        r.weight ?? 1,
+      ],
     );
     await m.c.interactions.insertOne({
       _id: new UUID(id),
@@ -97,6 +109,7 @@ async function addInteractions(appId: string, runs: Run[]) {
       appId,
       env: 'production',
       kind: r.kind ?? 1,
+      ...(r.command !== undefined && { command: r.command }),
       options: [],
       locale: 'en-GB',
       userHash: new Binary(userHash),
@@ -104,7 +117,34 @@ async function addInteractions(appId: string, runs: Run[]) {
       premium: false,
       outcome: r.outcome ?? 0,
       ...(r.ackMs !== undefined && { ackMs: r.ackMs }),
-      weight: r.weight ?? 1,
+      // As ingest stores it: PostgreSQL's `real`.
+      weight: Math.fround(r.weight ?? 1),
+    });
+  }
+}
+
+/** The same custom events in both stores, one a minute going back from now. */
+async function addCustomEvents(
+  appId: string,
+  events: { name: string; props: Record<string, string | number | boolean>; weight: number }[],
+) {
+  const now = Date.now();
+  for (const [i, e] of events.entries()) {
+    const ts = new Date(now - (i + 1) * 60_000);
+    const id = uuidv7(ts.getTime());
+    const userHash = Buffer.alloc(16, i % 3);
+    await db.query(
+      'INSERT INTO custom_events (id, ts, app_id, name, props, user_hash, weight) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+      [id, ts, appId, e.name, JSON.stringify(e.props), userHash, e.weight],
+    );
+    await m.c.customEvents.insertOne({
+      _id: new UUID(id),
+      ts,
+      appId,
+      name: e.name,
+      props: e.props,
+      userHash: new Binary(userHash),
+      weight: Math.fround(e.weight),
     });
   }
 }
@@ -531,6 +571,50 @@ describe('alerts', () => {
     expect(await mongo.alerts.metricValue(quiet, 'error_rate', 600)).toBeNull();
     expect(await mongo.alerts.metricValue(busy, 'stale_shards', 600)).toBe(1);
     expect(await mongo.alerts.metricValue(busy, 'invalid_requests_pct', 60)).toBe(1.32);
+  });
+});
+
+describe('a bot sampled at 30 %', () => {
+  // Every event weighs 1 / 0.3, which no power of two divides: PostgreSQL adds such weights in float4, rounding at
+  // every row, and after 7 of them its sum is no longer the exact sum rounded once.
+  const weight = Math.fround(1 / 0.3);
+
+  it('adds up weights as PostgreSQL adds a `real` column', async () => {
+    const appId = await addApp();
+    await addInteractions(
+      appId,
+      Array.from({ length: 7 }, (_, i) => ({ ago: (i + 1) * 60_000, command: 'roll', outcome: i % 3 ? 0 : 1, weight })),
+    );
+    await addCustomEvents(
+      appId,
+      Array.from({ length: 7 }, () => ({ name: 'spin', props: { colour: 'red' }, weight })),
+    );
+    const now = new Date();
+    const range = { from: new Date(now.getTime() - DAY).toISOString(), to: now.toISOString() };
+    const command = { kind: 'command', name: 'roll', range } as const;
+    const fromPg = await pg.query.command(appId, command, now);
+    expect(fromPg.totals.runs).toBe(23.33333396911621);
+    expect(await mongo.query.command(appId, command, now)).toEqual(fromPg);
+    const reliability = { kind: 'reliability', range } as const;
+    const [pgHealth, mongoHealth] = await Promise.all([
+      pg.query.reliability(appId, reliability, now),
+      mongo.query.reliability(appId, reliability, now),
+    ]);
+    expect([mongoHealth.totals, mongoHealth.errorsByCode]).toEqual([pgHealth.totals, pgHealth.errorsByCode]);
+    for (const spec of [
+      { kind: 'events', range },
+      { kind: 'eventProps', name: 'spin', range },
+      { kind: 'eventProps', name: 'spin', range, prop: 'colour' },
+    ] as const) {
+      const answer = (store: Store) =>
+        spec.kind === 'events' ? store.query.events(appId, spec, now) : store.query.eventProps(appId, spec, now);
+      expect(await answer(mongo), spec.kind).toEqual(await answer(pg));
+    }
+    for (const metric of ['error_rate', 'interactions_per_min']) {
+      expect(await mongo.alerts.metricValue(appId, metric, 600), metric).toBe(
+        await pg.alerts.metricValue(appId, metric, 600),
+      );
+    }
   });
 });
 

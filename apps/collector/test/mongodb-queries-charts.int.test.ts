@@ -1,7 +1,8 @@
 import { UserHasher, uuidv7 } from '@shardlens/core';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { jsonText, realShare, roundTenths } from '../src/storage/mongodb/query/pg-values.js';
+import { jsonText, roundTenths } from '../src/storage/mongodb/query/pg-values.js';
+import { realRatio } from '../src/storage/mongodb/query/real-sums.js';
 import { periodBounds, periodLabel } from '../src/storage/periods.js';
 import { ensureSalt } from '../src/storage/salts.js';
 import type { Store } from '../src/storage/store.js';
@@ -687,7 +688,7 @@ describe("PostgreSQL's arithmetic, as MongoDB answers reproduce it", () => {
          FROM unnest($1::float8[], $2::float8[]) WITH ORDINALITY t(a, b, i) ORDER BY i`,
       [pairs.map((p) => p[0]), pairs.map((p) => p[1])],
     );
-    expect(pairs.map(([a, b]) => realShare(a ?? 0, b ?? 0))).toEqual(res.rows.map((row) => row.v));
+    expect(pairs.map(([a, b]) => realRatio(a ?? 0, b ?? 0))).toEqual(res.rows.map((row) => row.v));
   });
 
   it("prints JSON values as `jsonb`'s `->>` does", async () => {

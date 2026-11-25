@@ -3,7 +3,8 @@ import { KIND } from '../../../ingest/codes.js';
 import type { Spec } from '../../../query/spec.js';
 import type { QueryAnswer, QueryStorage } from '../../store.js';
 import type { Mongo } from '../connect.js';
-import { interpolate, jsonText, real } from './pg-values.js';
+import { interpolate, jsonText } from './pg-values.js';
+import { type KeyWeights, realSum, summed, weightsBy } from './real-sums.js';
 import { dayText, truncWall, wallClock } from './zoned-buckets.js';
 
 /*
@@ -297,51 +298,59 @@ async function retention(m: Mongo, appId: string, spec: Spec<'retention'>): Prom
 
 /** Custom events in the range: count, distinct people, last seen. */
 async function events(m: Mongo, appId: string, spec: Spec<'events'>): Promise<QueryAnswer<'events'>> {
-  const rows = await m.c.customEvents
-    .aggregate<{ _id: string; count: number; users: number; lastSeen: Date }>([
+  const [result] = await m.c.customEvents
+    .aggregate<{ names: (KeyWeights<string> & { lastSeen: Date })[]; users: { _id: string; users: number }[] }>([
       { $match: { appId, ts: { $gte: new Date(spec.range.from), $lt: new Date(spec.range.to) } } },
-      { $group: { _id: { n: '$name', u: '$userHash' }, count: { $sum: '$weight' }, last: { $max: '$ts' } } },
       {
-        $group: {
-          _id: '$_id.n',
-          count: { $sum: '$count' },
-          users: { $sum: { $cond: [{ $eq: [{ $type: '$_id.u' }, 'binData'] }, 1, 0] } },
-          lastSeen: { $max: '$last' },
+        $facet: {
+          names: [
+            { $group: { _id: { k: '$name', w: '$weight' }, n: { $sum: 1 }, last: { $max: '$ts' } } },
+            { $group: { _id: '$_id.k', weights: { $push: { w: '$_id.w', n: '$n' } }, lastSeen: { $max: '$last' } } },
+            { $sort: { _id: 1 } },
+          ],
+          users: [
+            { $match: { userHash: { $exists: true } } },
+            { $group: { _id: { n: '$name', u: '$userHash' } } },
+            { $group: { _id: '$_id.n', users: { $sum: 1 } } },
+          ],
         },
       },
-      { $sort: { count: -1, _id: 1 } },
-      { $limit: 200 },
     ])
     .toArray();
-  return { rows: rows.map((r) => ({ name: r._id, count: real(r.count), users: r.users, lastSeen: r.lastSeen })) };
+  const users = new Map((result?.users ?? []).map((u) => [u._id, u.users]));
+  const rows = (result?.names ?? []).map((n) => ({
+    name: n._id,
+    count: realSum(n.weights) ?? 0,
+    users: users.get(n._id) ?? 0,
+    lastSeen: n.lastSeen,
+  }));
+  // Most counted first, names in order: they come sorted by name.
+  return { rows: rows.sort((a, b) => b.count - a.count).slice(0, 200) };
 }
 
 /** One custom event's property keys, or the top values of one property, as text. */
 async function eventProps(m: Mongo, appId: string, spec: Spec<'eventProps'>): Promise<QueryAnswer<'eventProps'>> {
   const match = { appId, name: spec.name, ts: { $gte: new Date(spec.range.from), $lt: new Date(spec.range.to) } };
-  const top = [{ $sort: { count: -1, _id: 1 } }, { $limit: 50 }];
   if (!spec.prop) {
     const keys = await m.c.customEvents
-      .aggregate<{ _id: string; count: number }>([
+      .aggregate<KeyWeights<string>>([
         { $match: match },
         { $project: { weight: 1, k: { $objectToArray: '$props' } } },
         { $unwind: '$k' },
-        { $group: { _id: '$k.k', count: { $sum: '$weight' } } },
-        ...top,
+        ...weightsBy('$k.k', 50),
       ])
       .toArray();
-    return { name: spec.name, keys: keys.map((r) => ({ key: r._id, count: real(r.count) })) };
+    return { name: spec.name, keys: summed(keys).map((r) => ({ key: r.key, count: r.value })) };
   }
   // A name that is not a field path: a property may be called `a.b` or `$x`.
   const value = { $getField: { field: { $literal: spec.prop }, input: '$props' } };
   const values = await m.c.customEvents
-    .aggregate<{ _id: string; count: number }>([
+    .aggregate<KeyWeights<string>>([
       { $match: { ...match, $expr: { $not: [missing(value)] } } },
-      { $group: { _id: { $ifNull: [jsonText(value), 'null'] }, count: { $sum: '$weight' } } },
-      ...top,
+      ...weightsBy({ $ifNull: [jsonText(value), 'null'] }, 50),
     ])
     .toArray();
-  return { name: spec.name, prop: spec.prop, values: values.map((r) => ({ value: r._id, count: real(r.count) })) };
+  return { name: spec.name, prop: spec.prop, values: summed(values).map((r) => ({ value: r.key, count: r.value })) };
 }
 
 export function mongoFunnelsQueries(m: Mongo): Pick<QueryStorage, 'events' | 'eventProps' | 'funnel' | 'retention'> {

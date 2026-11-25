@@ -1,5 +1,5 @@
 import { BUCKETS, bucketOf } from '@shardlens/core';
-import { KIND } from '../../../ingest/codes.js';
+import { KIND, OUTCOME } from '../../../ingest/codes.js';
 import { decodeValue } from '../../../query/dimensions.js';
 import { withGuildNames } from '../../../query/guild-names.js';
 import type { Spec } from '../../../query/spec.js';
@@ -8,8 +8,9 @@ import type { Mongo } from '../connect.js';
 import { ackQuantile } from '../histogram.js';
 import { guildProfiles } from './guild-profiles.js';
 import { idPrefix } from './id-prefix.js';
-import { byteOrder, jsonText, real, realOrNull, realShare, roundTenths } from './pg-values.js';
+import { byteOrder, jsonText, roundTenths } from './pg-values.js';
 import { rawFrom, rollupSource } from './read-window.js';
+import { type CountsByWeight, type KeyWeights, realRatio, realSumOf, summed, weightsBy } from './real-sums.js';
 import { dim, HIST_ARRAY, HIST_SUMS, histQuantile } from './rollup-reads.js';
 import { currentPeriodStart } from './salt-period-start.js';
 
@@ -144,54 +145,44 @@ async function commands(m: Mongo, appId: string, spec: Spec<'commands'>, now: Da
   return { periodStart, rows: rows.slice(0, 500) };
 }
 
-/** A breakdown row before decoding: the stored value and its runs. */
-interface Split<K = unknown> {
-  _id: K;
-  value: number;
-}
+type TotalsFigure =
+  | 'runs'
+  | 'ok'
+  | 'error'
+  | 'timeout'
+  | 'noResponse'
+  | 'deferred'
+  | 'ephemeral'
+  | 'premium'
+  | 'interactions'
+  | 'over3s'
+  | 'answered';
 
 interface CommandFacets {
-  totals: {
-    n: number;
-    runs: number;
-    ok: number;
-    error: number;
-    timeout: number;
-    noResponse: number;
-    deferred: number;
-    ephemeral: number;
-    premium: number;
-    interactions: number;
-    over3s: number;
-    answered: number;
-    firstSeen: Date;
-    lastSeen: Date;
-  }[];
+  totals: (CountsByWeight<TotalsFigure> & { firstSeen: Date; lastSeen: Date })[];
   ack: { _id: number; w: number }[];
   handler: { _id: number; w: number }[];
-  kinds: Split<number>[];
-  subcommands: Split<string>[];
-  options: Split<string>[];
+  kinds: KeyWeights<number>[];
+  subcommands: KeyWeights<string>[];
+  options: KeyWeights<string>[];
   /** Option values are strings, numbers or booleans: never JSON null, so never `null` as text. */
-  optionValues: { _id: { o: string; v: string }; runs: number }[];
-  memberTiers: Split<number | null>[];
-  installs: Split<number | null>[];
-  contexts: Split<number | null>[];
-  channelTypes: Split<number>[];
-  locales: Split<string>[];
-  servers: Split<string>[];
-  components: { _id: { k?: string; kind: number }; value: number }[];
-  modals: { _id: string; shown: number; submitted: number }[];
+  optionValues: KeyWeights<{ o: string; v: string }>[];
+  memberTiers: KeyWeights<number | null>[];
+  installs: KeyWeights<number | null>[];
+  contexts: KeyWeights<number | null>[];
+  channelTypes: KeyWeights<number>[];
+  locales: KeyWeights<string>[];
+  servers: KeyWeights<string>[];
+  components: KeyWeights<{ k?: string; kind: number }>[];
+  modals: { _id: string; weights: CountsByWeight<'shown' | 'submitted'>[] }[];
 }
 
-const weightWhen = (condition: unknown) => ({ $sum: { $cond: [condition, '$weight', 0] } });
+const countIf = (condition: unknown) => ({ $sum: { $cond: [condition, 1, 0] } });
 
-/** A breakdown by `key`, most runs first (ties by key), at most `limit` rows. */
+/** A breakdown of the command's runs by `key`, at most `limit` rows. */
 const split = (key: unknown, where: object = {}, limit?: number) => [
   { $match: { base: true, ...where } },
-  { $group: { _id: key, value: { $sum: '$weight' } } },
-  { $sort: { value: -1, _id: 1 } },
-  ...(limit === undefined ? [] : [{ $limit: limit }]),
+  ...weightsBy(key, limit),
 ];
 
 /** Weights by whole milliseconds, rounded as `shardlens_hist_one` rounds them (`histogram.ts`). */
@@ -203,7 +194,6 @@ const msWeights = (field: string) => [
 async function command(m: Mongo, appId: string, spec: Spec<'command'>, now: Date): Promise<QueryAnswer<'command'>> {
   const from = await rawFrom(m, appId, new Date(spec.range.from), now);
   const ts = { $gte: from, $lt: new Date(spec.range.to) };
-  const notMessage = { $ne: ['$kind', KIND.message_command] };
   const shown = { $and: ['$base', { $eq: ['$responseType', 9] }] };
   const [f] = await m.c.interactions
     .aggregate<CommandFacets>([
@@ -231,19 +221,18 @@ async function command(m: Mongo, appId: string, spec: Spec<'command'>, now: Date
             { $match: { base: true } },
             {
               $group: {
-                _id: null,
-                n: { $sum: 1 },
-                runs: { $sum: '$weight' },
-                ok: weightWhen({ $eq: ['$outcome', 0] }),
-                error: weightWhen({ $eq: ['$outcome', 1] }),
-                timeout: weightWhen({ $eq: ['$outcome', 2] }),
-                noResponse: weightWhen({ $eq: ['$outcome', 3] }),
-                deferred: weightWhen({ $eq: ['$deferred', true] }),
-                ephemeral: weightWhen({ $eq: ['$ephemeral', true] }),
-                premium: weightWhen({ $eq: ['$premium', true] }),
-                interactions: weightWhen(notMessage),
-                over3s: weightWhen({ $gt: ['$ackMs', 3000] }),
-                answered: weightWhen({ $ne: [{ $ifNull: ['$ackMs', null] }, null] }),
+                _id: '$weight',
+                runs: { $sum: 1 },
+                ok: countIf({ $eq: ['$outcome', OUTCOME.ok] }),
+                error: countIf({ $eq: ['$outcome', OUTCOME.error] }),
+                timeout: countIf({ $eq: ['$outcome', OUTCOME.timeout] }),
+                noResponse: countIf({ $eq: ['$outcome', OUTCOME.no_response] }),
+                deferred: countIf({ $eq: ['$deferred', true] }),
+                ephemeral: countIf({ $eq: ['$ephemeral', true] }),
+                premium: countIf({ $eq: ['$premium', true] }),
+                interactions: countIf({ $ne: ['$kind', KIND.message_command] }),
+                over3s: countIf({ $gt: ['$ackMs', 3000] }),
+                answered: countIf({ $ne: [{ $ifNull: ['$ackMs', null] }, null] }),
                 firstSeen: { $min: '$ts' },
                 lastSeen: { $max: '$ts' },
               },
@@ -262,20 +251,12 @@ async function command(m: Mongo, appId: string, spec: Spec<'command'>, now: Date
             { $or: [{ sub: { $exists: true } }, { cmdGroup: { $exists: true } }] },
             50,
           ),
-          options: [
-            { $match: { base: true } },
-            { $unwind: '$options' },
-            { $group: { _id: '$options', value: { $sum: '$weight' } } },
-            { $sort: { value: -1, _id: 1 } },
-            { $limit: 50 },
-          ],
+          options: [{ $match: { base: true } }, { $unwind: '$options' }, ...weightsBy('$options', 50)],
           optionValues: [
             { $match: { base: true, optionValues: { $exists: true } } },
             { $project: { weight: 1, kv: { $objectToArray: '$optionValues' } } },
             { $unwind: '$kv' },
-            { $group: { _id: { o: '$kv.k', v: jsonText('$kv.v') }, runs: { $sum: '$weight' } } },
-            { $sort: { runs: -1, '_id.o': 1, '_id.v': 1 } },
-            { $limit: 100 },
+            ...weightsBy({ o: '$kv.k', v: jsonText('$kv.v') }, 100),
           ],
           memberTiers: split({ $ifNull: ['$memberTier', null] }),
           installs: split({ $ifNull: ['$install', null] }, { kind: { $ne: KIND.message_command } }),
@@ -285,9 +266,7 @@ async function command(m: Mongo, appId: string, spec: Spec<'command'>, now: Date
           servers: split('$guildId', { guildId: { $exists: true } }, 10),
           components: [
             { $match: { sourceCommand: spec.name, kind: { $in: [KIND.button, KIND.select] } } },
-            { $group: { _id: { k: '$customId', kind: '$kind' }, value: { $sum: '$weight' } } },
-            { $sort: { value: -1, '_id.k': 1, '_id.kind': 1 } },
-            { $limit: 25 },
+            ...weightsBy({ k: '$customId', kind: '$kind' }, 25),
           ],
           modals: [
             {
@@ -298,14 +277,21 @@ async function command(m: Mongo, appId: string, spec: Spec<'command'>, now: Date
             },
             {
               $group: {
-                _id: '$customId',
-                shown: weightWhen(shown),
-                opened: { $max: { $cond: [shown, 1, 0] } },
-                submitted: weightWhen({ $eq: ['$kind', KIND.modal_submit] }),
+                _id: { k: '$customId', w: '$weight' },
+                shown: countIf(shown),
+                submitted: countIf({ $eq: ['$kind', KIND.modal_submit] }),
               },
             },
-            { $match: { opened: 1 } },
-            { $sort: { shown: -1, _id: 1 } },
+            {
+              $group: {
+                _id: '$_id.k',
+                weights: { $push: { _id: '$_id.w', shown: '$shown', submitted: '$submitted' } },
+                approx: { $sum: { $multiply: ['$_id.w', '$shown'] } },
+              },
+            },
+            // The modals the command opened, ordered and cut as `weightsBy` orders and cuts keys.
+            { $match: { approx: { $gt: 0 } } },
+            { $sort: { approx: -1, _id: 1 } },
             { $limit: 20 },
           ],
         },
@@ -314,49 +300,58 @@ async function command(m: Mongo, appId: string, spec: Spec<'command'>, now: Date
     .toArray();
   if (!f) throw new Error('MongoStore: a $facet answered nothing');
 
-  const t = f.totals[0];
+  const runs = f.totals;
+  const sum = (figure: TotalsFigure) => realSumOf(runs, figure);
+  // `countWhenRan`: 0 when no run matched, `null` only when nothing ran.
+  const counted = (figure: TotalsFigure) => (runs.length > 0 ? (sum(figure) ?? 0) : null);
   // `shardlens_hist_sum(shardlens_hist_one(ack_ms, weight))`: `NULL` when no run has a response time.
   let latency: number[] | null = null;
   for (const row of f.ack) {
     latency ??= new Array<number>(BUCKETS).fill(0);
     latency[bucketOf(row._id)]! += row.w;
   }
-  const values = <K, V>(rows: Split<K>[], key: (k: K) => V) =>
-    rows.map((r) => ({ key: key(r._id), value: real(r.value) }));
+  const values = <K, V>(rows: KeyWeights<K>[], key: (k: K) => V) =>
+    summed(rows).map((r) => ({ key: key(r.key), value: r.value }));
   const coded = (field: string) => (k: number | null) => (k === null ? null : decodeValue(field, String(k)));
   return {
     from: from.toISOString(),
     totals: {
-      runs: t ? real(t.runs) : null,
-      ok: realOrNull(t?.ok ?? 0, t?.n ?? 0),
-      error: realOrNull(t?.error ?? 0, t?.n ?? 0),
-      timeout: realOrNull(t?.timeout ?? 0, t?.n ?? 0),
-      noResponse: realOrNull(t?.noResponse ?? 0, t?.n ?? 0),
-      deferRate: realShare(t?.deferred ?? 0, t?.interactions ?? 0),
-      ephemeralRate: realShare(t?.ephemeral ?? 0, t?.interactions ?? 0),
-      premiumShare: realShare(t?.premium ?? 0, t?.interactions ?? 0),
-      over3sRate: realShare(t?.over3s ?? 0, t?.answered ?? 0),
+      runs: sum('runs'),
+      ok: counted('ok'),
+      error: counted('error'),
+      timeout: counted('timeout'),
+      noResponse: counted('noResponse'),
+      deferRate: realRatio(sum('deferred') ?? 0, sum('interactions')),
+      ephemeralRate: realRatio(sum('ephemeral') ?? 0, sum('interactions')),
+      premiumShare: realRatio(sum('premium') ?? 0, sum('interactions')),
+      over3sRate: realRatio(sum('over3s') ?? 0, sum('answered')),
       handlerP95Ms: ackQuantile(f.handler, 0.95),
-      firstSeen: t?.firstSeen ?? null,
-      lastSeen: t?.lastSeen ?? null,
+      firstSeen: runs.reduce<Date | null>((first, g) => (first && first <= g.firstSeen ? first : g.firstSeen), null),
+      lastSeen: runs.reduce<Date | null>((last, g) => (last && last >= g.lastSeen ? last : g.lastSeen), null),
     },
     latencyHistogram: latency,
     kinds: values(f.kinds, (k) => decodeValue('kind', String(k))),
     subcommands: values(f.subcommands, String),
     options: values(f.options, String),
-    optionValues: f.optionValues.map((r) => ({ option: r._id.o, value: r._id.v, runs: real(r.runs) })),
+    optionValues: summed(f.optionValues).map((r) => ({ option: r.key.o, value: r.key.v, runs: r.value })),
     memberTiers: values(f.memberTiers, coded('tier')),
     installs: values(f.installs, coded('install')),
     contexts: values(f.contexts, (k) => (k === null ? null : String(k))),
     channelTypes: values(f.channelTypes, String),
     locales: values(f.locales, String),
     topServers: await withGuildNames((app, ids) => guildProfiles(m, app, ids), appId, values(f.servers, String)),
-    components: f.components.map((r) => ({
-      key: r._id.k ?? null,
-      kind: decodeValue('kind', String(r._id.kind)),
-      value: real(r.value),
+    components: summed(f.components).map((r) => ({
+      key: r.key.k ?? null,
+      kind: decodeValue('kind', String(r.key.kind)),
+      value: r.value,
     })),
-    modals: f.modals.map((r) => ({ customId: r._id, shown: real(r.shown), submitted: real(r.submitted) })),
+    modals: f.modals
+      .map((r) => ({
+        customId: r._id,
+        shown: realSumOf(r.weights, 'shown') ?? 0,
+        submitted: realSumOf(r.weights, 'submitted') ?? 0,
+      }))
+      .sort((a, b) => b.shown - a.shown),
   };
 }
 

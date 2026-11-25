@@ -1,13 +1,12 @@
 import type { Document } from 'mongodb';
-import { KIND } from '../../../ingest/codes.js';
+import { KIND, OUTCOME } from '../../../ingest/codes.js';
 import { QueryError } from '../../../query/error.js';
 import type { Spec } from '../../../query/spec.js';
 import type { QueryAnswer, QueryStorage } from '../../store.js';
 import type { Mongo } from '../connect.js';
 import { ACK_WEIGHTS, ackQuantile } from '../histogram.js';
-import { byteOrder } from './pg-values.js';
 import { rawFrom, rollupSource } from './read-window.js';
-import { realRatio, realSum, type WeightRows } from './real-sums.js';
+import { type CountsByWeight, type KeyWeights, realRatio, realSumOf, summed, weightsBy } from './real-sums.js';
 import { HIST_ARRAY, HIST_SUMS, histQuantile } from './rollup-reads.js';
 import { sdkInstances } from './sdk-instances.js';
 import { clockText, truncWall, wallClock } from './zoned-buckets.js';
@@ -250,24 +249,36 @@ async function bursts(m: Mongo, appId: string, spec: Spec<'bursts'>, now: Date):
   return { rows: (result?.rows ?? []).map((r) => ({ minute: r.minute, runs: r.runs, median: result!.median })) };
 }
 
-/** Interactions by weight and what the totals count, for PostgreSQL's float4 sums of weights (`real-sums.ts`). */
-interface RunGroup {
-  _id: { w: number; outcome: number; slow: boolean; acked: boolean };
-  n: number;
-}
+type RunFigure = 'runs' | 'missed' | 'noResponse' | 'errors' | 'slow' | 'answered';
 
-function runTotals(groups: readonly RunGroup[], ack: readonly { _id: number; w: number }[]): Reliability['totals'] {
-  const weights = (keep: (k: RunGroup['_id']) => boolean): WeightRows[] =>
-    groups.filter((g) => keep(g._id)).map((g) => ({ w: g._id.w, n: g.n }));
-  const ran = groups.some((g) => g.n > 0);
-  // `countWhenRan`: 0 when none matched, `null` only when nothing ran.
-  const counted = (keep: (k: RunGroup['_id']) => boolean) => (ran ? (realSum(weights(keep)) ?? 0) : null);
+const countIf = (condition: unknown) => ({ $sum: { $cond: [condition, 1, 0] } });
+
+/** Interactions by weight, counted towards each figure of the totals. */
+const RUNS_BY_WEIGHT: Document = {
+  $group: {
+    _id: '$weight',
+    runs: { $sum: 1 },
+    missed: countIf({ $in: ['$outcome', [OUTCOME.timeout, OUTCOME.no_response]] }),
+    noResponse: countIf({ $eq: ['$outcome', OUTCOME.no_response] }),
+    errors: countIf({ $eq: ['$outcome', OUTCOME.error] }),
+    slow: countIf({ $gt: ['$ackMs', 3000] }),
+    answered: countIf({ $ne: [{ $ifNull: ['$ackMs', null] }, null] }),
+  },
+};
+
+function runTotals(
+  runs: readonly CountsByWeight<RunFigure>[],
+  ack: readonly { _id: number; w: number }[],
+): Reliability['totals'] {
+  const sum = (figure: RunFigure) => realSumOf(runs, figure);
+  // `countWhenRan`: 0 when no run matched, `null` only when nothing ran.
+  const counted = (figure: RunFigure) => (runs.length > 0 ? (sum(figure) ?? 0) : null);
   return {
-    runs: realSum(weights(() => true)),
-    missedDeadlines: counted((k) => k.outcome === 2 || k.outcome === 3),
-    noResponse: counted((k) => k.outcome === 3),
-    errors: counted((k) => k.outcome === 1),
-    over3sRate: realRatio(realSum(weights((k) => k.slow)) ?? 0, realSum(weights((k) => k.acked))),
+    runs: sum('runs'),
+    missedDeadlines: counted('missed'),
+    noResponse: counted('noResponse'),
+    errors: counted('errors'),
+    over3sRate: realRatio(sum('slow') ?? 0, sum('answered')),
     p50Ms: ackQuantile(ack, 0.5),
     p95Ms: ackQuantile(ack, 0.95),
     p99Ms: ackQuantile(ack, 0.99),
@@ -407,38 +418,21 @@ async function reliability(
       .toArray(),
     sdkInstances(m, appId),
   ]);
-  const [[runs], process] = await Promise.all([
+  const [[single], process] = await Promise.all([
     m.c.interactions
       .aggregate<{
-        groups: RunGroup[];
+        runs: CountsByWeight<RunFigure>[];
         ack: { _id: number; w: number }[];
-        codes: { _id: { key: string; w: number }; n: number }[];
+        codes: KeyWeights<string>[];
       }>([
         { $match: { appId, ts: { $gte: rf, $lt: to }, kind: { $ne: KIND.message_command } } },
         {
           $facet: {
-            groups: [
-              {
-                $group: {
-                  _id: {
-                    w: '$weight',
-                    outcome: '$outcome',
-                    slow: { $gt: ['$ackMs', 3000] },
-                    acked: { $ne: [{ $ifNull: ['$ackMs', null] }, null] },
-                  },
-                  n: { $sum: 1 },
-                },
-              },
-            ],
+            runs: [RUNS_BY_WEIGHT],
             ack: ACK_WEIGHTS,
             codes: [
-              { $match: { outcome: { $in: [1, 2] } } },
-              {
-                $group: {
-                  _id: { key: { $ifNull: [{ $toString: '$errorCode' }, '$errorClass', 'unknown'] }, w: '$weight' },
-                  n: { $sum: 1 },
-                },
-              },
+              { $match: { outcome: { $in: [OUTCOME.error, OUTCOME.timeout] } } },
+              ...weightsBy({ $ifNull: [{ $toString: '$errorCode' }, '$errorClass', 'unknown'] }, 10),
             ],
           },
         },
@@ -446,16 +440,11 @@ async function reliability(
       .toArray(),
     processGauges(m, appId, newest, now),
   ]);
-  const codes = new Map<string, WeightRows[]>();
-  for (const c of runs?.codes ?? []) codes.set(c._id.key, [...(codes.get(c._id.key) ?? []), { w: c._id.w, n: c.n }]);
   const used = budget?.used ?? 0;
   return {
     from: rf.toISOString(),
-    totals: runTotals(runs?.groups ?? [], runs?.ack ?? []),
-    errorsByCode: [...codes]
-      .map(([key, weights]) => ({ key, value: realSum(weights) ?? 0 }))
-      .sort((a, b) => b.value - a.value || byteOrder(a.key, b.key))
-      .slice(0, 10),
+    totals: runTotals(single?.runs ?? [], single?.ack ?? []),
+    errorsByCode: summed(single?.codes ?? []),
     routes: (rest?.routes ?? []).map((r) => ({
       method: r._id.method,
       route: r._id.route,
