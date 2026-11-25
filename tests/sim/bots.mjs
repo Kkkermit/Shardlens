@@ -1,6 +1,6 @@
 // How the sim runs each fixture in bots/: its entry point, the collector it reports to, where that collector keeps its
 // data and where the install copies events. The bots' code is used as the coding agents left it.
-import { mongosh } from './databases.mjs';
+import { mongoDatabaseUrl, mongosh } from './databases.mjs';
 
 // Each run uses the nine ports after these: SIM_PORTS for the fake Discords and the databases, SIM_COLLECTOR_PORTS
 // for the collectors.
@@ -46,7 +46,7 @@ export const BOTS = {
     // The bot's own database, which also holds its per-server prefixes.
     copy: { mongo: 'sapphire-bot' },
     databases: ['mongo'],
-    env: ({ databases }) => ({ MONGODB_URI: `${databases.mongo}/sapphire-bot` }),
+    env: ({ databases }) => ({ MONGODB_URI: mongoDatabaseUrl(databases.mongo, 'sapphire-bot') }),
     // The scenario expects server 2 to have set its prefix to ">" before the bot started.
     prepare: ({ guilds }) =>
       mongosh('sapphire-bot', `db.guildsettings.insertOne({ guildId: '${guilds[1].id}', prefix: '>' })`),

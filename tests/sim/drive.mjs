@@ -1,11 +1,14 @@
 // Runs one bot end to end: its fake Discord, its collector (inside the bot, or standalone), the bot, the scripted
 // scenario. Then compares what the collector counted with what was sent, and stops the bot the way an owner would.
+// A bot on its own MongoDB runs no collector process: the collector image on the same database reads its numbers, as
+// a hosted dashboard would, and `shardlens dashboard` must sign in and read the same.
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { BOTS } from './bots.mjs';
+import { mongoDatabaseUrl, restartDatabase, stopDatabase } from './databases.mjs';
 import { scenarios } from './fake-discord/scenarios.mjs';
 import { startNode } from './processes.mjs';
 
@@ -108,10 +111,55 @@ async function panelMismatches({ panel, url, readKey, range, appId, query }) {
 }
 
 /**
+ * `shardlens dashboard` in the bot's folder, as an owner runs it: from the connection string in the bot's `.env`, it
+ * must print a link that signs in once with the owner's rights, read the numbers the image reads, and stop on Ctrl+C.
+ */
+async function dashboardCommand({ cliMain, dir, mongodb, mongoUrl, port, log, range, query }) {
+  writeFileSync(join(dir, '.env'), `${mongodb.env}=${mongoUrl}\n`);
+  const env = { ...process.env };
+  delete env[mongodb.env];
+  const cli = startNode([cliMain, 'dashboard', '--port', String(port)], { cwd: dir, env, log });
+  const failures = [];
+  try {
+    const link = await until(
+      'the sign-in link of shardlens dashboard',
+      async () => /Open (http:\/\/\S+)/.exec(readFileSync(log, 'utf8'))?.[1],
+      60_000,
+    );
+    const signIn = await fetch(link, { redirect: 'manual' });
+    const cookie = signIn.headers.get('set-cookie')?.split(';')[0];
+    if (signIn.status !== 302 || !cookie)
+      return [`shardlens dashboard: its link answered ${signIn.status}, no session`];
+    const base = new URL(link).origin;
+    const me = await (await fetch(`${base}/auth/me`, { headers: { cookie } })).json();
+    if (me.method !== 'link') failures.push(`shardlens dashboard: signed in as ${me.method}, not with the link`);
+    const settings = await fetch(`${base}/v1/settings`, { headers: { cookie } });
+    if (settings.status !== 200) failures.push(`shardlens dashboard: Settings answered ${settings.status}`);
+    const runs = async (read) => JSON.stringify(read.rows.map((row) => [row.command, row.runs]).sort());
+    const res = await fetch(`${base}/v1/query`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json', 'x-shardlens-csrf': '1' },
+      body: JSON.stringify({ range, kind: 'commands' }),
+    });
+    if (!res.ok) failures.push(`shardlens dashboard: a query answered ${res.status}`);
+    else if ((await runs(await res.json())) !== (await runs(await query({ kind: 'commands' })))) {
+      failures.push('shardlens dashboard read other runs per command than the collector image');
+    }
+    const again = await fetch(link, { redirect: 'manual' });
+    if (again.headers.get('location') !== '/?error=link_expired') failures.push('the sign-in link worked twice');
+  } finally {
+    cli.kill('SIGINT');
+    const exit = await Promise.race([cli.closed, sleep(15_000, 'timeout')]);
+    if (exit !== 0) failures.push(`shardlens dashboard exited with ${exit} after Ctrl+C`);
+  }
+  return failures;
+}
+
+/**
  * Runs `bot`, installed in `dir`. Resolves with what failed, how many events were sent, and the secrets and
  * identities the leak check must not find.
  */
-export async function drive(bot, { dir, logs, databases, collectorMain, panel }) {
+export async function drive(bot, { dir, logs, databases, collectorMain, panel, cliMain }) {
   const config = BOTS[bot];
   const { appId } = scenarios[bot];
   const log = (name) => join(logs, `${bot}-${name}.log`);
@@ -128,29 +176,45 @@ export async function drive(bot, { dir, logs, databases, collectorMain, panel })
   const { guilds } = await until('the fake Discord', () => sim('/_sim/status'), 15_000);
 
   let collector;
+  const mongoUrl = config.mongodb && mongoDatabaseUrl(databases.mongo, config.mongodb.database);
   const standalone = config.embedded
     ? undefined
-    : {
-        url: collectorUrl,
-        ingestKey: `slk_ingest_${randomBytes(32).toString('base64url')}`,
-        readKey: `slk_read_${randomBytes(32).toString('base64url')}`,
-        env: {
-          ...process.env,
-          DATABASE_URL: `${databases.postgres}/shardlens`,
-          SHARDLENS_SINK_URL: `${databases.mysql}/${config.copy.mysql}`,
-          SHARDLENS_PUBLIC_URL: collectorUrl,
-          SHARDLENS_APP_ID: appId,
-          SHARDLENS_SESSION_SECRET: randomBytes(40).toString('base64url'),
-          SHARDLENS_SETTINGS_KEY: randomBytes(32).toString('base64'),
-          PORT: String(config.collectorPort),
-          HOST: '127.0.0.1',
-          LOG_LEVEL: 'info',
-        },
-      };
+    : config.mongodb
+      ? {
+          // The collector image on the bot's own database: no secrets of its own, a read key to sign in with.
+          url: collectorUrl,
+          readKey: `slk_read_${randomBytes(32).toString('base64url')}`,
+          env: {
+            ...process.env,
+            DATABASE_URL: mongoUrl,
+            SHARDLENS_PUBLIC_URL: collectorUrl,
+            SHARDLENS_APP_ID: appId,
+            PORT: String(config.collectorPort),
+            HOST: '127.0.0.1',
+            LOG_LEVEL: 'info',
+          },
+        }
+      : {
+          url: collectorUrl,
+          ingestKey: `slk_ingest_${randomBytes(32).toString('base64url')}`,
+          readKey: `slk_read_${randomBytes(32).toString('base64url')}`,
+          env: {
+            ...process.env,
+            DATABASE_URL: `${databases.postgres}/shardlens`,
+            SHARDLENS_SINK_URL: `${databases.mysql}/${config.copy.mysql}`,
+            SHARDLENS_PUBLIC_URL: collectorUrl,
+            SHARDLENS_APP_ID: appId,
+            SHARDLENS_SESSION_SECRET: randomBytes(40).toString('base64url'),
+            SHARDLENS_SETTINGS_KEY: randomBytes(32).toString('base64'),
+            PORT: String(config.collectorPort),
+            HOST: '127.0.0.1',
+            LOG_LEVEL: 'info',
+          },
+        };
   const startCollector = async () => {
     const { env, ingestKey, readKey } = standalone;
     collector = startNode([collectorMain], {
-      env: { ...env, SHARDLENS_INGEST_KEY: ingestKey, SHARDLENS_READ_KEY: readKey },
+      env: { ...env, ...(ingestKey ? { SHARDLENS_INGEST_KEY: ingestKey } : {}), SHARDLENS_READ_KEY: readKey },
       log: log('collector'),
     });
     await until('the collector', async () => (await fetch(`${collectorUrl}/readyz`)).ok, 60_000);
@@ -170,6 +234,7 @@ export async function drive(bot, { dir, logs, databases, collectorMain, panel })
       DISCORD_TOKEN: token,
       DISCORD_APP_ID: appId,
       DISCORD_CLIENT_ID: appId,
+      ...(config.mongodb ? { [config.mongodb.env]: mongoUrl } : {}),
       ...config.env?.({ collector: standalone, databases }),
     },
     log: log('bot'),
@@ -182,13 +247,18 @@ export async function drive(bot, { dir, logs, databases, collectorMain, panel })
     status = await sim('/_sim/status');
     if (status.phase === 'done' || status.phase.startsWith('failed')) break;
     if (status.phase === 'paused:stop-collector') {
-      collector.kill('SIGTERM');
-      await collector.closed;
+      // On MongoDB the outage is the database's: the collector inside the bot loses it.
+      if (config.mongodb) stopDatabase('mongo');
+      else {
+        collector.kill('SIGTERM');
+        await collector.closed;
+      }
       await sim('/_sim/continue', { method: 'POST' });
     } else if (status.phase === 'paused:start-collector') {
       // Long enough that the SDK's sends fail and back off.
       await sleep(8_000);
-      await startCollector();
+      if (config.mongodb) await restartDatabase('mongo');
+      else await startCollector();
       await sim('/_sim/continue', { method: 'POST' });
     }
     if (botProcess.exitCode !== null || botProcess.signalCode !== null) {
@@ -226,6 +296,20 @@ export async function drive(bot, { dir, logs, databases, collectorMain, panel })
     failures.push(...mismatches);
     if (mismatches.length === 0) {
       failures.push(...(await panelMismatches({ panel, url: collectorUrl, readKey, range, appId, query })));
+      if (config.mongodb) {
+        failures.push(
+          ...(await dashboardCommand({
+            cliMain,
+            dir,
+            mongodb: config.mongodb,
+            mongoUrl,
+            port: config.dashboardPort,
+            log: log('dashboard'),
+            range,
+            query,
+          })),
+        );
+      }
     }
     for (const bucket of Object.values(status.expected)) {
       for (const outcomes of Object.values(bucket)) events += Object.values(outcomes).reduce((a, b) => a + b, 0);

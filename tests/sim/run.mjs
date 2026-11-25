@@ -68,6 +68,17 @@ try {
     install(collectorDir, packages, setupLog);
   }
 
+  // `shardlens dashboard`, as npx would run it, for the bots on their own MongoDB.
+  const cliDir = join(work, 'cli');
+  if (bots.some((bot) => BOTS[bot].mongodb)) {
+    mkdirSync(cliDir);
+    writeFileSync(
+      join(cliDir, 'package.json'),
+      JSON.stringify({ name: 'cli', private: true, dependencies: { shardlens: '*' } }),
+    );
+    install(cliDir, packages, setupLog);
+  }
+
   const needed = [...new Set(bots.flatMap((bot) => BOTS[bot].databases))];
   let databases = {};
   if (needed.length > 0) {
@@ -82,12 +93,20 @@ try {
     const result = { bot, failures: [] };
     try {
       const collectorMain = join(collectorDir, 'node_modules/@shardlens/collector/dist/main.js');
-      const { failures, events, needles } = await drive(bot, { dir, logs, databases, collectorMain, panel });
+      const cliMain = join(cliDir, 'node_modules/shardlens/dist/index.js');
+      const { failures, events, needles } = await drive(bot, {
+        dir,
+        logs,
+        databases,
+        collectorMain,
+        panel,
+        cliMain,
+      });
       const leaks = await leakCheck(bot, { dir, logs, needles });
       result.failures.push(...failures, ...leaks.found.map((leak) => `leak: ${leak}`));
       if (leaks.rows === 0) result.failures.push('the copy holds no events');
       result.summary =
-        `${events} events sent, the copy holds ${leaks.rows}, ` +
+        `${events} events sent, ${leaks.rows === undefined ? 'no copy' : `the copy holds ${leaks.rows}`}, ` +
         `${leaks.needles} secrets and identities searched for in ${Math.round(leaks.chars / 1024)} KiB`;
     } catch (error) {
       result.failures.push(error.message);
