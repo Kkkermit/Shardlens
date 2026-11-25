@@ -1,8 +1,9 @@
 import { randomBytes } from 'node:crypto';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { BUCKETS, bucketOf, periodLabel, uuidv7 } from '@shardlens/core';
 import { Event } from '@shardlens/schema';
 import { Binary, BSON, MongoClient, MongoServerError, UUID } from 'mongodb';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GUILD_EVENT } from '../src/ingest/codes.js';
 import { runSalts } from '../src/jobs/scheduler.js';
 import { collections, LAYOUT_VERSION } from '../src/storage/mongodb/collections.js';
@@ -448,6 +449,27 @@ describe('MongoStore', () => {
       // Discord's join time replaces the snapshot's, and text is kept as text.
       expect(rows[0]?.joinedAt.getTime()).toBeLessThan(Date.now() - 2 * DAY);
       expect(rows.every((g) => g.name === '$where' && g.sizeAtJoin === 42 && !('icon' in g))).toBe(true);
+    });
+
+    it("waits for another process's snapshot lease by the server's clock, not its own", async () => {
+      const guild = snowflakeOnShard(0, 1, 61);
+      const lease = `snapshot:${APP}`;
+      await m.c.leases.insertOne({ _id: lease, holder: 'another process', expiresAt: new Date(Date.now() + MINUTE) });
+      // This bot process's clock runs five minutes ahead of the other's and the server's.
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(Date.now() + 5 * MINUTE);
+      try {
+        const applied = write([snapshot([0], 1, [guild])]);
+        await sleep(300);
+        expect(await m.c.leases.findOne({ _id: lease })).toMatchObject({ holder: 'another process' });
+        expect(await guilds()).toEqual([]);
+        await m.c.leases.deleteOne({ _id: lease });
+        await applied;
+      } finally {
+        vi.useRealTimers();
+      }
+      expect((await guilds()).map((g) => g._id.guildId)).toEqual([guild]);
+      expect(await m.c.leases.countDocuments()).toBe(0);
     });
 
     it('waits for every shard of a new layout, and ignores a shard outside it', async () => {

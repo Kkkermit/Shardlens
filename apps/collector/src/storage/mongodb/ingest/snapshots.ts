@@ -15,6 +15,33 @@ const WAIT_MS = 20_000;
 const SHARD_UNIT = 4_194_304; // 2^22: a snowflake's low 22 bits are not its time.
 
 /**
+ * Takes the lease unless another holder's has not run out yet, by the server's clock: the bot's processes may run on
+ * hosts whose clocks disagree. `true` when this holder has it now.
+ */
+async function takeLease(m: Mongo, _id: string, holder: string): Promise<boolean> {
+  const takeable = { $or: [{ $eq: ['$holder', holder] }, { $lte: ['$expiresAt', '$$NOW'] }] };
+  try {
+    const lease = await m.c.leases.findOneAndUpdate(
+      { _id },
+      [
+        {
+          $set: {
+            holder: { $cond: [takeable, { $literal: holder }, '$holder'] },
+            expiresAt: { $cond: [takeable, { $add: ['$$NOW', LEASE_MS] }, '$expiresAt'] },
+          },
+        },
+      ],
+      { upsert: true, returnDocument: 'after', projection: { holder: 1 } },
+    );
+    return lease?.holder === holder;
+  } catch (error) {
+    // Another process created the lease at the same moment.
+    if (isDuplicateKey(error)) return false;
+    throw error;
+  }
+}
+
+/**
  * Runs `fn` holding the app's snapshot lease (`shardlens_leases`, `snapshot:<app>`), MongoDB's stand-in for the row
  * lock PostgreSQL takes on the app: two shards' snapshots must not both complete a layout, or both diff one shard.
  */
@@ -22,19 +49,7 @@ async function withSnapshotLease<T>(m: Mongo, appId: string, fn: () => Promise<T
   const _id = `snapshot:${appId}`;
   const holder = randomUUID();
   const deadline = Date.now() + WAIT_MS;
-  for (let delay = 20; ; delay = Math.min(delay * 2, 500)) {
-    const now = new Date();
-    try {
-      // Matches only a lease that ran out; while another holds one, the insert it falls back to is a duplicate.
-      await m.c.leases.updateOne(
-        { _id, expiresAt: { $lte: now } },
-        { $set: { holder, expiresAt: new Date(now.getTime() + LEASE_MS) } },
-        { upsert: true },
-      );
-      break;
-    } catch (error) {
-      if (!isDuplicateKey(error)) throw error;
-    }
+  for (let delay = 20; !(await takeLease(m, _id, holder)); delay = Math.min(delay * 2, 500)) {
     if (Date.now() + delay > deadline) throw new Error(`MongoStore: app ${appId}'s snapshot lease is still held`);
     await sleep(delay);
   }
