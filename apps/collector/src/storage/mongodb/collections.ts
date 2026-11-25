@@ -416,10 +416,18 @@ export interface LiveShareDoc {
   at: Date;
 }
 
-/** Collector secrets generated on first start, for the in-bot and `npx shardlens dashboard` runners. */
+/**
+ * What the in-bot runner and `npx shardlens dashboard` generate on an app's first start (`mongodb.ts`), so every
+ * process of the bot, and the dashboard, use the same keys. `_id` is `app:<app ID>`.
+ */
 export interface SecretDoc {
   _id: string;
-  value: string;
+  sessionSecret: string;
+  settingsKey: string;
+  ingestKey: string;
+  readKey: string;
+  activityKey: string;
+  createdAt: Date;
 }
 
 export interface Collections {

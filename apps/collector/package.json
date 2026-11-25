@@ -27,12 +27,19 @@
       "types": "./dist/embedded.d.ts",
       "default": "./dist/embedded.js"
     },
+    "./mongodb": {
+      "types": "./dist/mongodb.d.ts",
+      "default": "./dist/mongodb.js"
+    },
     "./package.json": "./package.json"
   },
   "typesVersions": {
     "*": {
       "embedded": [
         "./dist/embedded.d.ts"
+      ],
+      "mongodb": [
+        "./dist/mongodb.d.ts"
       ]
     }
   },

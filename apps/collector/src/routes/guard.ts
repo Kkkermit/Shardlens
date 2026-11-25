@@ -23,8 +23,8 @@ export async function requireReader(deps: Deps, req: FastifyRequest, reply: Fast
 /**
  * Settings, keys and alerts need a person: a Discord session for the app owner or a team member (or an extra admin).
  * So does audit data in the dashboard; outside it, an activity key reads the activity log (`routes/privacy.ts`).
- * Read-key sessions can look at analytics but cannot change anything or see who ran what. State-changing requests
- * also need the CSRF header.
+ * Read-key sessions can look at analytics but cannot change anything or see who ran what. A sign-in link's session can
+ * do everything the owner can. State-changing requests also need the CSRF header.
  */
 export async function requireAdmin(
   deps: Deps,
@@ -36,6 +36,15 @@ export async function requireAdmin(
   if (!session) {
     await reply.code(401).send({ error: 'unauthorized' });
     return undefined;
+  }
+  if (session.method === 'link') {
+    if (opts.mutate && !hasCsrfHeader(req)) {
+      await reply.code(403).send({ error: 'csrf' });
+      return undefined;
+    }
+    // The person who printed the link holds the database itself. They have no Discord ID here: logs show '0', as
+    // they do for keys.
+    return { ...session, userId: '0' };
   }
   if (session.method !== 'discord' || !session.userId) {
     await reply.code(403).send({ error: 'discord_login_required' });

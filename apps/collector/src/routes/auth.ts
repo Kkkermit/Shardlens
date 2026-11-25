@@ -112,6 +112,17 @@ export async function authRoutes(app: FastifyInstance, deps: Deps): Promise<void
     return { ok: true };
   });
 
+  const links = deps.signInLinks;
+  if (links) {
+    app.get('/auth/link/:token', authLimit, async (req, reply) => {
+      const { token } = req.params as { token: string };
+      if (!links.redeem(token)) return reply.redirect('/?error=link_expired');
+      await createSession(deps.store, reply, { appId: deps.config.appId, userId: null, method: 'link' }, secure);
+      await deps.store.adminAudit.record(deps.config.appId, null, 'login_link');
+      return reply.redirect('/');
+    });
+  }
+
   app.post('/auth/logout', async (req, reply) => {
     if (!hasCsrfHeader(req)) return reply.code(403).send({ error: 'csrf' });
     await destroySession(deps.store, req, reply);

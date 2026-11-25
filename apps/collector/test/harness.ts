@@ -8,6 +8,7 @@ import { createPool, type Db, migrate } from '../src/db.js';
 import type { Config } from '../src/env.js';
 import { LiveHub } from '../src/live.js';
 import { KeyStore, seedKey } from '../src/security/auth.js';
+import type { SignInLinks } from '../src/security/sign-in-links.js';
 import { buildServer } from '../src/server.js';
 import type { ClickHouseStore } from '../src/storage/clickhouse.js';
 import { openMongo } from '../src/storage/mongodb/connect.js';
@@ -98,6 +99,7 @@ export async function startHarness(
     analytics?: ClickHouseStore;
     extraAdmins?: string[];
     store?: StoreFactory;
+    signInLinks?: SignInLinks;
   } = {},
 ): Promise<Harness> {
   const backing = await (opts.store ?? (onPostgres ? postgresStore : mongoStore))();
@@ -128,7 +130,14 @@ export async function startHarness(
   };
   const live = new LiveHub(store.live.channel());
   await live.start();
-  const app = await buildServer({ config, store, keys: new KeyStore(store), live, analytics: opts.analytics });
+  const app = await buildServer({
+    config,
+    store,
+    keys: new KeyStore(store),
+    live,
+    analytics: opts.analytics,
+    signInLinks: opts.signInLinks,
+  });
   await app.ready();
   return {
     store,

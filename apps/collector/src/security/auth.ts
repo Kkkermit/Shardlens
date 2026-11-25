@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import type { Store } from '../storage/store.js';
+import type { SessionMethod, Store } from '../storage/store.js';
 import { type ApiKeyScope, apiKeyScope } from './keys.js';
 
 const SESSION_COOKIE = 'shardlens_session';
@@ -15,7 +15,8 @@ export interface KeyAuth {
 export interface SessionAuth {
   appId: string;
   userId: string | null;
-  method: 'discord' | 'read_key';
+  /** `link`: opened with a one-time sign-in link (`security/sign-in-links.ts`). */
+  method: SessionMethod;
   /** The read key a read-key session was opened with. */
   keyId?: string | undefined;
 }

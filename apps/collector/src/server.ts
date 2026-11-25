@@ -19,6 +19,7 @@ import { ingestRoutes } from './routes/ingest.js';
 import { privacyRoutes } from './routes/privacy.js';
 import { reportRoutes } from './routes/reports.js';
 import type { KeyStore } from './security/auth.js';
+import type { SignInLinks } from './security/sign-in-links.js';
 import type { ClickHouseStore } from './storage/clickhouse.js';
 import type { SinkMirror } from './storage/sink.js';
 import type { Store } from './storage/store.js';
@@ -34,6 +35,8 @@ export interface Deps {
   sink?: SinkMirror | undefined;
   /** Where log lines go. Default: standard output. */
   logStream?: { write(line: string): void } | undefined;
+  /** One-time sign-in links, for a dashboard run from a terminal or in the bot. Without them, `/auth/link` is absent. */
+  signInLinks?: SignInLinks | undefined;
 }
 
 /** Paths never written to logs. Request and response bodies are never logged at all. */

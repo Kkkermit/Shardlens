@@ -3,6 +3,7 @@ import { type Config, dashboardUrl } from './env.js';
 import { type Jobs, startJobs } from './jobs/scheduler.js';
 import { LiveHub } from './live.js';
 import { KeyStore, seedKey } from './security/auth.js';
+import type { SignInLinks } from './security/sign-in-links.js';
 import { buildServer } from './server.js';
 import type { ClickHouseStore } from './storage/clickhouse.js';
 import { activeSalts } from './storage/salts.js';
@@ -46,8 +47,8 @@ export async function signInProblems(store: Store, config: Config): Promise<stri
 
 interface RunningCollector {
   readonly server: FastifyInstance;
-  /** The address the server listens on, for example `http://127.0.0.1:8080`. */
-  readonly address: string;
+  /** The address the server listens on, for example `http://127.0.0.1:8080`. `undefined` with `listen: false`. */
+  readonly address: string | undefined;
   /** Stops the HTTP server, background jobs and live updates. Does not close the database. */
   stop(): Promise<void>;
 }
@@ -55,12 +56,14 @@ interface RunningCollector {
 /**
  * Bootstrap shared by the standalone collector and embedded mode, after migrations: registers the app and its
  * configured keys, makes sure partitions and salts exist, then starts live updates, the HTTP server and the jobs.
- * `migrationsApplied` (what this start changed in the database) goes into the start-up log line.
+ * `migrationsApplied` (what this start changed in the database) goes into the start-up log line. With `listen: false`
+ * nothing listens, and the API is answered in this process only (`server.inject`): the in-bot MongoDB runner.
  */
 export async function startCollector(
   config: Config,
   store: Store,
   migrationsApplied: readonly string[],
+  opts: { listen?: boolean | undefined; signInLinks?: SignInLinks | undefined } = {},
 ): Promise<RunningCollector> {
   await store.apps.register(config.appId);
   if (config.ingestKey) await seedKey(store, config.appId, config.ingestKey, 'SHARDLENS_INGEST_KEY');
@@ -102,7 +105,15 @@ export async function startCollector(
         config.sink,
       );
     }
-    const app = await buildServer({ config, store, keys: new KeyStore(store), live, analytics, sink });
+    const app = await buildServer({
+      config,
+      store,
+      keys: new KeyStore(store),
+      live,
+      analytics,
+      sink,
+      signInLinks: opts.signInLinks,
+    });
     server = app;
     sink?.start((message) => app.log.warn({ component: 'sink' }, message));
     if (analytics) {
@@ -115,10 +126,12 @@ export async function startCollector(
     }
     live.onWarning((message) => app.log.warn({ component: 'live' }, message));
     if (!liveShared) {
-      app.log.warn('Live tiles are not shared between collector instances yet: LISTEN failed on PostgreSQL. Retrying.');
+      app.log.warn('Live tiles are not shared between collector instances yet: the database did not answer. Retrying.');
     }
     jobs = startJobs(store, app.log, { settingsKey: config.settingsKey, dashboardUrl: dashboardUrl(config) });
-    const address = await app.listen({ port: config.port, host: config.host });
+    let address: string | undefined;
+    if (opts.listen === false) await app.ready();
+    else address = await app.listen({ port: config.port, host: config.host });
     app.log.info(
       {
         appId: config.appId,

@@ -133,7 +133,7 @@ export interface KeyStorage {
   ensureFromEnvironment(key: NewApiKey): Promise<void>;
 }
 
-export type SessionMethod = 'discord' | 'read_key';
+export type SessionMethod = 'discord' | 'read_key' | 'link';
 
 interface NewSession {
   /** SHA-256 of the cookie's token: the token itself is never stored. */

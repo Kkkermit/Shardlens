@@ -130,7 +130,8 @@ export async function api<T>(
 
 export interface Me {
   authenticated: boolean;
-  method: 'discord' | 'read_key' | 'demo' | null;
+  /** `link`: a one-time sign-in link, from whoever runs the dashboard: the owner's rights. */
+  method: 'discord' | 'read_key' | 'link' | 'demo' | null;
   userId: string | null;
   discordLogin: boolean;
   /** A public demo collector: visitors read without signing in. */
