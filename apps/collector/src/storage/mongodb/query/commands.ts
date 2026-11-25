@@ -221,7 +221,8 @@ async function command(m: Mongo, appId: string, spec: Spec<'command'>, now: Date
       },
       {
         $addFields: {
-          base: { $and: [{ $eq: ['$command', spec.name] }, { $in: ['$kind', COMMAND_KINDS] }] },
+          // A literal: a prefix command may be named `$weight`, which in an expression would be a field.
+          base: { $and: [{ $eq: ['$command', { $literal: spec.name }] }, { $in: ['$kind', COMMAND_KINDS] }] },
         },
       },
       {

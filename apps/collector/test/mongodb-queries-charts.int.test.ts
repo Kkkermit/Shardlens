@@ -246,6 +246,20 @@ function templates(): Template[] {
       });
     }
   }
+  // A prefix command named like a field, which a pipeline must read as text.
+  for (const hours of [6, 30, 300]) {
+    const ts = NOW - hours * HOUR;
+    out.push({
+      id: uuidv7(ts),
+      ts,
+      type: 'message_command',
+      command: '$weight',
+      options: [],
+      userId: USERS[1],
+      outcome: 'ok',
+      weight: 2,
+    });
+  }
   // Custom events: journeys for funnels, and properties of every JSON type.
   const props = () =>
     r.pick([
@@ -839,7 +853,15 @@ describe('commands on MongoDB answer as on PostgreSQL', () => {
   });
 
   it('command, for each command and range', async () => {
-    const names = [...COMMANDS.map((c) => c.name), 'warn', 'legacy-stats', '🎲roll', 'ｆｕｌｌ', 'never-ran'];
+    const names = [
+      ...COMMANDS.map((c) => c.name),
+      'warn',
+      'legacy-stats',
+      '🎲roll',
+      'ｆｕｌｌ',
+      '$weight',
+      'never-ran',
+    ];
     const ranges = [RANGES.lastDay, RANGES.month, RANGES.quarter, RANGES.long, RANGES.pastMonth, RANGES.empty];
     await compare(
       names.flatMap((name) => ranges.map((range) => ({ kind: 'command', name, range }))),
