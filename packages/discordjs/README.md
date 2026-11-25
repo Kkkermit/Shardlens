@@ -20,7 +20,8 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 // Your bot's own MongoDB. With a collector on a server instead: { endpoint, apiKey }, and no @shardlens/collector.
 const lens = createShardlens(client, { mongodb: process.env.MONGODB_URI });
 
-// Optional: record handler time and errors.
+// Optional: record handler time and errors. If your listener catches command errors itself (to reply "something went
+// wrong"), wrap the command call inside its try instead: wrap() only sees errors that leave the function it wraps.
 client.on(
   Events.InteractionCreate,
   lens.wrap(async (interaction) => {

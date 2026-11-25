@@ -30,7 +30,10 @@ first start, and from then on stores events as they arrive. It needs Node.js 22.
 
 Nothing about your bot's own data changes. Shardlens's collections all start with `shardlens_`, in the database the
 connection string names (`mongodb+srv://…/mybot` uses `mybot`), or in a database called `shardlens` when it names
-none.
+none. If your bot picks its database with a separate setting (mongoose's `dbName`, say), or its database user may use
+one database only, pass it too: `mongodb: { uri: process.env.MONGODB_URI, database: 'mybot' }`, and
+`npx shardlens dashboard --database mybot`. Shardlens opens at most 5 connections per process (10 while it serves the
+dashboard), beside your bot's own; a `maxPoolSize` in the connection string sets another limit.
 
 ### Sharded bots
 
