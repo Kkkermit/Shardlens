@@ -20,7 +20,9 @@ export interface MongoDBOptions {
    */
   dashboard?:
     | {
+        /** Default 8080. */
         port?: number | undefined;
+        /** Default `127.0.0.1`: only this machine can open the dashboard. */
         host?: string | undefined;
         /** The URL people open the dashboard at, behind a proxy or a domain. */
         publicUrl?: string | undefined;
