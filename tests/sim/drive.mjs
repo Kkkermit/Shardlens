@@ -110,6 +110,12 @@ async function panelMismatches({ panel, url, readKey, range, appId, query }) {
   return failures;
 }
 
+/** The token of the sign-in link `shardlens dashboard` printed for `port`, once it has printed one. */
+const linkToken = (printed, port) =>
+  new RegExp(String.raw`Open http://(?:127\.0\.0\.1|localhost):${port}/auth/link/([\w-]{43})(?![\w-])`).exec(
+    printed,
+  )?.[1];
+
 /**
  * `shardlens dashboard` in the bot's folder, as an owner runs it: from the connection string in the bot's `.env`, it
  * must print a link that signs in once with the owner's rights, read the numbers the image reads, and stop on Ctrl+C.
@@ -119,18 +125,21 @@ async function dashboardCommand({ cliMain, dir, mongodb, mongoUrl, port, log, ra
   const env = { ...process.env };
   delete env[mongodb.env];
   const cli = startNode([cliMain, 'dashboard', '--port', String(port)], { cwd: dir, env, log });
+  // The link is read from what the owner would see in their terminal, and only its token is used: requests go to the
+  // address the sim chose.
+  let printed = '';
+  cli.stdout.on('data', (d) => {
+    printed += d;
+  });
+  const base = `http://127.0.0.1:${port}`;
   const failures = [];
   try {
-    const link = await until(
-      'the sign-in link of shardlens dashboard',
-      async () => /Open (http:\/\/\S+)/.exec(readFileSync(log, 'utf8'))?.[1],
-      60_000,
-    );
+    const token = await until('the sign-in link of shardlens dashboard', async () => linkToken(printed, port), 60_000);
+    const link = `${base}/auth/link/${token}`;
     const signIn = await fetch(link, { redirect: 'manual' });
     const cookie = signIn.headers.get('set-cookie')?.split(';')[0];
     if (signIn.status !== 302 || !cookie)
       return [`shardlens dashboard: its link answered ${signIn.status}, no session`];
-    const base = new URL(link).origin;
     const me = await (await fetch(`${base}/auth/me`, { headers: { cookie } })).json();
     if (me.method !== 'link') failures.push(`shardlens dashboard: signed in as ${me.method}, not with the link`);
     const settings = await fetch(`${base}/v1/settings`, { headers: { cookie } });
