@@ -1,5 +1,55 @@
 # @shardlens/collector
 
+## 1.3.0
+
+### Minor Changes
+
+- 7919676: Keep everything in the MongoDB your bot already uses, with nothing else to run. Install `@shardlens/collector` beside
+  the SDK and give it your connection string:
+
+  ```ts
+  createShardlens(client, { mongodb: process.env.MONGODB_URI });
+  ```
+
+  The collector then runs inside the bot, on your database (Atlas, its free tier included, a replica set or a single
+  server, MongoDB 7.0 or newer), in collections prefixed `shardlens_`. Like the SDK, it needs Node.js 22.12 or newer:
+  the collector package no longer asks for 24.11, embedded mode included. Every process of a sharded bot writes to the
+  same database and shares one set of keys, and the background jobs run in one process at a time. The dashboard, alerts,
+  reports, privacy model and every number are the same as on PostgreSQL.
+
+  - `npx shardlens dashboard`, run in the bot's folder, finds the connection string in your `.env` and serves the
+    dashboard on `127.0.0.1` with a one-time sign-in link. `--env NAME` reads it from the setting your bot calls `NAME`,
+    so a name outside the usual ones needs no `--uri` (and no password in your shell history).
+  - `mongodb: { uri, dashboard: { port } }` serves the dashboard from the bot instead, and logs a sign-in link.
+  - `mongodb: { uri, database }` keeps the collections in a database of your choice, for a database user allowed into
+    one database only (`npx shardlens dashboard --database` reads the same).
+  - Each bot process opens at most 5 connections to MongoDB (10 while it serves the dashboard), unless the connection
+    string sets `maxPoolSize`.
+  - The collector image starts on MongoDB when `DATABASE_URL` is a `mongodb://` or `mongodb+srv://` URL, and then
+    needs no session secret or settings key of its own.
+  - `@shardlens/collector/mongodb` exports `startMongoCollector`, for running it yourself.
+
+  The PostgreSQL collector is unchanged and stays the way to go without MongoDB.
+
+- 7919676: A dashboard started from a terminal or inside a bot signs its owner in with a one-time link: each works once, within
+  15 minutes, and gives the owner's rights, settings included (whoever can see the link already holds the database).
+  Collectors started from the image or with `startEmbeddedCollector` don't offer links. A new migration allows these
+  sessions in PostgreSQL.
+
+### Patch Changes
+
+- 7919676: An alert on the invalid-request share (`invalid_requests_pct`) no longer stops the alert job when it fires. The value
+  came back from PostgreSQL as text, formatting it for the Discord message threw, and the rules after it in that run
+  were not checked.
+- 59dc9bc: The dashboard has a `favicon.ico` and an Apple touch icon besides its SVG favicon, so the Shardlens logo shows in
+  browsers that don't take an SVG icon, such as Safari, and on a phone's home screen.
+- e080470: Batches sent at the same time no longer deadlock. When several shards or processes sent batches at once, two batches
+  counting the same people could wait on each other in PostgreSQL. One of them then failed, and under steady load the
+  collector fell behind and refused most batches. Each batch now writes its unique-user rows and late minutes in one
+  fixed order, and each row once.
+- Updated dependencies [7919676]
+  - @shardlens/core@1.2.0
+
 ## 1.2.0
 
 ### Minor Changes

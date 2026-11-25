@@ -1,5 +1,15 @@
 # sharded-bot
 
+## 0.0.3
+
+### Patch Changes
+
+- Updated dependencies [7919676]
+- Updated dependencies [1b88d8a]
+- Updated dependencies [7919676]
+- Updated dependencies [7919676]
+  - @shardlens/discordjs@1.2.0
+
 ## 0.0.2
 
 ### Patch Changes

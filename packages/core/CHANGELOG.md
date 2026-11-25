@@ -1,5 +1,12 @@
 # @shardlens/core
 
+## 1.2.0
+
+### Minor Changes
+
+- 7919676: `collectorName` sets what warnings call the collector ("can't reach …", "connected to …"), for a `fetch` that
+  answers somewhere other than the endpoint: the SDK's `mongodb` option says MongoDB, not `http://localhost`.
+
 ## 1.1.0
 
 ### Minor Changes
