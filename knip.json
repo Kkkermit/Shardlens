@@ -10,7 +10,8 @@
     },
     "apps/collector": {
       "entry": ["src/cli/*.ts", "scripts/*.mjs"],
-      "ignoreDependencies": ["@shardlens/dashboard"]
+      "ignoreDependencies": ["@shardlens/dashboard"],
+      "ignoreExportsUsedInFile": { "interface": true }
     },
     "apps/dashboard": {
       "entry": ["e2e/**/*.ts"]

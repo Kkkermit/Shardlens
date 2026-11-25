@@ -975,10 +975,13 @@ describe('MongoStore', () => {
         })),
       );
       await m.c.snapshotPending.insertOne({ _id: { appId: APP, shardCount: 2, shard: 0 }, guilds: [], ts: ago(2) });
-      await m.c.adminAudit.insertMany([
-        { _id: '1', ts: ago(400), appId: APP, action: 'old', details: {} },
-        { _id: '2', ts: ago(10), appId: APP, action: 'new', details: {} },
-      ]);
+      // The admin side's documents, with the `_id` the driver gives them, whatever type the admin side keeps.
+      for (const log of [m.c.adminAudit, m.c.accessLog]) {
+        await m.db.collection(log.collectionName).insertMany([
+          { ts: ago(400), appId: APP, action: 'old', details: {}, viewerUserId: '0' },
+          { ts: ago(10), appId: APP, action: 'new', details: {}, viewerUserId: '0' },
+        ]);
+      }
 
       await store.jobs.runRetention(new Date(now));
 
@@ -998,6 +1001,7 @@ describe('MongoStore', () => {
       expect((await m.c.sdkHealth.find().toArray()).map((d) => d._id.instance)).toEqual(['alive:2']);
       expect(await m.c.snapshotPending.countDocuments()).toBe(0);
       expect((await m.c.adminAudit.find().toArray()).map((d) => d.action)).toEqual(['new']);
+      expect((await m.c.accessLog.find().toArray()).map((d) => d.action)).toEqual(['new']);
     });
   });
 
