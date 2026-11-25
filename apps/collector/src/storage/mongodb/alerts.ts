@@ -1,12 +1,14 @@
 import { Binary, type Document, ObjectId } from 'mongodb';
-import { KIND } from '../../ingest/codes.js';
+import { KIND, OUTCOME } from '../../ingest/codes.js';
 import type { AlertFiring, AlertRule, AlertStorage } from '../store.js';
 import type { AlertRuleDoc } from './collections.js';
 import type { Mongo } from './connect.js';
 import { ACK_WEIGHTS, ackQuantile } from './histogram.js';
 import { compareIds, nextId } from './ids.js';
+import { type CountsByWeight, realSumOf } from './query/real-sums.js';
 
 const MINUTE = 60_000;
+const DAY = 1440 * MINUTE;
 
 function toRule(doc: AlertRuleDoc): Omit<AlertRule, 'enabled'> {
   return {
@@ -32,25 +34,21 @@ async function evaluateMetric({ c }: Mongo, appId: string, metric: string, windo
     case 'missed_deadline_rate':
     case 'error_rate': {
       const missed = metric === 'missed_deadline_rate';
-      const failed: Document = missed ? { $in: ['$outcome', [2, 3]] } : { $ne: ['$outcome', 0] };
+      const failed: Document = missed
+        ? { $in: ['$outcome', [OUTCOME.timeout, OUTCOME.no_response]] }
+        : { $ne: ['$outcome', OUTCOME.ok] };
       // Message commands have no deadline to miss, so they don't count towards that rate.
       const scope = missed ? { kind: { $ne: KIND.message_command } } : {};
-      const [g] = await c.interactions
-        .aggregate<{ total: number; failed: number; failedRows: number }>([
+      const runs = await c.interactions
+        .aggregate<CountsByWeight<'runs' | 'failed'>>([
           { $match: { appId, ts: { $gt: since }, ...scope } },
-          {
-            $group: {
-              _id: null,
-              total: { $sum: '$weight' },
-              failed: { $sum: { $cond: [failed, '$weight', 0] } },
-              failedRows: { $sum: { $cond: [failed, 1, 0] } },
-            },
-          },
+          { $group: { _id: '$weight', runs: { $sum: 1 }, failed: { $sum: { $cond: [failed, 1, 0] } } } },
         ])
         .toArray();
       // PostgreSQL's `sum(weight) FILTER (...)` is NULL, not 0, when no row failed: no value, so no rule fires.
-      if (!g || g.failedRows === 0 || g.total === 0) return null;
-      return (100 * g.failed) / g.total;
+      const failures = realSumOf(runs, 'failed');
+      const total = realSumOf(runs, 'runs');
+      return failures === null || !total ? null : (100 * failures) / total;
     }
     case 'p95_ms': {
       const rows = await c.interactions
@@ -75,7 +73,7 @@ async function evaluateMetric({ c }: Mongo, appId: string, metric: string, windo
             $match: {
               '_id.appId': appId,
               '_id.name': 'shard.ping_ms',
-              '_id.ts': { $gt: new Date(now - 1440 * MINUTE) },
+              '_id.ts': { $gt: new Date(now - DAY) },
             },
           },
           { $group: { _id: '$_id.shard', last: { $max: '$_id.ts' } } },
@@ -86,13 +84,13 @@ async function evaluateMetric({ c }: Mongo, appId: string, metric: string, windo
       return g?.n ?? 0;
     }
     case 'interactions_per_min': {
-      const [g] = await c.interactions
-        .aggregate<{ w: number }>([
+      const runs = await c.interactions
+        .aggregate<CountsByWeight<'runs'>>([
           { $match: { appId, ts: { $gt: since } } },
-          { $group: { _id: null, w: { $sum: '$weight' } } },
+          { $group: { _id: '$weight', runs: { $sum: 1 } } },
         ])
         .toArray();
-      return (g?.w ?? 0) / (windowS / 60);
+      return (realSumOf(runs, 'runs') ?? 0) / (windowS / 60);
     }
     case 'identify_remaining': {
       const info = await c.appInfo.findOne({ _id: appId }, { projection: { sessionStartRemaining: 1 } });

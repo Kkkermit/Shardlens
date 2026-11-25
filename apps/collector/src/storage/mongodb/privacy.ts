@@ -4,6 +4,7 @@ import type { PrivacyStorage } from '../store.js';
 import type { AuditLogDoc } from './collections.js';
 import type { Mongo } from './connect.js';
 import { asJson } from './json.js';
+import { guildProfiles } from './query/guild-profiles.js';
 
 const DAY = 86_400_000;
 
@@ -76,7 +77,8 @@ function parseUuid(text: string): UUID {
 
 const bytes = (b: Binary) => Buffer.from(b.buffer);
 
-export function mongoPrivacy({ c }: Mongo): PrivacyStorage {
+export function mongoPrivacy(m: Mongo): PrivacyStorage {
+  const { c } = m;
   return {
     async logAccess(entry) {
       await c.accessLog.insertOne({
@@ -167,13 +169,7 @@ export function mongoPrivacy({ c }: Mongo): PrivacyStorage {
 
       const rows = await c.auditLog.find(filter).sort({ ts: -1, _id: -1 }).limit(limit).toArray();
       const guildIds = [...new Set(rows.flatMap((r) => (r.guildId === undefined ? [] : [r.guildId])))];
-      const guilds =
-        guildIds.length === 0
-          ? []
-          : await c.guilds
-              .find({ _id: { $in: guildIds.map((guildId) => ({ appId, guildId })) } }, { projection: { name: 1 } })
-              .toArray();
-      const names = new Map(guilds.map((g) => [g._id.guildId, g.name ?? '']));
+      const names = new Map((await guildProfiles(m, appId, guildIds)).map((g) => [g.id, g.name]));
       return rows.map((r) => ({
         interactionId: r._id.toHexString(),
         ts: r.ts,

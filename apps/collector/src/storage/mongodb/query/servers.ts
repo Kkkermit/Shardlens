@@ -1,11 +1,13 @@
-import { type Document, Long, MaxKey, MinKey } from 'mongodb';
+import { type Document, Long } from 'mongodb';
 import type { Spec } from '../../../query/spec.js';
-import type { GuildName, QueryAnswer, QueryStorage } from '../../store.js';
+import type { QueryAnswer, QueryStorage } from '../../store.js';
 import type { GuildDoc } from '../collections.js';
 import type { Mongo } from '../connect.js';
+import { guildProfiles } from './guild-profiles.js';
+import { idPrefix } from './id-prefix.js';
 import { rollupSource } from './read-window.js';
 import { currentPeriodStart } from './salt-period-start.js';
-import { localDay, offsetPieces, utcDay } from './wall-clock.js';
+import { dayText, wallClock } from './zoned-buckets.js';
 
 const DAY = 86_400_000;
 const WEEK = 7 * DAY;
@@ -148,6 +150,44 @@ function pgLower(text: string): string {
   return out;
 }
 
+/** A server and what PostgreSQL's `ORDER BY lower(name), guild_id` sorts it by. */
+interface NameKey {
+  id: string;
+  n: bigint;
+  /** The lowercased name as UTF-8. */
+  key: Buffer;
+}
+
+/**
+ * The IDs of one page of the servers `filter` matches, by name, and how many it matches. By the lowercased name's
+ * bytes, as PostgreSQL orders text under the C collation and musl's (its Alpine images): MongoDB's `$toLower`
+ * lowercases ASCII only, so the order is worked out here. Only the servers up to the end of the page are kept while
+ * the names stream past, so memory grows with the page asked for, not with the number of servers.
+ */
+async function pageByName(
+  m: Mongo,
+  filter: Document,
+  spec: Spec<'servers'>,
+): Promise<{ total: number; ids: string[] }> {
+  const dir = spec.order === 'asc' ? 1 : -1;
+  const order = (a: NameKey, b: NameKey) => dir * Buffer.compare(a.key, b.key) || (a.n < b.n ? -1 : a.n > b.n ? 1 : 0);
+  const keep = spec.offset + spec.limit;
+  const first: NameKey[] = [];
+  let total = 0;
+  for await (const g of m.c.guilds.find(filter, { projection: { name: 1 } })) {
+    total++;
+    first.push({ id: g._id.guildId, n: BigInt(g._id.guildId), key: Buffer.from(pgLower(g.name)) });
+    if (first.length >= 2 * keep) first.sort(order).splice(keep);
+  }
+  return {
+    total,
+    ids: first
+      .sort(order)
+      .slice(spec.offset, keep)
+      .map((k) => k.id),
+  };
+}
+
 async function servers(m: Mongo, appId: string, spec: Spec<'servers'>, now: Date): Promise<QueryAnswer<'servers'>> {
   const filter = await serverFilter(m, appId, spec, now);
   if (!filter) return { total: 0, rows: [] };
@@ -187,16 +227,7 @@ async function servers(m: Mongo, appId: string, spec: Spec<'servers'>, now: Date
   }
 
   if (spec.sort === 'name') {
-    // By the lowercased name's bytes, as PostgreSQL orders text under the C collation and musl's (its Alpine images):
-    // MongoDB's `$toLower` lowercases ASCII only, so the order is worked out here from the names alone.
-    const names = await m.c.guilds.find(filter, { projection: { name: 1 } }).toArray();
-    const keyed = names.map((g) => ({
-      id: g._id.guildId,
-      n: BigInt(g._id.guildId),
-      key: Buffer.from(pgLower(g.name)),
-    }));
-    keyed.sort((a, b) => dir * Buffer.compare(a.key, b.key) || (a.n < b.n ? -1 : a.n > b.n ? 1 : 0));
-    const ids = keyed.slice(spec.offset, spec.offset + spec.limit).map((k) => k.id);
+    const { total, ids } = await pageByName(m, filter, spec);
     const [docs, runs] = await Promise.all([
       m.c.guilds
         .find({ _id: { $in: ids.map((guildId) => ({ appId, guildId })) } }, { projection: ROW_FIELDS })
@@ -205,7 +236,7 @@ async function servers(m: Mongo, appId: string, spec: Spec<'servers'>, now: Date
     ]);
     const byId = new Map(docs.map((d) => [d._id.guildId, d]));
     const rows = ids.flatMap((id) => byId.get(id) ?? []);
-    return { total: names.length, rows: rows.map((r) => serverRow(r, runs.get(r._id.guildId) ?? 0)) };
+    return { total, rows: rows.map((r) => serverRow(r, runs.get(r._id.guildId) ?? 0)) };
   }
 
   const key = { members: '$memberCount', joined: '$joinedAt', last_active: '$lastCommandAt' }[spec.sort];
@@ -242,13 +273,7 @@ async function server(m: Mongo, appId: string, spec: Spec<'server'>, now: Date):
     currentPeriodStart(m, appId, now),
     m.c.guilds.findOne({ _id: { appId, guildId } }),
     // The server's history is a range of `_id` (app, server, time, kind), read newest first from the `_id` index.
-    m.c.guildEvents
-      .find({
-        _id: { $gte: { appId, guildId, ts: new MinKey() }, $lte: { appId, guildId, ts: new MaxKey() } },
-      } as Document)
-      .sort({ _id: -1 })
-      .limit(100)
-      .toArray(),
+    m.c.guildEvents.find(idPrefix({ appId, guildId }, 'ts')).sort({ _id: -1 }).limit(100).toArray(),
     m.c.settings.findOne({ _id: { appId, key: 'required_permissions' } }),
   ]);
   if (!g) return { found: false };
@@ -317,7 +342,6 @@ async function growth(m: Mongo, appId: string, spec: Spec<'growth'>, now: Date):
   const from = new Date(spec.range.from);
   const to = new Date(spec.range.to);
   const source = rollupSource(m, from, now);
-  const pieces = offsetPieces(spec.timezone, source.from.getTime(), to.getTime());
   const inRange = { $gte: from, $lt: to };
   const joins = { $eq: ['$metric', 'guild.joins'] };
   const leaves = { $eq: ['$metric', 'guild.leaves'] };
@@ -346,7 +370,7 @@ async function growth(m: Mongo, appId: string, spec: Spec<'growth'>, now: Date):
         { $match: { appId, metric: { $in: ['guild.joins', 'guild.leaves'] }, bucket: { $gte: source.from, $lt: to } } },
         {
           $group: {
-            _id: localDay('$bucket', pieces),
+            _id: dayText(wallClock('$bucket', spec.timezone)),
             joins: sumIf(joins),
             leaves: sumIf(leaves),
             joinsDetected: sumIf({ $and: [joins, detected] }),
@@ -444,7 +468,7 @@ async function growth(m: Mongo, appId: string, spec: Spec<'growth'>, now: Date):
     m.c.gauges
       .aggregate<{ _id: string; value: number }>([
         { $match: { '_id.appId': appId, '_id.name': 'app.approx_guilds', '_id.ts': inRange } },
-        { $group: { _id: utcDay('$_id.ts'), value: { $max: '$value' } } },
+        { $group: { _id: dayText('$_id.ts'), value: { $max: '$value' } } },
         { $sort: { _id: 1 } },
       ])
       .toArray(),
@@ -496,19 +520,11 @@ async function growth(m: Mongo, appId: string, spec: Spec<'growth'>, now: Date):
   };
 }
 
-async function guildNames(m: Mongo, appId: string, ids: readonly string[]): Promise<GuildName[]> {
-  if (ids.length === 0) return [];
-  const docs = await m.c.guilds
-    .find({ _id: { $in: ids.map((guildId) => ({ appId, guildId })) } }, { projection: { name: 1, icon: 1 } })
-    .toArray();
-  return docs.map((g) => ({ id: g._id.guildId, name: g.name, icon: g.icon ?? null }));
-}
-
 export function mongoServersQueries(m: Mongo): Pick<QueryStorage, 'servers' | 'server' | 'growth' | 'guildNames'> {
   return {
     servers: (appId, spec, now) => servers(m, appId, spec, now),
     server: (appId, spec, now) => server(m, appId, spec, now),
     growth: (appId, spec, now) => growth(m, appId, spec, now),
-    guildNames: (appId, ids) => guildNames(m, appId, ids),
+    guildNames: (appId, ids) => guildProfiles(m, appId, ids),
   };
 }

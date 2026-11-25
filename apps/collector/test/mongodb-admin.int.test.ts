@@ -20,8 +20,9 @@ import { mongoStore } from './harness.js';
 
 /*
  * MongoStore's admin side: keys, sessions, settings, alerts, reports, privacy, the admin audit, live tiles and the job
- * leader. Where PostgreSQL computes an answer from the same rows, the same scenario runs through `PostgresStore` too and
- * the answers must be equal, down to the last bit of a float.
+ * leader, and the single-event reads a sampled bot's weights reach. Where PostgreSQL computes an answer from the same
+ * rows, the same scenario runs through `PostgresStore` too and the answers must be equal, down to the last bit of a
+ * float.
  */
 
 const DAY = 86_400_000;
@@ -35,21 +36,13 @@ let db: Db;
 let pg: PostgresStore;
 let appSeq = 0;
 
-/** A new app in both stores, as `apps.register` adds one (the write side's `apps` is not in this branch). */
+/** A new app in both stores. */
 async function addApp(opts: { timezone?: string; name?: string } = {}): Promise<string> {
   const appId = String(3_000_000_000_000_000_000n + BigInt(++appSeq));
-  await pg.apps.register(appId, opts.name);
-  if (opts.timezone) await pg.apps.update(appId, { timezone: opts.timezone });
-  await m.c.apps.insertOne({
-    _id: appId,
-    name: opts.name ?? '',
-    mode: 'privacy',
-    saltPeriod: 'month',
-    timezone: opts.timezone ?? 'UTC',
-    rawRetentionDays: 35,
-    baselineDone: false,
-    createdAt: new Date(),
-  });
+  for (const store of [pg, mongo]) {
+    await store.apps.register(appId, opts.name);
+    if (opts.timezone) await store.apps.update(appId, { timezone: opts.timezone });
+  }
   return appId;
 }
 
@@ -73,6 +66,7 @@ interface Run {
   /** Milliseconds before now. */
   ago: number;
   kind?: number;
+  command?: string;
   outcome?: number;
   ackMs?: number;
   weight?: number;
@@ -87,9 +81,20 @@ async function addInteractions(appId: string, runs: Run[]) {
     const id = uuidv7(ts);
     const userHash = r.userHash ?? Buffer.alloc(16, 1);
     await db.query(
-      `INSERT INTO interactions (id, ts, app_id, env, kind, locale, user_hash, salt_period, premium, outcome, ack_ms, weight)
-       VALUES ($1, $2, $3, 'production', $4, 'en-GB', $5, '2026-11', false, $6, $7, $8)`,
-      [id, new Date(ts), appId, r.kind ?? 1, userHash, r.outcome ?? 0, r.ackMs ?? null, r.weight ?? 1],
+      `INSERT INTO interactions (id, ts, app_id, env, kind, command, locale, user_hash, salt_period, premium, outcome,
+                                 ack_ms, weight)
+       VALUES ($1, $2, $3, 'production', $4, $5, 'en-GB', $6, '2026-11', false, $7, $8, $9)`,
+      [
+        id,
+        new Date(ts),
+        appId,
+        r.kind ?? 1,
+        r.command ?? null,
+        userHash,
+        r.outcome ?? 0,
+        r.ackMs ?? null,
+        r.weight ?? 1,
+      ],
     );
     await m.c.interactions.insertOne({
       _id: new UUID(id),
@@ -97,6 +102,7 @@ async function addInteractions(appId: string, runs: Run[]) {
       appId,
       env: 'production',
       kind: r.kind ?? 1,
+      ...(r.command !== undefined && { command: r.command }),
       options: [],
       locale: 'en-GB',
       userHash: new Binary(userHash),
@@ -104,7 +110,34 @@ async function addInteractions(appId: string, runs: Run[]) {
       premium: false,
       outcome: r.outcome ?? 0,
       ...(r.ackMs !== undefined && { ackMs: r.ackMs }),
-      weight: r.weight ?? 1,
+      // As ingest stores it: PostgreSQL's `real`.
+      weight: Math.fround(r.weight ?? 1),
+    });
+  }
+}
+
+/** The same custom events in both stores, one a minute going back from now. */
+async function addCustomEvents(
+  appId: string,
+  events: { name: string; props: Record<string, string | number | boolean>; weight: number }[],
+) {
+  const now = Date.now();
+  for (const [i, e] of events.entries()) {
+    const ts = new Date(now - (i + 1) * 60_000);
+    const id = uuidv7(ts.getTime());
+    const userHash = Buffer.alloc(16, i % 3);
+    await db.query(
+      'INSERT INTO custom_events (id, ts, app_id, name, props, user_hash, weight) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+      [id, ts, appId, e.name, JSON.stringify(e.props), userHash, e.weight],
+    );
+    await m.c.customEvents.insertOne({
+      _id: new UUID(id),
+      ts,
+      appId,
+      name: e.name,
+      props: e.props,
+      userHash: new Binary(userHash),
+      weight: Math.fround(e.weight),
     });
   }
 }
@@ -531,6 +564,50 @@ describe('alerts', () => {
     expect(await mongo.alerts.metricValue(quiet, 'error_rate', 600)).toBeNull();
     expect(await mongo.alerts.metricValue(busy, 'stale_shards', 600)).toBe(1);
     expect(await mongo.alerts.metricValue(busy, 'invalid_requests_pct', 60)).toBe(1.32);
+  });
+});
+
+describe('a bot sampled at 30 %', () => {
+  // Every event weighs 1 / 0.3, which no power of two divides: PostgreSQL adds such weights in float4, rounding at
+  // every row, and after 7 of them its sum is no longer the exact sum rounded once.
+  const weight = Math.fround(1 / 0.3);
+
+  it('adds up weights as PostgreSQL adds a `real` column', async () => {
+    const appId = await addApp();
+    await addInteractions(
+      appId,
+      Array.from({ length: 7 }, (_, i) => ({ ago: (i + 1) * 60_000, command: 'roll', outcome: i % 3 ? 0 : 1, weight })),
+    );
+    await addCustomEvents(
+      appId,
+      Array.from({ length: 7 }, () => ({ name: 'spin', props: { colour: 'red' }, weight })),
+    );
+    const now = new Date();
+    const range = { from: new Date(now.getTime() - DAY).toISOString(), to: now.toISOString() };
+    const command = { kind: 'command', name: 'roll', range } as const;
+    const fromPg = await pg.query.command(appId, command, now);
+    expect(fromPg.totals.runs).toBe(23.33333396911621);
+    expect(await mongo.query.command(appId, command, now)).toEqual(fromPg);
+    const reliability = { kind: 'reliability', range } as const;
+    const [pgHealth, mongoHealth] = await Promise.all([
+      pg.query.reliability(appId, reliability, now),
+      mongo.query.reliability(appId, reliability, now),
+    ]);
+    expect([mongoHealth.totals, mongoHealth.errorsByCode]).toEqual([pgHealth.totals, pgHealth.errorsByCode]);
+    for (const spec of [
+      { kind: 'events', range },
+      { kind: 'eventProps', name: 'spin', range },
+      { kind: 'eventProps', name: 'spin', range, prop: 'colour' },
+    ] as const) {
+      const answer = (store: Store) =>
+        spec.kind === 'events' ? store.query.events(appId, spec, now) : store.query.eventProps(appId, spec, now);
+      expect(await answer(mongo), spec.kind).toEqual(await answer(pg));
+    }
+    for (const metric of ['error_rate', 'interactions_per_min']) {
+      expect(await mongo.alerts.metricValue(appId, metric, 600), metric).toBe(
+        await pg.alerts.metricValue(appId, metric, 600),
+      );
+    }
   });
 });
 
@@ -1199,6 +1276,51 @@ describe('live tiles', () => {
     }
     expect(await m.c.liveListeners.countDocuments()).toBe(0);
   }, 60_000);
+
+  it('sends a share again under its first time when the reply to its write was lost', async () => {
+    await m.c.liveShares.deleteMany({});
+    const shares = m.c.liveShares;
+    let lose = true;
+    const lossy = {
+      updateOne: async (...args: Parameters<typeof shares.updateOne>) => {
+        const written = await shares.updateOne(...args);
+        if (!lose) return written;
+        lose = false;
+        throw new Error('connection reset');
+      },
+    } as unknown as Collection<LiveShareDoc>;
+    const watcher = mongo.live.channel();
+    const publisher = liveWith({ liveShares: lossy }).channel();
+    const got: LiveShare[] = [];
+    await watcher.subscribe(
+      (s) => got.push(s),
+      () => undefined,
+    );
+    await publisher.subscribe(
+      () => undefined,
+      () => undefined,
+    );
+    try {
+      watcher.listen?.(true);
+      await until(async () => (await m.c.liveListeners.countDocuments()) === 1);
+      const s = second();
+      await expect(publisher.publish({ instance: 'p', appId: '1', counts: [[s, 3, 1]] })).rejects.toThrow();
+      const [first] = await m.c.liveShares.find().toArray();
+      if (!first) throw new Error('the write whose reply was lost was not stored');
+      await new Promise((r) => setTimeout(r, 1_100));
+      await publisher.publish({ instance: 'p', appId: '1', counts: [[s + 1, 2, 0]] });
+      // Stamped again, the first share would come back to a watcher once it no longer remembers its ID.
+      expect((await m.c.liveShares.findOne({ _id: first._id }))?.at).toEqual(first.at);
+      await until(() => got.length === 2);
+      expect(got.flatMap((g) => g.counts).sort((a, b) => a[0] - b[0])).toEqual([
+        [s, 3, 1],
+        [s + 1, 2, 0],
+      ]);
+    } finally {
+      await publisher.stop();
+      await watcher.stop();
+    }
+  });
 
   it('reads back the last 15 minutes when a stream opens, and nothing older', async () => {
     await m.c.liveShares.deleteMany({});

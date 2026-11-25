@@ -1,9 +1,9 @@
-import { type Document, MaxKey, MinKey } from 'mongodb';
 import type { QueryAnswer, QueryStorage, SettingValues } from '../../store.js';
 import type { Mongo } from '../connect.js';
+import { idPrefix } from './id-prefix.js';
 import { premiumShare } from './premium-share.js';
 import { rawFrom } from './read-window.js';
-import { localDay, offsetPieces, utcDay } from './wall-clock.js';
+import { dayText, wallClock } from './zoned-buckets.js';
 
 const DAY = 86_400_000;
 
@@ -113,7 +113,6 @@ async function premium(m: Mongo, appId: string, range: Range, now: Date): Promis
 async function installs(m: Mongo, appId: string, range: Range, timezone: string): Promise<QueryAnswer<'installs'>> {
   const from = new Date(range.from);
   const to = new Date(range.to);
-  const pieces = offsetPieces(timezone, from.getTime(), to.getTime());
   const authorized = { $eq: ['$type', 'APPLICATION_AUTHORIZED'] };
   const countIf = (cond: unknown) => ({ $sum: { $cond: [cond, 1, 0] } });
   const [daily, scopes, approx, info] = await Promise.all([
@@ -122,7 +121,7 @@ async function installs(m: Mongo, appId: string, range: Range, timezone: string)
         { $match: { appId, ts: { $gte: from, $lt: to } } },
         {
           $group: {
-            _id: localDay('$ts', pieces),
+            _id: dayText(wallClock('$ts', timezone)),
             userInstalls: countIf({ $and: [authorized, { $eq: ['$integrationType', 1] }] }),
             userRemovals: countIf({ $eq: ['$type', 'APPLICATION_DEAUTHORIZED'] }),
             serverInstalls: countIf({ $and: [authorized, { $eq: ['$integrationType', 0] }] }),
@@ -142,7 +141,7 @@ async function installs(m: Mongo, appId: string, range: Range, timezone: string)
     m.c.gauges
       .aggregate<{ _id: string; value: number }>([
         { $match: { '_id.appId': appId, '_id.name': 'app.approx_user_installs', '_id.ts': { $gte: from, $lt: to } } },
-        { $group: { _id: utcDay('$_id.ts'), value: { $max: '$value' } } },
+        { $group: { _id: dayText('$_id.ts'), value: { $max: '$value' } } },
         { $sort: { _id: 1 } },
       ])
       .toArray(),
@@ -167,13 +166,7 @@ async function badge(m: Mongo, appId: string, metric: string): Promise<number | 
   if (metric === 'users-monthly') {
     // The latest salt period's count: the app's whole-period counts are a range of `_id`, read from its end.
     const latest = await m.c.uniqueCounts
-      .find({
-        _id: {
-          $gte: { appId, grain: 'month', startDay: new MinKey() },
-          $lte: { appId, grain: 'month', startDay: new MaxKey() },
-        },
-        '_id.scope': 'global',
-      } as Document)
+      .find({ ...idPrefix({ appId, grain: 'month' }, 'startDay'), '_id.scope': 'global' })
       .sort({ _id: -1 })
       .limit(1)
       .toArray();

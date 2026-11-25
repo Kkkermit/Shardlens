@@ -4,7 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { seedKey } from '../src/security/auth.js';
 import { dimsKey, type RollupDoc, rollupId } from '../src/storage/mongodb/collections.js';
-import { offsetPieces } from '../src/storage/mongodb/query/wall-clock.js';
+import { wallTime } from '../src/storage/mongodb/zoned-time.js';
 import {
   APP_ID,
   envelope,
@@ -52,16 +52,28 @@ const hourOf = (ms: number) => Math.floor(ms / HOUR) * HOUR;
 const dayOf = (ms: number) => Math.floor(ms / DAY) * DAY;
 const minuteOf = (ms: number) => Math.floor(ms / MINUTE) * MINUTE;
 
-/** Every clock change of the zones with summer time in the last 400 days. */
+/** The instants in the last 400 days at which the zone's clocks changed, found an hour at a time, then to the second. */
+function clockChanges(zone: string): number[] {
+  const offset = (t: number) => wallTime(t, zone) - t;
+  const changes: number[] = [];
+  for (let t = Math.floor(ago(400 * DAY) / HOUR) * HOUR; t < NOW; t += HOUR) {
+    if (offset(t) === offset(t + HOUR)) continue;
+    let [lo, hi] = [t / 1000, (t + HOUR) / 1000];
+    while (hi - lo > 1) {
+      const mid = Math.floor((lo + hi) / 2);
+      if (offset(mid * 1000) === offset(t)) lo = mid;
+      else hi = mid;
+    }
+    changes.push(hi * 1000);
+  }
+  return changes;
+}
+
 const DST_ZONES = ['America/New_York', 'Europe/London', 'Australia/Lord_Howe'] as const;
-const CHANGES = Object.fromEntries(
-  DST_ZONES.map((zone) => [
-    zone,
-    offsetPieces(zone, ago(400 * DAY), NOW)
-      .slice(1)
-      .map((p) => p.start),
-  ]),
-) as Record<(typeof DST_ZONES)[number], number[]>;
+const CHANGES = Object.fromEntries(DST_ZONES.map((zone) => [zone, clockChanges(zone)])) as Record<
+  (typeof DST_ZONES)[number],
+  number[]
+>;
 
 type Event = Record<string, unknown>;
 /** Events from one bot process. `user` fields hold a person's number until each collector's salt hashes it. */

@@ -5,9 +5,26 @@ import type { Mongo } from './connect.js';
 import { isDuplicateKey } from './duplicate-key.js';
 import { compareIds, nextId } from './ids.js';
 
+type NewKey = Parameters<KeyStorage['create']>[0];
+
 export function mongoKeys(m: Mongo): KeyStorage {
   const { c } = m;
   const audit = mongoAdminAudit(m);
+
+  /** Stores the key under the next ID, and returns the ID. */
+  const insert = async (key: NewKey, sha256: Binary): Promise<string> => {
+    const id = await nextId(c, 'api_keys');
+    await c.apiKeys.insertOne({
+      _id: id,
+      appId: key.appId,
+      scope: key.scope,
+      sha256,
+      label: key.label,
+      createdAt: new Date(),
+    });
+    return id;
+  };
+
   return {
     async findActive(sha256) {
       const key = await c.apiKeys.findOne(
@@ -39,18 +56,7 @@ export function mongoKeys(m: Mongo): KeyStorage {
       }));
     },
 
-    async create(key) {
-      const id = await nextId(c, 'api_keys');
-      await c.apiKeys.insertOne({
-        _id: id,
-        appId: key.appId,
-        scope: key.scope,
-        sha256: new Binary(key.sha256),
-        label: key.label,
-        createdAt: new Date(),
-      });
-      return id;
-    },
+    create: (key) => insert(key, new Binary(key.sha256)),
 
     async revoke(appId, id) {
       const res = await c.apiKeys.updateOne(
@@ -66,16 +72,8 @@ export function mongoKeys(m: Mongo): KeyStorage {
       if (found?.revokedAt) return;
       let id = found?._id;
       if (id === undefined) {
-        id = await nextId(c, 'api_keys');
         try {
-          await c.apiKeys.insertOne({
-            _id: id,
-            appId: key.appId,
-            scope: key.scope,
-            sha256,
-            label: key.label,
-            createdAt: new Date(),
-          });
+          id = await insert(key, sha256);
         } catch (error) {
           // Another collector stored the same value at the same moment, and replaces the older keys itself.
           if (isDuplicateKey(error)) return;

@@ -257,7 +257,9 @@ class MongoLiveChannel implements LiveChannel {
                 instance: { $literal: share.instance },
                 appId: { $literal: share.appId },
                 counts: { $literal: share.counts },
-                at: '$$NOW',
+                // A retry keeps the time of a write whose reply was lost: stamped again, the share would be read
+                // again by an instance that has forgotten its ID by then.
+                at: { $ifNull: ['$at', '$$NOW'] },
               },
             },
           ],

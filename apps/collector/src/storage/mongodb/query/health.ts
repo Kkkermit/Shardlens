@@ -1,16 +1,23 @@
 import type { Document } from 'mongodb';
-import { KIND } from '../../../ingest/codes.js';
+import { KIND, OUTCOME } from '../../../ingest/codes.js';
 import { QueryError } from '../../../query/error.js';
 import type { Spec } from '../../../query/spec.js';
 import type { QueryAnswer, QueryStorage } from '../../store.js';
 import type { Mongo } from '../connect.js';
 import { ACK_WEIGHTS, ackQuantile } from '../histogram.js';
-import { sumHistograms } from '../rollup-sources.js';
-import { histQuantile } from './bucket-quantile.js';
 import { rawFrom, rollupSource } from './read-window.js';
-import { realRatio, realSum, type WeightRows } from './real-sums.js';
+import {
+  type CountsByWeight,
+  countWhenRan,
+  type KeyWeights,
+  realRatio,
+  realSumOf,
+  summed,
+  weightsBy,
+} from './real-sums.js';
+import { HIST_ARRAY, HIST_SUMS, histQuantile } from './rollup-reads.js';
 import { sdkInstances } from './sdk-instances.js';
-import { offsetPieces, wallClock } from './wall-clock.js';
+import { clockText, truncWall, wallClock } from './zoned-buckets.js';
 
 const MINUTE = 60_000;
 const DAY = 86_400_000;
@@ -95,7 +102,6 @@ async function gauge(m: Mongo, appId: string, spec: Spec<'gauge'>): Promise<Quer
   // Every shard and process reports its own samples. They are combined minute by minute (added up, or averaged for
   // a latency) before the minutes are averaged into the interval, keeping one process per slot in each minute.
   const additive = ADDITIVE_GAUGES.has(spec.name);
-  const pieces = offsetPieces(spec.timezone, from.getTime(), to.getTime());
   const samples = (shard: Document) => ({
     $match: { '_id.appId': appId, '_id.name': spec.name, '_id.ts': { $gte: from, $lt: to }, '_id.shard': shard },
   });
@@ -163,15 +169,7 @@ async function gauge(m: Mongo, appId: string, spec: Spec<'gauge'>): Promise<Quer
       },
       {
         $group: {
-          _id: {
-            t: {
-              $dateToString: {
-                date: { $dateTrunc: { date: wallClock('$_id.m', pieces), unit: spec.interval } },
-                format: '%Y-%m-%dT%H:%M:%S',
-              },
-            },
-            s: '$_id.s',
-          },
+          _id: { t: clockText(truncWall(wallClock('$_id.m', spec.timezone), spec.interval)), s: '$_id.s' },
           minutes: { $push: { m: '$_id.m', v: '$v' } },
           max: { $max: '$mx' },
         },
@@ -259,24 +257,34 @@ async function bursts(m: Mongo, appId: string, spec: Spec<'bursts'>, now: Date):
   return { rows: (result?.rows ?? []).map((r) => ({ minute: r.minute, runs: r.runs, median: result!.median })) };
 }
 
-/** Interactions by weight and what the totals count, for PostgreSQL's float4 sums of weights (`real-sums.ts`). */
-interface RunGroup {
-  _id: { w: number; outcome: number; slow: boolean; acked: boolean };
-  n: number;
-}
+type RunFigure = 'runs' | 'missed' | 'noResponse' | 'errors' | 'slow' | 'answered';
 
-function runTotals(groups: readonly RunGroup[], ack: readonly { _id: number; w: number }[]): Reliability['totals'] {
-  const weights = (keep: (k: RunGroup['_id']) => boolean): WeightRows[] =>
-    groups.filter((g) => keep(g._id)).map((g) => ({ w: g._id.w, n: g.n }));
-  const ran = groups.some((g) => g.n > 0);
-  // `countWhenRan`: 0 when none matched, `null` only when nothing ran.
-  const counted = (keep: (k: RunGroup['_id']) => boolean) => (ran ? (realSum(weights(keep)) ?? 0) : null);
+const countIf = (condition: unknown) => ({ $sum: { $cond: [condition, 1, 0] } });
+
+/** Interactions by weight, counted towards each figure of the totals. */
+const RUNS_BY_WEIGHT: Document = {
+  $group: {
+    _id: '$weight',
+    runs: { $sum: 1 },
+    missed: countIf({ $in: ['$outcome', [OUTCOME.timeout, OUTCOME.no_response]] }),
+    noResponse: countIf({ $eq: ['$outcome', OUTCOME.no_response] }),
+    errors: countIf({ $eq: ['$outcome', OUTCOME.error] }),
+    slow: countIf({ $gt: ['$ackMs', 3000] }),
+    answered: countIf({ $ne: [{ $ifNull: ['$ackMs', null] }, null] }),
+  },
+};
+
+function runTotals(
+  runs: readonly CountsByWeight<RunFigure>[],
+  ack: readonly { _id: number; w: number }[],
+): Reliability['totals'] {
+  const sum = (figure: RunFigure) => realSumOf(runs, figure);
   return {
-    runs: realSum(weights(() => true)),
-    missedDeadlines: counted((k) => k.outcome === 2 || k.outcome === 3),
-    noResponse: counted((k) => k.outcome === 3),
-    errors: counted((k) => k.outcome === 1),
-    over3sRate: realRatio(realSum(weights((k) => k.slow)) ?? 0, realSum(weights((k) => k.acked))),
+    runs: sum('runs'),
+    missedDeadlines: countWhenRan(runs, 'missed'),
+    noResponse: countWhenRan(runs, 'noResponse'),
+    errors: countWhenRan(runs, 'errors'),
+    over3sRate: realRatio(sum('slow') ?? 0, sum('answered')),
     p50Ms: ackQuantile(ack, 0.5),
     p95Ms: ackQuantile(ack, 0.95),
     p99Ms: ackQuantile(ack, 0.99),
@@ -339,7 +347,7 @@ async function reliability(
           failures: number;
           failing: number;
           retries: number;
-          hist: number[] | null;
+          p95: number | null;
         }[];
         limits: { _id: { scope: string; route: string }; count: number; maxRetryAfter: number | null }[];
       }>([
@@ -357,12 +365,12 @@ async function reliability(
                   failures: { $sum: { $cond: [{ $gte: ['$dims.status', 400] }, '$count', 0] } },
                   failing: { $sum: { $cond: [{ $gte: ['$dims.status', 400] }, 1, 0] } },
                   retries: { $sum: '$sum' },
-                  hists: { $push: '$hist' },
+                  ...HIST_SUMS,
                 },
               },
               { $sort: { calls: -1, '_id.method': 1, '_id.route': 1 } },
               { $limit: 50 },
-              { $project: { calls: 1, failures: 1, failing: 1, retries: 1, hist: sumHistograms('$hists') } },
+              { $project: { calls: 1, failures: 1, failing: 1, retries: 1, p95: histQuantile([...HIST_ARRAY], 0.95) } },
             ],
             limits: [
               { $match: { metric: 'rest.ratelimits' } },
@@ -416,38 +424,21 @@ async function reliability(
       .toArray(),
     sdkInstances(m, appId),
   ]);
-  const [[runs], process] = await Promise.all([
+  const [[single], process] = await Promise.all([
     m.c.interactions
       .aggregate<{
-        groups: RunGroup[];
+        runs: CountsByWeight<RunFigure>[];
         ack: { _id: number; w: number }[];
-        codes: { _id: { key: string; w: number }; n: number }[];
+        codes: KeyWeights<string>[];
       }>([
         { $match: { appId, ts: { $gte: rf, $lt: to }, kind: { $ne: KIND.message_command } } },
         {
           $facet: {
-            groups: [
-              {
-                $group: {
-                  _id: {
-                    w: '$weight',
-                    outcome: '$outcome',
-                    slow: { $gt: ['$ackMs', 3000] },
-                    acked: { $ne: [{ $ifNull: ['$ackMs', null] }, null] },
-                  },
-                  n: { $sum: 1 },
-                },
-              },
-            ],
+            runs: [RUNS_BY_WEIGHT],
             ack: ACK_WEIGHTS,
             codes: [
-              { $match: { outcome: { $in: [1, 2] } } },
-              {
-                $group: {
-                  _id: { key: { $ifNull: [{ $toString: '$errorCode' }, '$errorClass', 'unknown'] }, w: '$weight' },
-                  n: { $sum: 1 },
-                },
-              },
+              { $match: { outcome: { $in: [OUTCOME.error, OUTCOME.timeout] } } },
+              ...weightsBy({ $ifNull: [{ $toString: '$errorCode' }, '$errorClass', 'unknown'] }, 10),
             ],
           },
         },
@@ -455,23 +446,18 @@ async function reliability(
       .toArray(),
     processGauges(m, appId, newest, now),
   ]);
-  const codes = new Map<string, WeightRows[]>();
-  for (const c of runs?.codes ?? []) codes.set(c._id.key, [...(codes.get(c._id.key) ?? []), { w: c._id.w, n: c.n }]);
   const used = budget?.used ?? 0;
   return {
     from: rf.toISOString(),
-    totals: runTotals(runs?.groups ?? [], runs?.ack ?? []),
-    errorsByCode: [...codes]
-      .map(([key, weights]) => ({ key, value: realSum(weights) ?? 0 }))
-      .sort((a, b) => b.value - a.value || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
-      .slice(0, 10),
+    totals: runTotals(single?.runs ?? [], single?.ack ?? []),
+    errorsByCode: summed(single?.codes ?? []),
     routes: (rest?.routes ?? []).map((r) => ({
       method: r._id.method,
       route: r._id.route,
       calls: r.calls,
       failures: r.failing > 0 ? r.failures : null,
       retries: r.retries,
-      p95Ms: histQuantile(r.hist, 0.95),
+      p95Ms: r.p95,
     })),
     rateLimits: (rest?.limits ?? []).map((r) => ({
       scope: r._id.scope,

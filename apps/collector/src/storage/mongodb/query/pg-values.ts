@@ -2,25 +2,9 @@ import type { Document } from 'mongodb';
 
 /*
  * PostgreSQL's arithmetic and text where they differ from JavaScript's or MongoDB's, so that answers read from MongoDB
- * equal PostgreSQL's (`postgres/query/`). Weights are `real` there, so `sum(weight)` over single events is a `real`,
- * and a share of two such sums a `real` division.
+ * equal PostgreSQL's (`postgres/query/`). Sums of event weights, which PostgreSQL adds as `real`, are in
+ * `real-sums.ts`.
  */
-
-/** `sum(weight)` of single events, a `real`. */
-export const real = (sum: number): number => Math.fround(sum);
-
-/** `sum(weight)` of single events, `null` when there were none (`sum` over no rows). */
-export const realOrNull = (sum: number, rows: number): number | null => (rows > 0 ? Math.fround(sum) : null);
-
-/**
- * `coalesce(sum(weight) FILTER (…), 0) / nullif(sum(weight) FILTER (…), 0)` (`totals-sql.ts`): a `real` divided by a
- * `real`, `null` when nothing matches `whole`. The double quotient of two `real`s rounded to a `real` is the `real`
- * quotient: a double has more than twice a `real`'s precision.
- */
-export function realShare(part: number, whole: number): number | null {
-  const of = Math.fround(whole);
-  return of === 0 ? null : Math.fround(Math.fround(part) / of);
-}
 
 /** A positive double's exact value as `digits` × 10^−`scale`. */
 function exactDecimal(x: number): { digits: bigint; scale: number } {

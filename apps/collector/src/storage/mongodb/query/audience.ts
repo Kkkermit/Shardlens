@@ -1,4 +1,3 @@
-import { type Document, MaxKey, MinKey } from 'mongodb';
 import { KIND } from '../../../ingest/codes.js';
 import { decodeValue } from '../../../query/dimensions.js';
 import type { Spec } from '../../../query/spec.js';
@@ -19,18 +18,16 @@ type Audience = QueryAnswer<'audience'>;
 const isoDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
 /**
- * The app's everyone-counts of one grain with a first day in [first, last]: a range of `_id` (app, grain, first day,
- * scope, scope key), so the `_id` index finds them, with the other scopes of those days left out after.
+ * The app's everyone-counts of one grain whose first day is from `first` to `last`, oldest first. Each day's is read
+ * by its `_id`: a range of them would also read the counts of every command and server kept under the same days.
  */
 function everyone(m: Mongo, appId: string, grain: UniqueCountDoc['_id']['grain'], first: string, last: string) {
+  const ids: UniqueCountDoc['_id'][] = [];
+  for (let day = Date.parse(first); day <= Date.parse(last); day += DAY) {
+    ids.push({ appId, grain, startDay: isoDay(day), scope: 'global', scopeKey: '*' });
+  }
   return m.c.uniqueCounts
-    .find({
-      _id: {
-        $gte: { appId, grain, startDay: first, scope: new MinKey() },
-        $lte: { appId, grain, startDay: last, scope: new MaxKey() },
-      },
-      '_id.scope': 'global',
-    } as Document)
+    .find({ _id: { $in: ids } })
     .sort({ _id: 1 })
     .toArray();
 }
