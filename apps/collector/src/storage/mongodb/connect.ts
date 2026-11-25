@@ -1,11 +1,13 @@
 import { type Db, MongoClient } from 'mongodb';
+import { ServerClock } from './clock.js';
 import { type Collections, collections } from './collections.js';
 
-/** A connected client, its database and the collections MongoStore keeps there. */
+/** A connected client, its database, the collections MongoStore keeps there and the server's clock. */
 export interface Mongo {
   client: MongoClient;
   db: Db;
   c: Collections;
+  clock: ServerClock;
 }
 
 /** A MongoDB connection string, as opposed to PostgreSQL's. */
@@ -31,6 +33,10 @@ export async function openMongo(
     opts.maxPoolSize !== undefined && !/[?&]maxPoolSize=/i.test(url) ? { maxPoolSize: opts.maxPoolSize } : {};
   const client = new MongoClient(url, { serverSelectionTimeoutMS: 10_000, appName, ...pool });
   await client.connect();
-  const db = client.db(opts.database ?? databaseName(url));
-  return { client, db, c: collections(db) };
+  return mongoOn(client, client.db(opts.database ?? databaseName(url)));
+}
+
+/** What MongoStore works on, for a client connected already. */
+export function mongoOn(client: MongoClient, db: Db): Mongo {
+  return { client, db, c: collections(db), clock: new ServerClock(db) };
 }

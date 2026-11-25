@@ -59,6 +59,11 @@ recompute is idempotent and late events are handled the way PostgreSQL handles t
 as on PostgreSQL, deleting by time with each app's settings as they stand; sessions and live-tile shares expire by TTL
 index. Indexes are created when their layout version changes, so a start costs one read.
 
+**One clock.** Every process of a bot runs a collector on its own host's clock, and one of them, the holder of a lease
+in `shardlens_leases`, runs the background jobs. Lateness, skew and the rollup windows are judged by MongoDB's clock,
+measured from each process (`Store.now`), and leases expire by the server's `$$NOW`, so a host whose clock is a few
+minutes off loses no rollups and takes no lease early.
+
 **Same privacy model.** User IDs are hashed in the bot with the period's salt, as before. Salts live in
 `shardlens_salts` and are deleted seven days after their period ends, as on PostgreSQL, which makes the hashes they
 produced unlinkable; unique-user rows go with them. The audit key is never stored in MongoDB (an environment variable

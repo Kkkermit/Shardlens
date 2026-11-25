@@ -67,7 +67,7 @@ export function startJobs(
   };
 
   const rollups = async () => {
-    const started = new Date();
+    const started = new Date(store.now());
     const { skipped } = await store.jobs.runRollups(started, { since: lastRollups });
     lastRollups = started;
     if (skipped.length > 0)

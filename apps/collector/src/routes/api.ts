@@ -26,7 +26,7 @@ export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void>
       saltPeriod: a.saltPeriod,
       salts: salts.map((s) => ({ period: s.period, salt: s.secret.toString('base64url') })),
       sampling: sampling ?? {},
-      serverTime: new Date().toISOString(),
+      serverTime: new Date(deps.store.now()).toISOString(),
     };
   });
 

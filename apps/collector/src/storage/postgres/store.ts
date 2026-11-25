@@ -83,6 +83,11 @@ export class PostgresStore implements Store {
     await this.#db.query('SELECT 1 FROM pgmigrations LIMIT 1');
   }
 
+  /** The host's: a server collector runs on one host (or on servers kept in sync), embedded mode in one process. */
+  now(): number {
+    return Date.now();
+  }
+
   refusedInput(error: unknown): string | undefined {
     return isRefusedInput(error) ? error.code : undefined;
   }

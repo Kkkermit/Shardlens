@@ -118,7 +118,7 @@ export async function ingestRoutes(app: FastifyInstance, deps: Deps): Promise<vo
           return reply.code(400).send({ error: 'audit_mode_disabled' });
         }
 
-        const now = Date.now();
+        const now = deps.store.now();
         const skew = now - Date.parse(envelope.sentAt);
         const shift = Math.abs(skew) > MAX_SKEW_MS ? correction(`${auth.appId}:${envelope.source.instance}`, skew) : 0;
         if (shift !== 0) req.log.warn({ skewMs: skew }, 'clock skew corrected for batch');

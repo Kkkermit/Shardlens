@@ -79,7 +79,11 @@ export class MongoStore implements Store {
 
   /** Nothing to make ahead of time but the indexes, which the database keeps once made (`indexes.ts`). */
   async prepare(): Promise<void> {
-    await prepareIndexes(this.mongo);
+    await Promise.all([prepareIndexes(this.mongo), this.mongo.clock.measure()]);
+  }
+
+  now(): number {
+    return this.mongo.clock.now();
   }
 
   async ready(): Promise<void> {

@@ -2,17 +2,18 @@ import { randomBytes } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { BUCKETS, bucketOf, periodLabel, uuidv7 } from '@shardlens/core';
 import { Event } from '@shardlens/schema';
-import { Binary, BSON, MongoClient, MongoServerError, UUID } from 'mongodb';
+import { Binary, BSON, type Db, MongoClient, MongoServerError, UUID } from 'mongodb';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GUILD_EVENT } from '../src/ingest/codes.js';
 import { runSalts } from '../src/jobs/scheduler.js';
-import { collections, LAYOUT_VERSION } from '../src/storage/mongodb/collections.js';
-import { databaseName, type Mongo, openMongo } from '../src/storage/mongodb/connect.js';
+import { ServerClock } from '../src/storage/mongodb/clock.js';
+import { LAYOUT_VERSION } from '../src/storage/mongodb/collections.js';
+import { databaseName, type Mongo, mongoOn, openMongo } from '../src/storage/mongodb/connect.js';
 import { nextId } from '../src/storage/mongodb/ids.js';
 import { MongoStore } from '../src/storage/mongodb/store.js';
 import { ensureSalt } from '../src/storage/salts.js';
 import type { IngestContext, Store } from '../src/storage/store.js';
-import { guildInfo, interaction, mongoStore, snowflakeOnShard } from './harness.js';
+import { envelope, guildInfo, ingest, interaction, mongoStore, snowflakeOnShard, startHarness } from './harness.js';
 
 const APP = '1234567890123456789';
 const MINUTE = 60_000;
@@ -721,6 +722,37 @@ describe('MongoStore', () => {
       expect(await rollup('1m', { metric: 'custom.behind' })).toHaveLength(1);
     });
 
+    it("rolls up the events of a bot process whose host's clock is behind MongoDB's", async () => {
+      // Every process of a bot runs a collector on its own host's clock; one of them runs the rollups.
+      const behind = 4 * MINUTE;
+      const h = await startHarness({
+        store: async () => {
+          const own = await openMongo(backing.databaseUrl.replace(/\/[^/?]*$/, '/shardlens_skewed'));
+          const db = { command: async () => ({ localTime: new Date(Date.now() + behind) }) } as unknown as Db;
+          return {
+            store: new MongoStore({ ...own, clock: new ServerClock(db) }),
+            databaseUrl: backing.databaseUrl,
+            mongo: own,
+            close: () => own.client.close(),
+          };
+        },
+      });
+      try {
+        const sent = Date.now();
+        const res = await ingest(
+          h.app,
+          envelope([{ id: uuidv7(sent), ts: sent, type: 'custom', name: 'skewed', props: {} }]),
+        );
+        expect(res.json()).toMatchObject({ accepted: 1 });
+        // The job leader, on a host whose clock agrees with MongoDB's, runs a minute later.
+        const now = h.store.now();
+        await h.store.jobs.runRollups(new Date(now + MINUTE), { since: new Date(now) });
+        expect(await h.mongo.c.rollup1m.find({ metric: 'custom.skewed' }).toArray()).toHaveLength(1);
+      } finally {
+        await h.close();
+      }
+    });
+
     it('keeps the mark of a late event that lands while a run is working', async () => {
       const bucket = minuteOf(Date.now() - 30 * MINUTE);
       const late = (offset: number) =>
@@ -1133,7 +1165,7 @@ describe('MongoStore', () => {
         client.on('commandStarted', (e) => {
           if (e.commandName !== 'endSessions') names.push(e.commandName);
         });
-        await fn(new MongoStore({ client, db, c: collections(db) }));
+        await fn(new MongoStore(mongoOn(client, db)));
         return names;
       } finally {
         await client.close();

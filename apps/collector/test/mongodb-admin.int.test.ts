@@ -7,8 +7,8 @@ import { createPool, type Db, migrate } from '../src/db.js';
 import { runAlerts } from '../src/jobs/alerts.js';
 import { ALERT_METRICS } from '../src/routes/admin.js';
 import { auditCipher } from '../src/security/crypto.js';
-import { collections, type LiveShareDoc } from '../src/storage/mongodb/collections.js';
-import type { Mongo } from '../src/storage/mongodb/connect.js';
+import type { LiveShareDoc } from '../src/storage/mongodb/collections.js';
+import { type Mongo, mongoOn } from '../src/storage/mongodb/connect.js';
 import { POSTGRES_BUCKET_UPPER_MS } from '../src/storage/mongodb/histogram.js';
 import { mongoLeader } from '../src/storage/mongodb/leader.js';
 import { mongoLive } from '../src/storage/mongodb/live.js';
@@ -1269,7 +1269,7 @@ describe('live tiles', () => {
 
   it('says it could not subscribe when the server is unreachable, and warns once per outage', async () => {
     const client = new MongoClient('mongodb://127.0.0.1:9/x', { serverSelectionTimeoutMS: 300 });
-    const lonely = mongoLive({ client, db: client.db('x'), c: collections(client.db('x')) }).channel();
+    const lonely = mongoLive(mongoOn(client, client.db('x'))).channel();
     expect(
       await lonely.subscribe(
         () => undefined,

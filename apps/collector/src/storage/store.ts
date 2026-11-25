@@ -38,6 +38,12 @@ export interface Store {
   /** Resolves when the store can serve (`GET /readyz`); rejects when it can't. */
   ready(): Promise<void>;
   /**
+   * The time by the database's clock, in epoch milliseconds. Ingest judges skew and lateness by it and the job leader
+   * places its rollup windows by it, so collectors on hosts whose clocks disagree (one in each process of a bot, on
+   * MongoDB) still agree on which minutes need rolling up.
+   */
+  now(): number;
+  /**
    * The store's code for an error that means it refused the input itself (a number out of range, text it can't hold),
    * which no retry can fix: the request is answered 400, and an ingest batch is written event by event. `undefined`
    * for any other error.
