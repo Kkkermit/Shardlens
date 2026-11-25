@@ -5,9 +5,9 @@
  * the dashboard. Every process of a sharded bot can run one against the same database: they share keys, and
  * background jobs run in one of them at a time.
  */
-import type { FastifyInstance } from 'fastify';
 import { startCollector } from './app.js';
 import type { Config } from './env.js';
+import { inProcessFetch } from './in-process-fetch.js';
 import { SignInLinks } from './security/sign-in-links.js';
 import { MONGODB_URL, openMongo } from './storage/mongodb/connect.js';
 import { appSecrets, onlyApp, seedGeneratedKeys } from './storage/mongodb/secrets.js';
@@ -88,33 +88,6 @@ export interface MongoCollector {
   readonly activityKey: string;
   /** Stops the jobs and the dashboard, and closes the connection. */
   close(): Promise<void>;
-}
-
-/** A `fetch` answered by `app.inject`, with the ingest key: no socket, no port. */
-function inProcessFetch(app: FastifyInstance, ingestKey: string): typeof fetch {
-  return async (input, init) => {
-    const request = new Request(input, init);
-    request.signal.throwIfAborted();
-    const url = new URL(request.url);
-    const headers = Object.fromEntries(request.headers);
-    headers.authorization = `Bearer ${ingestKey}`;
-    // Answers come back as they are: nothing here would decompress one.
-    delete headers['accept-encoding'];
-    const body = request.method === 'GET' || request.method === 'HEAD' ? undefined : await request.arrayBuffer();
-    const res = await app.inject({
-      method: request.method as 'GET',
-      url: `${url.pathname}${url.search}`,
-      headers,
-      ...(body ? { payload: Buffer.from(body) } : {}),
-    });
-    const out = new Headers();
-    for (const [name, value] of Object.entries(res.headers)) {
-      if (value === undefined) continue;
-      for (const one of Array.isArray(value) ? value : [value]) out.append(name, String(one));
-    }
-    const empty = res.statusCode === 204 || res.statusCode === 304 || request.method === 'HEAD';
-    return new Response(empty ? null : res.rawPayload, { status: res.statusCode, headers: out });
-  };
 }
 
 /**
