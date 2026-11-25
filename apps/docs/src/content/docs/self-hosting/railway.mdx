@@ -6,9 +6,13 @@ sidebar:
 ---
 
 import { Aside, Steps } from '@astrojs/starlight/components';
+import CopyPrompt from '../../../components/CopyPrompt.astro';
+import collector from '../../../../prompts/collector.md?raw';
 
 Railway builds the collector from the repository using `deploy/railway.json` and gives you HTTPS on a
 `*.up.railway.app` domain or your own.
+
+<CopyPrompt prompt={collector} path="prompts/collector.md" what="setting up the collector" />
 
 <Steps>
 

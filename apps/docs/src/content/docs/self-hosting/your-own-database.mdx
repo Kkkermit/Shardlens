@@ -13,8 +13,14 @@ there, so you can query your bot's usage with the tools you already have, join i
 longer.
 
 The dashboard still runs on the collector's own store: PostgreSQL with Docker, or the built-in database in
-[embedded mode](../embedded/), which needs no database server at all. Its rollups, histograms, unique-user counts and
-funnels are built on PostgreSQL, so your database holds a copy of the events rather than replacing it.
+[embedded mode](../embedded/), which needs no database server at all. Your database holds a copy of the events rather
+than replacing it.
+
+<Aside type="tip" title="Your bot uses MongoDB?">
+  Then you need no collector and no copy: Shardlens can keep everything, dashboard included, in that MongoDB
+  ([On your MongoDB](../mongodb/)). A copy is for a collector on PostgreSQL that should also write to a database of
+  yours.
+</Aside>
 
 ## Turn it on
 

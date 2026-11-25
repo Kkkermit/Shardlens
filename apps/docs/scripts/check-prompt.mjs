@@ -1,15 +1,18 @@
-// Type-checks the TypeScript samples in prompts/install.md against the real packages, so the prompt people paste
-// into their agent can't drift from the API.
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+// Type-checks the TypeScript samples in every prompt (prompts/*.md) against the real packages, so the prompts people
+// paste into their agent can't drift from the API.
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const out = `${root}node_modules/.cache/prompt-check/`;
 
-const prompt = readFileSync(`${root}prompts/install.md`, 'utf8');
-const samples = [...prompt.matchAll(/```ts\r?\n([\s\S]*?)```/g)].map((match) => match[1]);
-if (samples.length === 0) throw new Error('No TypeScript samples found in prompts/install.md');
+const prompts = readdirSync(`${root}prompts`).filter((name) => name.endsWith('.md'));
+const samples = prompts.flatMap((name) => {
+  const found = [...readFileSync(`${root}prompts/${name}`, 'utf8').matchAll(/```ts\r?\n([\s\S]*?)```/g)];
+  return found.map((match, i) => ({ name: `${name.replace(/\.md$/, '')}-${i + 1}`, code: match[1] }));
+});
+if (samples.length === 0) throw new Error('No TypeScript samples found in prompts/');
 
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
@@ -29,8 +32,8 @@ declare global {
 }
 `,
 );
-const files = samples.map((code, i) => {
-  const file = `${out}sample-${i + 1}.ts`;
+const files = samples.map(({ name, code }) => {
+  const file = `${out}${name}.ts`;
   writeFileSync(file, `${code}\nexport {};\n`);
   return file;
 });
@@ -56,7 +59,7 @@ if (diagnostics.length > 0) {
       getNewLine: () => '\n',
     }),
   );
-  console.error(`prompts/install.md: ${diagnostics.length} problem(s) in its TypeScript samples`);
+  console.error(`prompts/: ${diagnostics.length} problem(s) in their TypeScript samples`);
   process.exit(1);
 }
-console.log(`prompts/install.md: ${samples.length} TypeScript samples type-check`);
+console.log(`prompts/: ${samples.length} TypeScript samples in ${prompts.length} prompts type-check`);

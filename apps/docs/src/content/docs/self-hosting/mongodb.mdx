@@ -8,6 +8,8 @@ sidebar:
 import { Aside, Code, TabItem, Tabs } from '@astrojs/starlight/components';
 import mongodb from '../../../../snippets/mongodb.ts?raw';
 import mongodbDashboard from '../../../../snippets/mongodb-dashboard.ts?raw';
+import CopyPrompt from '../../../components/CopyPrompt.astro';
+import install from '../../../../prompts/install.md?raw';
 
 If your bot already uses MongoDB, Shardlens can keep everything there. The collector runs inside your bot, on the
 connection string your bot already has: no server, Docker, domain, PostgreSQL or keys to look after. The dashboard,
@@ -17,6 +19,10 @@ It works with MongoDB Atlas (its free tier included), a replica set or a single 
 later.
 
 ## Set it up
+
+The install prompt sets this up for you in a coding agent, on your bot's MongoDB when it has one:
+
+<CopyPrompt prompt={install} path="install.md" what="adding Shardlens to your bot on its MongoDB" />
 
 <Tabs syncKey="pkg">
   <TabItem label="npm">`npm install @shardlens/discordjs @shardlens/collector`</TabItem>

@@ -7,8 +7,14 @@ sidebar:
 
 import { Aside, Code } from '@astrojs/starlight/components';
 import script from '../../../../snippets/no-dashboard-script.ts?raw';
+import CopyPrompt from '../../../components/CopyPrompt.astro';
+import collector from '../../../../prompts/collector.md?raw';
 
 Two choices: where the data lives, and where you look at the numbers. You can change either later.
+
+A coding agent can choose for you: this prompt picks the setup that fits your bot and walks through it.
+
+<CopyPrompt prompt={collector} path="prompts/collector.md" what="choosing and setting up the collector" />
 
 ## Where the data lives
 

@@ -6,8 +6,12 @@ sidebar:
 ---
 
 import { Aside, FileTree, Steps } from '@astrojs/starlight/components';
+import CopyPrompt from '../../../components/CopyPrompt.astro';
+import collector from '../../../../prompts/collector.md?raw';
 
 The standard deployment runs three containers on one server:
+
+<CopyPrompt prompt={collector} path="prompts/collector.md" what="setting up the collector on a server" />
 
 - **Caddy** terminates HTTPS with an automatic certificate and forwards to the collector.
 - **The collector** receives events, runs the background jobs and serves the dashboard and API.

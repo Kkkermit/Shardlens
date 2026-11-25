@@ -8,10 +8,16 @@ sidebar:
 import { Aside, Code, Steps, TabItem, Tabs } from '@astrojs/starlight/components';
 import mongodb from '../../../../snippets/mongodb.ts?raw';
 import quickStart from '../../../../snippets/quick-start.ts?raw';
+import CopyPrompt from '../../../components/CopyPrompt.astro';
+import install from '../../../../prompts/install.md?raw';
 
 You need a bot on discord.js 14.12 or later, or 15, on Node 22.12 or later. If your bot already uses MongoDB (Atlas,
 including its free tier, or your own server), Shardlens keeps everything there: no server, Docker, domain or keys.
 No MongoDB? [Run the collector on a server](#without-mongodb-run-the-collector-on-a-server) instead.
+
+Or let your coding agent set it up: copy the prompt and paste it with your bot's project open.
+
+<CopyPrompt prompt={install} path="install.md" what="adding Shardlens to your bot" />
 
 <Steps>
 

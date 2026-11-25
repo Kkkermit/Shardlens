@@ -55,13 +55,18 @@ Audit mode has to be switched on in **both** places. One side alone does nothing
    Put the result in `.env` as `SHARDLENS_AUDIT_KEY` and restart the collector. Keep a copy somewhere safe: audit data
    can't be read without it.
 
+   On [your bot's MongoDB](../../self-hosting/mongodb/), the key goes to the SDK instead, from your environment, and is
+   never stored in the database: `mongodb: { uri: process.env.MONGODB_URI, auditKey: process.env.SHARDLENS_AUDIT_KEY }`.
+   Every process of the bot, and the collector image if you run one on the same database, needs the same key.
+
 2. **Choose "Identified" on the collector**
 
    In the dashboard, **Settings → User identity → Mode: Identified**. Only a Discord sign-in (owner or team) can
    change it.
 
    Running the collector [without the Shardlens dashboard](../../getting-started/choose-your-setup/)? Set
-   `SHARDLENS_MODE=audit` in its `.env` instead (`mode: 'audit'` for an embedded collector) and restart it.
+   `SHARDLENS_MODE=audit` in its `.env` instead (`mode: 'audit'` for an embedded collector) and restart it. On MongoDB,
+   the SDK's `mode: 'audit'` (step 3) decides it.
    `npx shardlens init … --dashboard own --identify-users` writes both lines for you.
 
 3. **Switch the SDK to audit mode**

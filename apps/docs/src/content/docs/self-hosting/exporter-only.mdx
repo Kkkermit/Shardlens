@@ -10,12 +10,17 @@ import ExporterMetricsTable from '../../../components/ExporterMetricsTable.astro
 import otel from '../../../../snippets/exporter-otel.ts?raw';
 import prometheus from '../../../../snippets/exporter-prometheus.ts?raw';
 import registry from '../../../../snippets/exporter-prometheus-registry.ts?raw';
+import CopyPrompt from '../../../components/CopyPrompt.astro';
+import otelPrompt from '../../../../prompts/exporter-otel.md?raw';
+import prometheusPrompt from '../../../../prompts/exporter-prometheus.md?raw';
 
 If you already run Prometheus or an OpenTelemetry pipeline, Shardlens can send its bot-health metrics there. You can
 use an exporter **instead of** a collector (leave out `endpoint` and `apiKey`) or **as well as** one.
 
 <Tabs syncKey="exporter">
   <TabItem label="Prometheus">
+
+<CopyPrompt prompt={prometheusPrompt} path="prompts/exporter-prometheus.md" what="exporting bot health to Prometheus" />
 
 <Tabs syncKey="pkg">
   <TabItem label="pnpm">`pnpm add @shardlens/discordjs @shardlens/exporter-prometheus prom-client`</TabItem>
@@ -53,6 +58,8 @@ If your bot already serves `/metrics`, register Shardlens's metrics on your own 
 
   </TabItem>
   <TabItem label="OpenTelemetry">
+
+<CopyPrompt prompt={otelPrompt} path="prompts/exporter-otel.md" what="exporting bot health through OpenTelemetry" />
 
 <Tabs syncKey="pkg">
   <TabItem label="pnpm">`pnpm add @shardlens/discordjs @shardlens/exporter-otel @opentelemetry/api`</TabItem>

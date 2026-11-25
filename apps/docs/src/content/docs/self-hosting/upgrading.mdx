@@ -7,6 +7,12 @@ sidebar:
 
 import { Steps } from '@astrojs/starlight/components';
 
+## On your bot's MongoDB
+
+Update the packages in your bot (`npm install @shardlens/discordjs@latest @shardlens/collector@latest`) and restart
+it. A release that changes the collections' indexes creates them on the first start, once; nothing else to run. Update
+every process of a sharded bot together, and the collector image too if you run one on the same database.
+
 ## Upgrading the collector
 
 <Steps>

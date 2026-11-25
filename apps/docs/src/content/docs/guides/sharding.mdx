@@ -73,5 +73,18 @@ With discord-hybrid-sharding (in its default `mode: 'process'`), do the same for
   every shard.
 
 <Aside type="note">
-  Use the same ingest key in every process. The collector tells processes apart by host and shard.
+  With a collector on a server, use the same ingest key in every process. The collector tells processes apart by host
+  and shard.
 </Aside>
+
+## On your bot's MongoDB
+
+With [`mongodb`](../../self-hosting/mongodb/), each process runs a collector of its own against the same database:
+
+- **Placement** is as above: once per process, in the shard or cluster file.
+- **Keys** are generated once, by whichever process starts first, and shared by all of them through the database.
+- **Background jobs** (rollups, unique users, retention, alerts, reports) run in one process at a time, on a lease in
+  MongoDB renewed three times a minute. If that process stops, another takes over within about a minute and a half.
+- **Connections:** each process opens at most 5 to MongoDB (10 while it serves the dashboard), beside the bot's own.
+- **The dashboard**, if the bot serves it with `mongodb: { uri, dashboard: { port } }`, is served by the first process
+  to take the port; the others leave it alone. `npx shardlens dashboard` needs none of this.

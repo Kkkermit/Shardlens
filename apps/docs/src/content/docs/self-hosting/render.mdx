@@ -6,9 +6,13 @@ sidebar:
 ---
 
 import { Aside, Steps } from '@astrojs/starlight/components';
+import CopyPrompt from '../../../components/CopyPrompt.astro';
+import collector from '../../../../prompts/collector.md?raw';
 
 The repository has a Render Blueprint (`deploy/render.yaml`) that creates the collector as a Docker web service and a
 Render PostgreSQL 17 database, wires `DATABASE_URL`, and generates the session secret and settings key.
+
+<CopyPrompt prompt={collector} path="prompts/collector.md" what="setting up the collector" />
 
 <Steps>
 

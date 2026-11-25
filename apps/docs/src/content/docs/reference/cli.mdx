@@ -3,8 +3,13 @@ title: CLI
 description: The shardlens command-line tool — init, keys, privacy, dashboard and doctor.
 ---
 
+import CopyPrompt from '../../../components/CopyPrompt.astro';
+import cli from '../../../../prompts/cli.md?raw';
+
 The `shardlens` package is a small CLI for setting up and checking an install. It needs Node.js 22.12 or newer and has
 no dependencies. Run it with `npx`, no installation needed:
+
+<CopyPrompt prompt={cli} path="prompts/cli.md" what="using the shardlens CLI" />
 
 ```sh
 npx shardlens <command> [options]

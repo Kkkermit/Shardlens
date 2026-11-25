@@ -28,8 +28,10 @@ h1:2026-11:3f9a1c…   (version, salt period, 16 bytes of HMAC-SHA-256 as hex)
 ## Salts are destroyed
 
 The collector creates a salt for each period and serves it to the SDK. **Seven days after a period ends, its salt is
-destroyed**: the secret is deleted and that period's unique-user table is dropped. From then on, nobody (including you)
-can link those hashes back to a user, or link two periods together.
+destroyed**: the secret is deleted and that period's unique-user rows go with it (a dropped table on PostgreSQL, deleted
+documents on MongoDB). From then on, nobody (including you) can link those hashes back to a user, or link two periods
+together. The same holds on [your bot's MongoDB](../../self-hosting/mongodb/): the salts live in `shardlens_salts` and
+are destroyed the same way, and having the database doesn't undo it.
 
 Your bot holds only the salts the collector currently serves: this period's, the previous period's until it is
 destroyed, and the next period's in the last few minutes before it starts, so events at the boundary never wait. When

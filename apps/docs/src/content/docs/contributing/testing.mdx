@@ -14,13 +14,34 @@ Every change comes with tests, and every bug fix with a regression test.
 | Adapter        | `pnpm --filter @shardlens/discordjs test`            | Real discord.js `Client` with raw payloads: each event is recorded, nothing throws |
 | Chaos          | (part of the adapter tests)                          | Collector down, slow, `500`, `429` or killed mid-flush: the bot still answers, memory stays capped, no duplicates |
 | Integration    | `pnpm --filter @shardlens/collector test:int`        | Real PostgreSQL 16 and 17 (Testcontainers): ingest, rollups, salts, retention, auth on every route |
+| Integration on MongoDB | `pnpm --filter @shardlens/collector test:int:mongodb` | The same suites on a standalone MongoDB 7.0 and 8.0 server, plus MongoDB's own: every answer compared with PostgreSQL's for the same data, the job lease, live tiles, the in-bot runner |
 | End to end     | `pnpm --filter @shardlens/dashboard test:e2e`        | A real collector with seeded data: every dashboard page with axe (WCAG 2.1 AA and best practices, light and dark), XSS-safe rendering, CSP, sign-in and sign-out, ended sessions, error states, unknown commands, keyboard focus, browser locale, server list state, failing commands on a server's page, admin gating, audit mode and its links to failed runs |
 | Benchmark      | `pnpm --filter @shardlens/discordjs bench`           | SDK CPU and memory overhead against the targets                    |
-| Simulated installs | `pnpm sim`                                       | The packed packages, installed with npm into four bots that coding agents set up (one of them sharded) and run against a fake Discord: exact counts, no leaked IDs, names, tokens or typed text, clean shutdown (weekly, see `tests/sim/README.md`) |
+| Simulated installs | `pnpm sim`                                       | The packed packages, installed with npm into eight bots that coding agents set up and run against a fake Discord (see below) |
 | Docs           | `pnpm --filter @shardlens/docs build`                | Code samples compile; no broken links                              |
 
 Integration, end-to-end and simulated-install tests need Docker. Before the first end-to-end run, install the browser
 with `pnpm --filter @shardlens/dashboard exec playwright install chromium`.
+
+## Simulated installs
+
+`pnpm sim` tests Shardlens the way bot owners get it: from packed tarballs, installed with npm into eight bots that
+coding agents set up from the [install prompt](../../getting-started/install-with-an-agent/), each run against a
+scripted fake Discord. Four keep their data on a server's collector or in embedded mode (`js-prefix`, `ts-guide`,
+`ts-sharded`, `sapphire`); four keep it in their own MongoDB (`mongo-prefix` in CommonJS with mongoose, `mongo-sharded`
+with `ShardingManager`, `mongo-hybrid` with discord-hybrid-sharding clusters, and `mongo-modular`, a hand-rolled
+modular codebase with internal sharding). For every bot it checks:
+
+- every count the collector serves against what was sent, through the collector's API and through `@shardlens/client`;
+- an outage partway through: the collector stopped, or on MongoDB the database itself, while the bot keeps answering;
+- on MongoDB, that `npx shardlens dashboard` finds the connection string in the bot's `.env`, signs in once with its
+  link and reads the same numbers;
+- that no raw user ID, name, avatar, bot or interaction token, typed text or database password appears in any log,
+  the collector's database or the copy of the events;
+- a clean exit on `SIGINT`, shards and clusters included.
+
+It needs Docker and takes about ten minutes; `pnpm sim mongo-hybrid ts-guide` runs some of the bots. Details are in
+`tests/sim/README.md`. It runs weekly in CI (`.github/workflows/sim.yml`) and on demand.
 
 ## One package at a time
 

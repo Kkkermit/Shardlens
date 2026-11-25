@@ -1,0 +1,112 @@
+---
+title: Packages
+description: What each Shardlens package is for, how to install it, and a prompt to copy for your coding agent.
+sidebar:
+  order: 1.6
+---
+
+import CopyPrompt from '../../../components/CopyPrompt.astro';
+import cli from '../../../../prompts/cli.md?raw';
+import client from '../../../../prompts/client.md?raw';
+import collector from '../../../../prompts/collector.md?raw';
+import otel from '../../../../prompts/exporter-otel.md?raw';
+import prometheus from '../../../../prompts/exporter-prometheus.md?raw';
+import http from '../../../../prompts/http.md?raw';
+import install from '../../../../prompts/install.md?raw';
+
+Each package has a prompt for a coding agent (Claude Code, Cursor, Copilot, Codex): copy it into your agent with the
+project open, or point the agent at its URL. Each is self-contained, and their code samples are type-checked against the
+packages on every build of these docs. Read the agent's diff before you commit it.
+
+## `@shardlens/discordjs`
+
+The SDK for discord.js bots, 14.12 and later and 15. It records interactions, prefix commands, servers, REST and shard
+health, hashes user IDs before anything leaves the bot, and never throws into it. With `mongodb` it keeps everything in
+your bot's own MongoDB; with `endpoint` and `apiKey` it sends to a collector on a server.
+
+```sh
+npm install @shardlens/discordjs @shardlens/collector   # on your bot's MongoDB
+npm install @shardlens/discordjs                        # with a collector on a server
+```
+
+<CopyPrompt prompt={install} path="install.md" what="adding Shardlens to a discord.js bot" />
+
+[Quick start](../quick-start/) · [Configuration](../configuration/) · [SDK reference](../../reference/sdk/readme/)
+
+## `@shardlens/collector`
+
+The collector: ingest, rollups, the query API and the dashboard. It runs inside your bot on its MongoDB (the SDK starts
+it), as a Docker image on PostgreSQL or MongoDB, or inside a small bot in [embedded mode](../../self-hosting/embedded/).
+
+```sh
+npx shardlens init --domain stats.example.com --app-id <your application ID>   # a server with Docker
+```
+
+<CopyPrompt prompt={collector} path="prompts/collector.md" what="setting up the Shardlens collector" />
+
+[Choose your setup](../choose-your-setup/) · [On your MongoDB](../../self-hosting/mongodb/) ·
+[Docker Compose](../../self-hosting/docker-compose/)
+
+## `@shardlens/client`
+
+Reads every number the dashboard shows (and, in audit mode, who ran what) into a dashboard or script of your own.
+Server side only, no dependencies, Web APIs only.
+
+```sh
+npm install @shardlens/client
+```
+
+<CopyPrompt prompt={client} path="prompts/client.md" what="reading Shardlens numbers with @shardlens/client" />
+
+[Use your own dashboard](../../guides/your-own-dashboard/)
+
+## `@shardlens/http`
+
+The SDK for bots that receive interactions over HTTP: Cloudflare Workers, Deno, Bun, or Node with `@discordjs/core`.
+
+```sh
+npm install @shardlens/http
+```
+
+<CopyPrompt prompt={http} path="prompts/http.md" what="adding Shardlens to an HTTP-interaction bot" />
+
+[HTTP bots](../../guides/http-bots/)
+
+## `@shardlens/exporter-prometheus`
+
+Bot health as Prometheus metrics, with or without a collector, with a ready-made Grafana dashboard.
+
+```sh
+npm install @shardlens/exporter-prometheus prom-client
+```
+
+<CopyPrompt prompt={prometheus} path="prompts/exporter-prometheus.md" what="exporting bot health to Prometheus" />
+
+[Exporters only](../../self-hosting/exporter-only/) · [Grafana](../../guides/grafana/)
+
+## `@shardlens/exporter-otel`
+
+Bot health through OpenTelemetry metrics, to OTLP or any vendor your OpenTelemetry SDK exports to.
+
+```sh
+npm install @shardlens/exporter-otel @opentelemetry/api
+```
+
+<CopyPrompt prompt={otel} path="prompts/exporter-otel.md" what="exporting bot health through OpenTelemetry" />
+
+[Exporters only](../../self-hosting/exporter-only/)
+
+## `shardlens`
+
+The command-line tool: `dashboard` for a bot on its MongoDB, `init` for a collector on a server, `doctor`, `keys` and
+`privacy`. No dependencies; run it with `npx`.
+
+```sh
+npx shardlens --help
+```
+
+<CopyPrompt prompt={cli} path="prompts/cli.md" what="using the shardlens CLI" />
+
+[CLI reference](../../reference/cli/)
+
+`@shardlens/core` and `@shardlens/schema` are the parts the others share: you don't install them yourself.

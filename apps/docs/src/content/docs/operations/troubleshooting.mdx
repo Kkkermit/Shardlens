@@ -84,10 +84,33 @@ Discord turns webhook events off when the endpoint keeps failing.
   `SHARDLENS_PUBLIC_URL`.
 - Only the application owner, team members and IDs in `SHARDLENS_EXTRA_ADMINS` get in. Others can use the read key.
 
+## On your bot's MongoDB
+
+Shardlens says what is wrong in one line of the bot's own log, starting with `Shardlens:`:
+
+| The line says | What to do |
+| ------------- | ---------- |
+| `mongodb must be a mongodb:// or mongodb+srv:// connection string` | The setting you pass is empty or something else. Check the bot really has it where `createShardlens` runs, in every shard process. |
+| `the mongodb option needs the collector: npm install @shardlens/collector` | Install `@shardlens/collector` beside the SDK. |
+| `can't reach MongoDB (…)` | The database didn't answer. On Atlas, add the bot host's address under **Network Access**. Events wait in memory meanwhile and arrive once it answers. |
+| `@shardlens/collector did not load: …` | The package is installed but failed to load: the rest of the line says why. It needs Node.js 22.12 or newer. |
+| Nothing, and no data | `dryRun: true` is still set, or nothing has run yet: run a command in a server with the bot, then open the dashboard. |
+
+`npx shardlens dashboard` has its own messages:
+
+- **No MongoDB connection string found:** run it in the bot's folder, or name the bot's setting with `--env NAME`.
+- **@shardlens/collector is not installed here:** run it in the folder where the bot's `node_modules` are.
+- **Shardlens has no data in this database yet:** the bot hasn't started with the `mongodb` option on this database. If
+  the bot passes `database`, pass the same with `--database`.
+- **Several bots keep their Shardlens data in this database:** pass `--app-id`.
+- **Port 8080 is already in use:** the bot may be serving the dashboard itself; pass `--port`.
+- **The link says it expired:** each works once, within 15 minutes. Start the command again for a new one.
+
 ## Collector won't start
 
 The log names each invalid variable. The usual causes are a short `SHARDLENS_SESSION_SECRET` (32 characters minimum),
 a `SHARDLENS_SETTINGS_KEY` that isn't 32 base64 bytes, or only one of `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET`.
+With a MongoDB `DATABASE_URL`, `CLICKHOUSE_URL` is refused: ClickHouse works with PostgreSQL only.
 
 <Aside type="tip">
   Still stuck? Open a [GitHub discussion](https://github.com/Kkkermit/Shardlens/discussions) with the `doctor` output.

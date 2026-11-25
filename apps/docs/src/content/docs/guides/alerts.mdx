@@ -8,7 +8,8 @@ sidebar:
 import { Aside, Steps } from '@astrojs/starlight/components';
 
 Alerts post to a Discord channel through a webhook when a metric crosses a threshold for a period of time, for example
-"missed deadlines above 1% for 10 minutes".
+"missed deadlines above 1% for 10 minutes". On [your bot's MongoDB](../../self-hosting/mongodb/) they are checked from
+the bot's own processes (one at a time), so they need nothing else running; set them up in `npx shardlens dashboard`.
 
 ## Create an alert
 

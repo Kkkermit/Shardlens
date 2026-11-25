@@ -8,10 +8,14 @@ sidebar:
 import { Aside, Code, TabItem, Tabs } from '@astrojs/starlight/components';
 import activity from '../../../../snippets/own-dashboard-activity.ts?raw';
 import ownDashboard from '../../../../snippets/own-dashboard.ts?raw';
+import CopyPrompt from '../../../components/CopyPrompt.astro';
+import client from '../../../../prompts/client.md?raw';
 
 Already have a web dashboard for your bot? You don't have to send people to a second one. Everything the Shardlens
 dashboard shows is an answer from the collector's API, and `@shardlens/client` asks for the same answers from your own
 backend. The collector keeps doing the collecting, storing and counting; you decide how it looks.
+
+<CopyPrompt prompt={client} path="prompts/client.md" what="reading Shardlens numbers in your dashboard" />
 
 ## 1. Get a read key
 
@@ -22,6 +26,11 @@ Setting up from scratch, `npx shardlens init … --dashboard own` turns the Shar
 With a collector that is already running, use `SHARDLENS_READ_KEY` from its `.env`, or create another key in the
 Shardlens dashboard under **Settings → API keys → New read key** (shown once). You can keep the Shardlens dashboard
 on as well as your own.
+
+On [your bot's MongoDB](../../self-hosting/mongodb/), there is no address to read from until something serves the API:
+run the [collector image](../../self-hosting/mongodb/#keep-the-dashboard-running) on the same database, with
+`SHARDLENS_DASHBOARD=off` if you want none of its pages and your read key in `SHARDLENS_READ_KEY`. Its address is
+`SHARDLENS_URL`.
 
 A read key can run queries and nothing else: it can't send events, change settings or see who ran a command.
 

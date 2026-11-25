@@ -34,7 +34,9 @@ days. The full policy is in
 | SSRF through alert and report webhooks  | Only Discord webhook URLs are accepted, redirects are refused, and the URLs are stored encrypted |
 | Re-identification of hashes             | HMAC with secret salts that are destroyed after their period                                                       |
 | Audit data exposure                     | AES-256-GCM with a key outside the database, 90-day maximum retention, access log, exact lookups only             |
-| Database exposure                       | PostgreSQL is not published by Docker Compose                                                                      |
+| Database exposure                       | PostgreSQL is not published by Docker Compose. On MongoDB, Shardlens's keys and settings key live in `shardlens_secrets`, so whoever can read the database can use the dashboard: no more than the database itself gives them |
+| Connection strings leak                 | Never logged or stored; the simulated installs search every log and collection for the database password          |
+| One-time sign-in links (MongoDB)        | 32 random bytes, kept hashed in the issuing process's memory only, usable once within 15 minutes; printed only to the terminal or the bot's log of whoever runs the dashboard |
 | The SDK harming the bot                 | Bounded queue, priority dropping, no I/O in listeners, timers that don't keep the process alive, chaos tests       |
 | Supply chain                            | Zero-dependency core, lockfile, Renovate, npm provenance, CodeQL, dependency review, OpenSSF Scorecard              |
 | Container escape                        | Non-root user that can't change the collector's files, read-only root filesystem, no Linux capabilities           |
