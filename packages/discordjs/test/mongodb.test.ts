@@ -1,3 +1,4 @@
+import type { Logger } from '@shardlens/core';
 import { Client, GatewayIntentBits } from 'discord.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createShardlens } from '../src/index.js';
@@ -35,6 +36,7 @@ interface Bot {
 const botClient = (): Bot => ({ application: null });
 const asClient = (bot: Bot) => bot as unknown as Client;
 const settings: MongoDBOptions = { uri: 'mongodb://localhost:27017/bot' };
+const quiet: Logger = { warn: () => undefined };
 
 describe('the mongodb option', () => {
   afterEach(() => vi.useRealTimers());
@@ -42,13 +44,7 @@ describe('the mongodb option', () => {
   it('starts the collector once the bot knows its application ID, and sends through it', async () => {
     const client = botClient();
     const fake = fakeModule();
-    const collector = new MongoDBCollector(
-      asClient(client),
-      settings,
-      undefined,
-      () => undefined,
-      async () => fake.module,
-    );
+    const collector = new MongoDBCollector(asClient(client), settings, undefined, quiet, async () => fake.module);
     const answer = collector.fetch('http://localhost/v1/config');
     await settle();
     expect(fake.starts).toHaveLength(0);
@@ -64,30 +60,42 @@ describe('the mongodb option', () => {
     const client = botClient();
     client.application = { id: APP_ID };
     const fake = fakeModule('http://localhost:8080');
-    const log = vi.fn();
+    const logger = { info: vi.fn(), warn: vi.fn() };
     const collector = new MongoDBCollector(
       asClient(client),
       { ...settings, auditKey: 'k', dashboard: { port: 8080 } },
       'audit',
-      log,
+      logger,
       async () => fake.module,
     );
     await collector.fetch('http://localhost/v1/config');
     expect(fake.starts[0]).toMatchObject({ mode: 'audit', auditKey: 'k', dashboard: { port: 8080 } });
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('http://localhost:8080/auth/link/token'));
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('http://localhost:8080/auth/link/token'));
+    expect(logger.warn).not.toHaveBeenCalled();
+    await collector.close();
+  });
+
+  it('logs the sign-in link as a warning to a logger that has no info', async () => {
+    const client = botClient();
+    client.application = { id: APP_ID };
+    const fake = fakeModule('http://localhost:8080');
+    const logger = { warn: vi.fn() };
+    const collector = new MongoDBCollector(
+      asClient(client),
+      { ...settings, dashboard: { port: 8080 } },
+      undefined,
+      logger,
+      async () => fake.module,
+    );
+    await collector.fetch('http://localhost/v1/config');
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('http://localhost:8080/auth/link/token'));
     await collector.close();
   });
 
   it('never starts once shut down before the bot logged in', async () => {
     const client = botClient();
     const fake = fakeModule();
-    const collector = new MongoDBCollector(
-      asClient(client),
-      settings,
-      undefined,
-      () => undefined,
-      async () => fake.module,
-    );
+    const collector = new MongoDBCollector(asClient(client), settings, undefined, quiet, async () => fake.module);
     const answer = collector.fetch('http://localhost/v1/config');
     await collector.close();
     await expect(answer).rejects.toThrow('shut down');
@@ -107,13 +115,7 @@ describe('the mongodb option', () => {
         return fake.module.startMongoCollector(options);
       },
     };
-    const collector = new MongoDBCollector(
-      asClient(client),
-      settings,
-      undefined,
-      () => undefined,
-      async () => module,
-    );
+    const collector = new MongoDBCollector(asClient(client), settings, undefined, quiet, async () => module);
     await expect(collector.fetch('http://localhost/v1/config')).rejects.toThrow('ECONNREFUSED');
     down = false;
     expect((await collector.fetch('http://localhost/v1/config')).status).toBe(200);
@@ -124,13 +126,7 @@ describe('the mongodb option', () => {
   it("doesn't count the wait for the start against a request's timeout, but still ends it on shutdown", async () => {
     const client = botClient();
     const fake = fakeModule();
-    const collector = new MongoDBCollector(
-      asClient(client),
-      settings,
-      undefined,
-      () => undefined,
-      async () => fake.module,
-    );
+    const collector = new MongoDBCollector(asClient(client), settings, undefined, quiet, async () => fake.module);
     const timeout = new AbortController();
     const answer = collector.fetch('http://localhost/v1/config', { signal: timeout.signal });
     timeout.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError'));
@@ -149,25 +145,15 @@ describe('the mongodb option', () => {
     const missing = Object.assign(new Error("Cannot find package '@shardlens/collector'"), {
       code: 'ERR_MODULE_NOT_FOUND',
     });
-    const collector = new MongoDBCollector(
-      asClient(client),
-      settings,
-      undefined,
-      () => undefined,
-      () => Promise.reject(missing),
-    );
+    const collector = new MongoDBCollector(asClient(client), settings, undefined, quiet, () => Promise.reject(missing));
     await expect(collector.fetch('http://localhost/v1/config')).rejects.toThrow('npm install @shardlens/collector');
   });
 
   it('says why an installed collector failed to load, rather than to install it', async () => {
     const client = botClient();
     client.application = { id: APP_ID };
-    const collector = new MongoDBCollector(
-      asClient(client),
-      settings,
-      undefined,
-      () => undefined,
-      () => Promise.reject(new SyntaxError('Unexpected token')),
+    const collector = new MongoDBCollector(asClient(client), settings, undefined, quiet, () =>
+      Promise.reject(new SyntaxError('Unexpected token')),
     );
     await expect(collector.fetch('http://localhost/v1/config')).rejects.toThrow(
       '@shardlens/collector did not load: Unexpected token',

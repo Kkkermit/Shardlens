@@ -1,3 +1,4 @@
+import type { Logger } from '@shardlens/core';
 import type { Client } from 'discord.js';
 import type { MongoDBOptions } from './options.js';
 
@@ -33,7 +34,7 @@ export class MongoDBCollector {
   readonly #client: Client;
   readonly #settings: MongoDBOptions;
   readonly #mode: 'audit' | 'privacy' | undefined;
-  readonly #log: (message: string) => void;
+  readonly #logger: Logger;
   readonly #load: () => Promise<CollectorModule>;
   readonly #closing = new AbortController();
   #started: Promise<InBotCollector> | undefined;
@@ -43,14 +44,14 @@ export class MongoDBCollector {
     client: Client,
     settings: MongoDBOptions,
     mode: 'audit' | 'privacy' | undefined,
-    log: (message: string) => void,
+    logger: Logger,
     load: () => Promise<CollectorModule> = () => import(COLLECTOR_MODULE) as Promise<CollectorModule>,
   ) {
     this.#load = load;
     this.#client = client;
     this.#settings = settings;
     this.#mode = mode;
-    this.#log = log;
+    this.#logger = logger;
   }
 
   /** For the SDK's transport: every request goes to the collector in this process. */
@@ -103,9 +104,21 @@ export class MongoDBCollector {
     }
     const link = collector.signInLink();
     if (collector.dashboardUrl && link) {
-      this.#log(`Shardlens: dashboard at ${collector.dashboardUrl}. Sign in once with ${link} (valid 15 minutes).`);
+      this.#announce(
+        `Shardlens: dashboard at ${collector.dashboardUrl}. Sign in once with ${link} (valid 15 minutes).`,
+      );
     }
     return collector;
+  }
+
+  /** At info, or as a warning by a logger without `info`: the owner can't sign in to the dashboard without the link. */
+  #announce(message: string): void {
+    try {
+      if (this.#logger.info) this.#logger.info(message);
+      else this.#logger.warn(message);
+    } catch {
+      // a broken logger must not break the SDK
+    }
   }
 
   /** Known once the bot has logged in. */
