@@ -135,14 +135,14 @@ async function dashboardCommand({ cliMain, dir, mongodb, mongoUrl, port, log, ra
     if (me.method !== 'link') failures.push(`shardlens dashboard: signed in as ${me.method}, not with the link`);
     const settings = await fetch(`${base}/v1/settings`, { headers: { cookie } });
     if (settings.status !== 200) failures.push(`shardlens dashboard: Settings answered ${settings.status}`);
-    const runs = async (read) => JSON.stringify(read.rows.map((row) => [row.command, row.runs]).sort());
+    const runs = (read) => JSON.stringify(read.rows.map((row) => [row.command, row.runs]).sort());
     const res = await fetch(`${base}/v1/query`, {
       method: 'POST',
       headers: { cookie, 'content-type': 'application/json', 'x-shardlens-csrf': '1' },
       body: JSON.stringify({ range, kind: 'commands' }),
     });
     if (!res.ok) failures.push(`shardlens dashboard: a query answered ${res.status}`);
-    else if ((await runs(await res.json())) !== (await runs(await query({ kind: 'commands' })))) {
+    else if (runs(await res.json()) !== runs(await query({ kind: 'commands' }))) {
       failures.push('shardlens dashboard read other runs per command than the collector image');
     }
     const again = await fetch(link, { redirect: 'manual' });
