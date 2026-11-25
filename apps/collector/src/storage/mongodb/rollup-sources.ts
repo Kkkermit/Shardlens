@@ -1,6 +1,6 @@
 import { BUCKETS, bucketOf } from '@shardlens/core';
 import type { AggregationCursor, Document } from 'mongodb';
-import { KIND } from '../../ingest/codes.js';
+import { COMMAND_KINDS, KIND } from '../../ingest/codes.js';
 import type { Collections, RollupDoc } from './collections.js';
 
 export type Grain = 'minute' | 'hour' | 'day';
@@ -14,6 +14,10 @@ export interface SourceRow {
     d: RollupDoc['dims'];
     /** Latency bucket of these events' `ackMs`, `null` when they have none (latency sources only). */
     b?: number | null;
+    /** The events' weight, in metrics that add weights up: `count` is then the number of events. */
+    w?: number;
+    /** What each of those events counts for before its weight (REST calls: the calls it stands for). */
+    x?: number;
   };
   count: number;
   sum: number;
@@ -58,14 +62,6 @@ const ACK_BUCKET = {
   ],
 };
 
-const COMMAND_KINDS = [
-  KIND.chat_input,
-  KIND.user_context,
-  KIND.message_context,
-  KIND.primary_entry_point,
-  KIND.message_command,
-];
-
 const orNull = (expr: unknown) => ({ $ifNull: [expr, null] });
 const truncate = (field: string, grain: Grain) => ({ $dateTrunc: { date: field, unit: grain } });
 const inWindow = (apps: string[], from: Date, to: Date) => ({ appId: { $in: apps }, ts: { $gte: from, $lt: to } });
@@ -102,6 +98,12 @@ const plain = (metric: string, dims: Document) => (grain: Grain) => ({
   d: dims,
 });
 
+/*
+ * PostgreSQL adds weights up as `real` (`query/real-sums.ts`), so the sources that add them group events by weight as
+ * well, and `rollups.ts` adds the weights up from the counts. Sums of latency stay in double precision, as do counts of
+ * unweighted events.
+ */
+
 /** A metric of interactions with their first-response latency: count by weight, ack time summed, its histogram. */
 function latency(name: string, where: Document, dims: Document): RollupSource {
   return {
@@ -112,8 +114,8 @@ function latency(name: string, where: Document, dims: Document): RollupSource {
       { $match: { ...inWindow(apps, from, to), ...where } },
       {
         $group: {
-          _id: { ...plain(name, dims)(grain), b: ACK_BUCKET },
-          count: { $sum: '$weight' },
+          _id: { ...plain(name, dims)(grain), b: ACK_BUCKET, w: '$weight' },
+          count: { $sum: 1 },
           sum: { $sum: { $multiply: [{ $ifNull: ['$ackMs', 0] }, '$weight'] } },
           min: { $min: '$ackMs' },
           max: { $max: '$ackMs' },
@@ -124,13 +126,13 @@ function latency(name: string, where: Document, dims: Document): RollupSource {
   };
 }
 
-/** A metric that counts events (or their weight) and nothing else. */
+/** A metric that counts events (or adds up their weights) and nothing else. */
 function counter(
   name: string,
   metrics: (string | RegExp)[],
   from: (c: Collections) => Aggregatable,
   id: (grain: Grain) => Document,
-  count: unknown = 1,
+  weighted = false,
 ): RollupSource {
   return {
     name,
@@ -138,7 +140,13 @@ function counter(
     from,
     pipeline: (apps, start, end, grain) => [
       { $match: inWindow(apps, start, end) },
-      { $group: { _id: id(grain), count: { $sum: count }, sum: { $sum: 0 } } },
+      {
+        $group: {
+          _id: weighted ? { ...id(grain), w: '$weight' } : id(grain),
+          count: { $sum: 1 },
+          sum: { $sum: 0 },
+        },
+      },
     ],
   };
 }
@@ -191,11 +199,14 @@ export const ROLLUP_SOURCES: readonly RollupSource[] = [
       { $match: { ...inWindow(apps, from, to), responseType: 9 } },
       {
         $group: {
-          _id: plain('modals.shown', {
-            command: { $ifNull: ['$command', '$sourceCommand', null] },
-            custom_id: orNull('$customId'),
-          })(grain),
-          count: { $sum: '$weight' },
+          _id: {
+            ...plain('modals.shown', {
+              command: { $ifNull: ['$command', '$sourceCommand', null] },
+              custom_id: orNull('$customId'),
+            })(grain),
+            w: '$weight',
+          },
+          count: { $sum: 1 },
           sum: { $sum: 0 },
         },
       },
@@ -209,8 +220,11 @@ export const ROLLUP_SOURCES: readonly RollupSource[] = [
       { $match: inWindow(apps, from, to) },
       {
         $group: {
-          _id: plain('interactions.errors', { command: orNull('$command'), error_class: '$errorClass' })(grain),
-          count: { $sum: '$weight' },
+          _id: {
+            ...plain('interactions.errors', { command: orNull('$command'), error_class: '$errorClass' })(grain),
+            w: '$weight',
+          },
+          count: { $sum: 1 },
           sum: { $sum: { $multiply: [{ $ifNull: ['$handlerMs', 0] }, '$weight'] } },
           min: { $min: '$handlerMs' },
           max: { $max: '$handlerMs' },
@@ -226,8 +240,12 @@ export const ROLLUP_SOURCES: readonly RollupSource[] = [
       { $match: inWindow(apps, from, to) },
       {
         $group: {
-          _id: plain('rest.calls', { method: '$method', route: '$route', status: '$status' })(grain),
-          count: { $sum: { $multiply: ['$count', '$weight'] } },
+          _id: {
+            ...plain('rest.calls', { method: '$method', route: '$route', status: '$status' })(grain),
+            w: '$weight',
+            x: '$count',
+          },
+          count: { $sum: 1 },
           sum: { $sum: { $multiply: ['$retries', '$weight'] } },
           hists: { $push: '$hist' },
         },
@@ -328,6 +346,6 @@ export const ROLLUP_SOURCES: readonly RollupSource[] = [
     [/^custom\./],
     (c) => c.customEvents,
     (grain) => ({ a: '$appId', t: truncate('$ts', grain), m: { $concat: ['custom.', '$name'] }, d: { $literal: {} } }),
-    '$weight',
+    true,
   ),
 ];

@@ -30,8 +30,9 @@ function lowestBit(w: number): number {
 function addRows(acc: number, w: number, n: number): number {
   let sum = acc;
   let left = n;
-  const unit = lowestBit(w);
   // While every partial sum is a multiple of `unit` below 2^24 of them, none rounds: those steps can be taken at once.
+  // Only for a positive weight: `lowestBit` of 0 or of a weight that isn't finite would never return.
+  const unit = w > 0 && Number.isFinite(w) ? lowestBit(w) : Number.NaN;
   if (sum % unit === 0) {
     const exact = Math.min(left, Math.floor((EXACT_STEPS * unit - sum) / w));
     if (exact > 0) {

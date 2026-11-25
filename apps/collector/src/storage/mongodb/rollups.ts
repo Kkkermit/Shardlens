@@ -2,6 +2,7 @@ import { BUCKETS } from '@shardlens/core';
 import type { AnyBulkWriteOperation, Collection } from 'mongodb';
 import { type DirtyBucketDoc, dimsKey, type RollupDoc, rollupId } from './collections.js';
 import type { Mongo } from './connect.js';
+import { realSum, type WeightRows } from './query/real-sums.js';
 import { type Grain, ROLLUP_SOURCES, type SourceRow, sumHistograms } from './rollup-sources.js';
 
 /*
@@ -98,20 +99,40 @@ function rollupDoc(
   return doc;
 }
 
-/** A source's groups as rollup documents: latency sources return one group per latency bucket, added up here. */
+/** Element-wise sum, the longer array's length. */
+function addHistograms(a: readonly number[], b: readonly unknown[]): number[] {
+  return Array.from({ length: Math.max(a.length, b.length) }, (_, i) => (a[i] ?? 0) + Number(b[i] ?? 0));
+}
+
+/**
+ * A source's groups as rollup documents. A document's events can come in several groups (one per latency bucket, one
+ * per weight), added up here; weights as PostgreSQL adds a `real` column.
+ */
 function fold(rows: readonly SourceRow[]): RollupDoc[] {
   const groups = new Map<
     string,
-    { r: SourceRow; count: number; sum: number; min: number | null; max: number | null; hist: number[] | null }
+    {
+      r: SourceRow;
+      count: number;
+      weights: WeightRows[];
+      sum: number;
+      min: number | null;
+      max: number | null;
+      hist: number[] | null;
+    }
   >();
   for (const r of rows) {
     const key = keyString({ appId: r._id.a, metric: r._id.m, dimsKey: dimsKey(r._id.d), bucket: r._id.t.getTime() });
     let g = groups.get(key);
     if (!g) {
-      g = { r, count: 0, sum: 0, min: null, max: null, hist: null };
+      g = { r, count: 0, weights: [], sum: 0, min: null, max: null, hist: null };
       groups.set(key, g);
     }
-    g.count += Number(r.count);
+    const { w, x } = r._id;
+    if (w === undefined) g.count += Number(r.count);
+    // PostgreSQL's `count * weight` is in float4: the count rounded to a float4, and the product of two float4s, exact
+    // in double precision, rounded once.
+    else g.weights.push({ w: x === undefined ? w : Math.fround(Math.fround(Number(x)) * w), n: Number(r.count) });
     g.sum += Number(r.sum);
     if (r.min != null) g.min = g.min === null ? Number(r.min) : Math.min(g.min, Number(r.min));
     if (r.max != null) g.max = g.max === null ? Number(r.max) : Math.max(g.max, Number(r.max));
@@ -119,9 +140,11 @@ function fold(rows: readonly SourceRow[]): RollupDoc[] {
       g.hist ??= new Array<number>(BUCKETS).fill(0);
       g.hist[r._id.b] = (g.hist[r._id.b] ?? 0) + Number(r.hw ?? 0);
     }
-    if (r.hist) g.hist = r.hist.map(Number);
+    if (r.hist) g.hist = addHistograms(g.hist ?? [], r.hist);
   }
-  return [...groups.values()].map((g) => rollupDoc(g.r._id.a, g.r._id.m, g.r._id.t, g.r._id.d, g));
+  return [...groups.values()].map((g) =>
+    rollupDoc(g.r._id.a, g.r._id.m, g.r._id.t, g.r._id.d, { ...g, count: g.count + (realSum(g.weights) ?? 0) }),
+  );
 }
 
 /**

@@ -609,6 +609,24 @@ describe('a bot sampled at 30 %', () => {
       );
     }
   });
+
+  it('rolls them up as PostgreSQL does', async () => {
+    const appId = await addApp();
+    const now = Date.now();
+    const minute = Math.floor(now / 60_000) * 60_000 - 2 * 60_000;
+    await addInteractions(
+      appId,
+      Array.from({ length: 7 }, (_, i) => ({ ago: now - (minute + 5_000 + i * 1_000), command: 'roll', weight })),
+    );
+    for (const store of [pg, mongo]) await store.jobs.backfillRollups(new Date(minute), new Date(minute + 60_000));
+    const { rows } = await db.query<{ count: number }>(
+      "SELECT count FROM rollup_1m WHERE app_id = $1 AND metric = 'interactions'",
+      [appId],
+    );
+    expect(rows.map((r) => r.count)).toEqual([23.33333396911621]);
+    const docs = await m.c.rollup1m.find({ appId, metric: 'interactions' }).toArray();
+    expect(docs.map((d) => d.count)).toEqual([23.33333396911621]);
+  });
 });
 
 describe('scheduled reports', () => {

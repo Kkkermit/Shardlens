@@ -2,9 +2,7 @@ import { MongoServerError } from 'mongodb';
 import type { SettingKey, SettingStorage, SettingValues } from '../store.js';
 import type { Mongo } from './connect.js';
 import { asJson } from './json.js';
-
-/** MongoDB's code for a time zone its own time zone database does not know. */
-const UNKNOWN_TIME_ZONE = 40485;
+import { UNKNOWN_TIME_ZONE } from './writes.js';
 
 export function mongoSettings({ c, db }: Mongo): SettingStorage {
   return {

@@ -24,6 +24,9 @@ describe('sums of weights, as PostgreSQL adds a real column', () => {
   it('stops growing at 16,777,216 for weights of 1, as `sum(1::real)` does over 20 million rows', () => {
     expect(realSum([{ w: 1, n: 20_000_000 }])).toBe(16_777_216);
     expect(realSum([{ w: 2, n: 20_000_000 }])).toBe(33_554_432);
+    // Unreachable from a validated batch (weights are positive), but must still return.
+    expect(realSum([{ w: 0, n: 5 }])).toBe(0);
+    expect(realSum([{ w: Number.POSITIVE_INFINITY, n: 3 }])).toBe(Number.POSITIVE_INFINITY);
   });
 
   it('rounds at every row for a weight no power of two divides', () => {

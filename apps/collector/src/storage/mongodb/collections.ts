@@ -34,7 +34,7 @@ export interface AppDoc {
   createdAt: Date;
 }
 
-export interface ApiKeyDoc {
+interface ApiKeyDoc {
   /** Decimal, from `nextId('api_keys')`: routes take IDs of up to 18 digits. */
   _id: string;
   appId: string;
@@ -46,7 +46,7 @@ export interface ApiKeyDoc {
   revokedAt?: Date;
 }
 
-export interface SaltDoc {
+interface SaltDoc {
   _id: { appId: string; period: string };
   /** Removed when the salt is destroyed. */
   secret?: Binary;
@@ -176,7 +176,7 @@ export interface AuditLogDoc {
   ackMs?: number;
 }
 
-export interface AccessLogDoc {
+interface AccessLogDoc {
   _id: ObjectId;
   ts: Date;
   appId: string;
@@ -224,13 +224,13 @@ export interface GuildEventDoc {
   pending?: true;
 }
 
-export interface SnapshotPendingDoc {
+interface SnapshotPendingDoc {
   _id: { appId: string; shardCount: number; shard: number };
   guilds: string[];
   ts: Date;
 }
 
-export interface CommandRegistryDoc {
+interface CommandRegistryDoc {
   _id: { appId: string; commandId: string };
   name: string;
   type: number;
@@ -335,7 +335,7 @@ export interface AppInfoDoc {
   release?: string;
 }
 
-export interface SdkHealthDoc {
+interface SdkHealthDoc {
   _id: { appId: string; instance: string };
   ts: Date;
   shards: number[];
@@ -346,7 +346,7 @@ export interface SdkHealthDoc {
   sdkVersion?: string;
 }
 
-export interface SettingDoc {
+interface SettingDoc {
   _id: { appId: string; key: string };
   value: unknown;
 }
@@ -364,7 +364,7 @@ export interface AlertRuleDoc {
   lastFired?: Date;
 }
 
-export interface AlertEventDoc {
+interface AlertEventDoc {
   _id: ObjectId;
   ruleId: string;
   appId: string;
@@ -387,7 +387,7 @@ export interface ReportDoc {
   lastError?: string;
 }
 
-export interface SessionDoc {
+interface SessionDoc {
   _id: Binary;
   userId?: string;
   appId: string;
@@ -397,7 +397,7 @@ export interface SessionDoc {
   expiresAt: Date;
 }
 
-export interface AdminAuditDoc {
+interface AdminAuditDoc {
   _id: ObjectId;
   ts: Date;
   appId: string;
@@ -410,7 +410,7 @@ export interface AdminAuditDoc {
  * Sequences for the decimal IDs of keys, rules and reports ({@link nextId}), and the {@link LAYOUT_VERSION} the indexes
  * were last made for (`_id: 'index_layout'`).
  */
-export interface CounterDoc {
+interface CounterDoc {
   _id: string;
   n: number;
 }
@@ -419,7 +419,7 @@ export interface CounterDoc {
  * Leases: the job leader's, renewed while it leads (`leader.ts`), and each app's snapshot lease (`snapshot:<app ID>`),
  * held while a startup snapshot is applied (`ingest/snapshots.ts`).
  */
-export interface LeaseDoc {
+interface LeaseDoc {
   _id: string;
   holder: string;
   expiresAt: Date;
@@ -439,7 +439,7 @@ export interface LiveShareDoc {
 }
 
 /** An instance with a live stream open, so the others know to publish their counts (`live.ts`). */
-export interface LiveListenerDoc {
+interface LiveListenerDoc {
   _id: string;
   /** Renewed while the stream is open; the server's time. */
   at: Date;

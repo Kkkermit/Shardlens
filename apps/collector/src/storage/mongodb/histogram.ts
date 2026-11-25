@@ -17,14 +17,20 @@ export const POSTGRES_BUCKET_UPPER_MS: readonly number[] = [
 ];
 
 /**
- * Pipeline stages that turn single events into `{ _id: ack ms, w: weight }`, the input of {@link ackQuantile}: one row
- * per distinct duration (whole milliseconds), so the answer stays small whatever the number of events. Each event's
- * weight is rounded half to even first, as `shardlens_hist_one` rounds a `real` with `round()`.
+ * Pipeline stages that turn single events matching `where` into `{ _id: ms, w: weight }` for a duration `field`, the
+ * input of {@link ackQuantile}: one row per distinct duration (whole milliseconds), so the answer stays small whatever
+ * the number of events. Each event's weight is rounded half to even first, as `shardlens_hist_one` rounds a `real`
+ * with `round()`.
  */
-export const ACK_WEIGHTS: Document[] = [
-  { $match: { ackMs: { $ne: null } } },
-  { $group: { _id: '$ackMs', w: { $sum: { $round: ['$weight', 0] } } } },
-];
+export function msWeights(field: string, where: Document = {}): Document[] {
+  return [
+    { $match: { ...where, [field]: { $ne: null } } },
+    { $group: { _id: `$${field}`, w: { $sum: { $round: ['$weight', 0] } } } },
+  ];
+}
+
+/** {@link msWeights} of the time to first response. */
+export const ACK_WEIGHTS: Document[] = msWeights('ackMs');
 
 /**
  * The `q` quantile of the time to first response, as PostgreSQL's

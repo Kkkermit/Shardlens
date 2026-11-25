@@ -99,9 +99,10 @@ describe('MongoStore', () => {
       expect(await nextId(m.c, 'test_b')).toBe('1');
     });
 
-    it('calls only a document too large for MongoDB, or one BSON cannot encode, refused input', () => {
+    it('calls only a document too large for MongoDB, a time zone it does not know, or one BSON cannot encode, refused input', () => {
       const error = (code: number) => new MongoServerError({ message: 'refused', code });
       expect(store.refusedInput(error(10334))).toBe('10334');
+      expect(store.refusedInput(error(40485))).toBe('40485');
       expect(store.refusedInput(new BSON.BSONError('key a\u0000b must not contain null bytes'))).toBe('BSONError');
       expect(store.refusedInput(error(11000))).toBeUndefined();
       expect(store.refusedInput(error(2))).toBeUndefined();

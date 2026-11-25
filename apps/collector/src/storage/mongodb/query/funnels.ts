@@ -1,5 +1,5 @@
 import type { AggregationCursor, Document } from 'mongodb';
-import { KIND } from '../../../ingest/codes.js';
+import { COMMAND_KINDS } from '../../../ingest/codes.js';
 import type { Spec } from '../../../query/spec.js';
 import type { QueryAnswer, QueryStorage } from '../../store.js';
 import type { Mongo } from '../connect.js';
@@ -15,13 +15,6 @@ import { dayText, truncWall, wallClock } from './zoned-buckets.js';
  */
 
 const DAY = 86_400_000;
-const COMMAND_KINDS = [
-  KIND.chat_input,
-  KIND.user_context,
-  KIND.message_context,
-  KIND.primary_entry_point,
-  KIND.message_command,
-];
 
 type Step = Spec<'funnel'>['steps'][number];
 

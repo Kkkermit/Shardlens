@@ -8,11 +8,14 @@ import {
 } from 'mongodb';
 import { isDuplicateKey } from './duplicate-key.js';
 
+/** MongoDB's code for a time zone its own time zone database does not know (Node's may). */
+export const UNKNOWN_TIME_ZONE = 40485;
+
 /**
  * Server codes for input MongoDB refuses whatever the retry: a document over 16 MB, written whole or grown by an
- * update.
+ * update, and a time zone it doesn't know (PostgreSQL's 22023 for the same query).
  */
-const REFUSED = new Set([10334, 17419]);
+const REFUSED = new Set([10334, 17419, UNKNOWN_TIME_ZONE]);
 
 function codesOf(error: MongoServerError): number[] {
   const codes = typeof error.code === 'number' ? [error.code] : [];

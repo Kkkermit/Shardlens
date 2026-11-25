@@ -1,11 +1,11 @@
 import { BUCKETS, bucketOf } from '@shardlens/core';
-import { KIND, OUTCOME } from '../../../ingest/codes.js';
+import { COMMAND_KINDS, KIND, OUTCOME } from '../../../ingest/codes.js';
 import { decodeValue } from '../../../query/dimensions.js';
 import { withGuildNames } from '../../../query/guild-names.js';
 import type { Spec } from '../../../query/spec.js';
 import type { QueryAnswer, QueryStorage } from '../../store.js';
 import type { Mongo } from '../connect.js';
-import { ackQuantile } from '../histogram.js';
+import { ackQuantile, msWeights } from '../histogram.js';
 import { guildProfiles } from './guild-profiles.js';
 import { idPrefix } from './id-prefix.js';
 import { byteOrder, jsonText, roundTenths } from './pg-values.js';
@@ -26,14 +26,6 @@ import { currentPeriodStart } from './salt-period-start.js';
  * The command list (from rollups) and one command's page (from single events), as `postgres/query/pages.ts` answers
  * them. Each answer section PostgreSQL reads with its own statement is a `$facet` of one aggregation here.
  */
-
-const COMMAND_KINDS = [
-  KIND.chat_input,
-  KIND.user_context,
-  KIND.message_context,
-  KIND.primary_entry_point,
-  KIND.message_command,
-];
 
 interface CommandFigures {
   _id: string | null;
@@ -193,12 +185,6 @@ const split = (key: unknown, where: object = {}, limit?: number) => [
   ...weightsBy(key, limit),
 ];
 
-/** Weights by whole milliseconds, rounded as `shardlens_hist_one` rounds them (`histogram.ts`). */
-const msWeights = (field: string) => [
-  { $match: { base: true, [field]: { $ne: null } } },
-  { $group: { _id: `$${field}`, w: { $sum: { $round: ['$weight', 0] } } } },
-];
-
 async function command(m: Mongo, appId: string, spec: Spec<'command'>, now: Date): Promise<QueryAnswer<'command'>> {
   const from = await rawFrom(m, appId, new Date(spec.range.from), now);
   const ts = { $gte: from, $lt: new Date(spec.range.to) };
@@ -246,8 +232,8 @@ async function command(m: Mongo, appId: string, spec: Spec<'command'>, now: Date
               },
             },
           ],
-          ack: msWeights('ackMs'),
-          handler: msWeights('handlerMs'),
+          ack: msWeights('ackMs', { base: true }),
+          handler: msWeights('handlerMs', { base: true }),
           kinds: split('$kind'),
           subcommands: split(
             {
