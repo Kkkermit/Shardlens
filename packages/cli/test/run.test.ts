@@ -97,6 +97,14 @@ describe('command line', () => {
     }
     expect(out).not.toHaveBeenCalled();
   });
+
+  it('points a bare init at the MongoDB setup, which needs none', async () => {
+    expect(await run(['init'])).toBe(2);
+    expect(errors()).toContain('Bot on MongoDB? It needs no init');
+    err.mockClear();
+    expect(await run(['init', '--domain', 'stats.example.com'])).toBe(2);
+    expect(errors()).not.toContain('MongoDB');
+  });
 });
 
 describe('init', () => {

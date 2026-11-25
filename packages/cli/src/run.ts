@@ -147,7 +147,14 @@ export async function run(argv: string[]): Promise<number> {
 
 async function initCommand(values: Values): Promise<number> {
   const missing = (['domain', 'app-id'] as const).filter((name) => !values[name]).map((name) => `--${name}`);
-  if (missing.length > 0) return usage(`init needs ${list(missing)}.`);
+  if (missing.length > 0) {
+    // A bare `init` is often someone looking for the start: with MongoDB there is no server to set up.
+    const hint =
+      missing.length === 2
+        ? `\nBot on MongoDB? It needs no init: createShardlens(client, { mongodb: process.env.MONGODB_URI }), then npx shardlens dashboard (${DOCS}/self-hosting/mongodb/).`
+        : '';
+    return usage(`init needs ${list(missing)}.${hint}`);
+  }
   const dashboard = values.dashboard;
   if (dashboard !== undefined && !isDashboardChoice(dashboard)) {
     return usage('--dashboard must be shardlens, own or none.');
