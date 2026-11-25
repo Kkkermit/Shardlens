@@ -3,7 +3,8 @@ import type { Filter, Spec } from '../../../query/spec.js';
 import type { HeatmapCell, QueryStorage, SeriesRow, TopRow } from '../../store.js';
 import type { Mongo } from '../connect.js';
 import { byteOrder } from './pg-values.js';
-import { dimFilters, dimKey, HIST_RESUMS, HIST_SUMS, readsHistogram, rollupSource, statValue } from './rollup-reads.js';
+import { rollupSource } from './read-window.js';
+import { dimFilters, dimKey, HIST_RESUMS, HIST_SUMS, readsHistogram, statValue } from './rollup-reads.js';
 import { clockText, truncWall, wallClock } from './zoned-buckets.js';
 
 /*

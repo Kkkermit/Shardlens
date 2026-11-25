@@ -5,12 +5,12 @@ import type { Spec } from '../../../query/spec.js';
 import type { QueryAnswer, QueryStorage } from '../../store.js';
 import type { Mongo } from '../connect.js';
 import { ACK_WEIGHTS, ackQuantile } from '../histogram.js';
-import { sumHistograms } from '../rollup-sources.js';
-import { histQuantile } from './bucket-quantile.js';
+import { byteOrder } from './pg-values.js';
 import { rawFrom, rollupSource } from './read-window.js';
 import { realRatio, realSum, type WeightRows } from './real-sums.js';
+import { HIST_ARRAY, HIST_SUMS, histQuantile } from './rollup-reads.js';
 import { sdkInstances } from './sdk-instances.js';
-import { offsetPieces, wallClock } from './wall-clock.js';
+import { clockText, truncWall, wallClock } from './zoned-buckets.js';
 
 const MINUTE = 60_000;
 const DAY = 86_400_000;
@@ -95,7 +95,6 @@ async function gauge(m: Mongo, appId: string, spec: Spec<'gauge'>): Promise<Quer
   // Every shard and process reports its own samples. They are combined minute by minute (added up, or averaged for
   // a latency) before the minutes are averaged into the interval, keeping one process per slot in each minute.
   const additive = ADDITIVE_GAUGES.has(spec.name);
-  const pieces = offsetPieces(spec.timezone, from.getTime(), to.getTime());
   const samples = (shard: Document) => ({
     $match: { '_id.appId': appId, '_id.name': spec.name, '_id.ts': { $gte: from, $lt: to }, '_id.shard': shard },
   });
@@ -163,15 +162,7 @@ async function gauge(m: Mongo, appId: string, spec: Spec<'gauge'>): Promise<Quer
       },
       {
         $group: {
-          _id: {
-            t: {
-              $dateToString: {
-                date: { $dateTrunc: { date: wallClock('$_id.m', pieces), unit: spec.interval } },
-                format: '%Y-%m-%dT%H:%M:%S',
-              },
-            },
-            s: '$_id.s',
-          },
+          _id: { t: clockText(truncWall(wallClock('$_id.m', spec.timezone), spec.interval)), s: '$_id.s' },
           minutes: { $push: { m: '$_id.m', v: '$v' } },
           max: { $max: '$mx' },
         },
@@ -339,7 +330,7 @@ async function reliability(
           failures: number;
           failing: number;
           retries: number;
-          hist: number[] | null;
+          p95: number | null;
         }[];
         limits: { _id: { scope: string; route: string }; count: number; maxRetryAfter: number | null }[];
       }>([
@@ -357,12 +348,12 @@ async function reliability(
                   failures: { $sum: { $cond: [{ $gte: ['$dims.status', 400] }, '$count', 0] } },
                   failing: { $sum: { $cond: [{ $gte: ['$dims.status', 400] }, 1, 0] } },
                   retries: { $sum: '$sum' },
-                  hists: { $push: '$hist' },
+                  ...HIST_SUMS,
                 },
               },
               { $sort: { calls: -1, '_id.method': 1, '_id.route': 1 } },
               { $limit: 50 },
-              { $project: { calls: 1, failures: 1, failing: 1, retries: 1, hist: sumHistograms('$hists') } },
+              { $project: { calls: 1, failures: 1, failing: 1, retries: 1, p95: histQuantile([...HIST_ARRAY], 0.95) } },
             ],
             limits: [
               { $match: { metric: 'rest.ratelimits' } },
@@ -463,7 +454,7 @@ async function reliability(
     totals: runTotals(runs?.groups ?? [], runs?.ack ?? []),
     errorsByCode: [...codes]
       .map(([key, weights]) => ({ key, value: realSum(weights) ?? 0 }))
-      .sort((a, b) => b.value - a.value || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+      .sort((a, b) => b.value - a.value || byteOrder(a.key, b.key))
       .slice(0, 10),
     routes: (rest?.routes ?? []).map((r) => ({
       method: r._id.method,
@@ -471,7 +462,7 @@ async function reliability(
       calls: r.calls,
       failures: r.failing > 0 ? r.failures : null,
       retries: r.retries,
-      p95Ms: histQuantile(r.hist, 0.95),
+      p95Ms: r.p95,
     })),
     rateLimits: (rest?.limits ?? []).map((r) => ({
       scope: r._id.scope,

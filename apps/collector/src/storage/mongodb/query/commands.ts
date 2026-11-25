@@ -9,8 +9,8 @@ import { ackQuantile } from '../histogram.js';
 import { guildProfiles } from './guild-profiles.js';
 import { idPrefix } from './id-prefix.js';
 import { byteOrder, jsonText, real, realOrNull, realShare, roundTenths } from './pg-values.js';
-import { rawFrom } from './raw-window.js';
-import { dim, HIST_ARRAY, HIST_SUMS, histQuantile, rollupSource } from './rollup-reads.js';
+import { rawFrom, rollupSource } from './read-window.js';
+import { dim, HIST_ARRAY, HIST_SUMS, histQuantile } from './rollup-reads.js';
 import { currentPeriodStart } from './salt-period-start.js';
 
 /*

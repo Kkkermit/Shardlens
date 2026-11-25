@@ -1,7 +1,6 @@
 import { UserHasher, uuidv7 } from '@shardlens/core';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { guildProfiles } from '../src/storage/mongodb/query/guild-profiles.js';
 import { jsonText, realShare, roundTenths } from '../src/storage/mongodb/query/pg-values.js';
 import { periodBounds, periodLabel } from '../src/storage/periods.js';
 import { ensureSalt } from '../src/storage/salts.js';
@@ -15,7 +14,6 @@ import {
   mongoStore,
   postgresStore,
   READ_KEY,
-  type StoreFactory,
   startHarness,
 } from './harness.js';
 
@@ -470,26 +468,11 @@ async function seed(h: Harness): Promise<void> {
   await h.store.jobs.runUniques();
 }
 
-/** MongoDB, with server names read here until `query/servers.ts` answers `guildNames` on MongoDB. */
-const mongoWithGuildNames: StoreFactory = async () => {
-  const backing = await mongoStore();
-  const { mongo, store } = backing;
-  const pending = await store.query.guildNames(APP_ID, []).then(
-    () => false,
-    () => true,
-  );
-  if (pending && mongo) store.query.guildNames = (appId, ids) => guildProfiles(mongo, appId, ids);
-  return backing;
-};
-
 let pg: Harness;
 let mongo: Harness;
 
 beforeAll(async () => {
-  [pg, mongo] = await Promise.all([
-    startHarness({ store: postgresStore }),
-    startHarness({ store: mongoWithGuildNames }),
-  ]);
+  [pg, mongo] = await Promise.all([startHarness({ store: postgresStore }), startHarness({ store: mongoStore })]);
   // One after the other: the fake clock is the process's.
   await seed(pg);
   await seed(mongo);

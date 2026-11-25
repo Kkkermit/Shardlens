@@ -1,8 +1,8 @@
 import type { QueryAnswer, QueryStorage } from '../../store.js';
 import type { Mongo } from '../connect.js';
-import { idPrefix } from './id-prefix.js';
 import { dim } from './rollup-reads.js';
 import { periodStartOf } from './salt-period-start.js';
+import { sdkInstances } from './sdk-instances.js';
 
 const DAY = 86_400_000;
 
@@ -14,7 +14,7 @@ async function overview(m: Mongo, appId: string, now: Date): Promise<QueryAnswer
   const failed = { $and: [{ $ne: [dim('outcome'), null] }, { $ne: [dim('outcome'), '0'] }] };
   const [info, sdks, runs, servers, mau, lastEvent, required] = await Promise.all([
     c.appInfo.findOne({ _id: appId }),
-    c.sdkHealth.find(idPrefix({ appId }, 'instance')).sort({ ts: -1, '_id.instance': 1 }).limit(50).toArray(),
+    sdkInstances(m, appId),
     c.rollup1h
       .aggregate<{ _id: string; runs: number; failures: number; failing: number }>([
         { $match: { appId, metric: 'interactions', bucket: { $gte: new Date(now.getTime() - 30 * DAY) } } },
@@ -71,16 +71,7 @@ async function overview(m: Mongo, appId: string, now: Date): Promise<QueryAnswer
       rawRetentionDays: app.rawRetentionDays,
     },
     appInfo,
-    sdkInstances: sdks.map((s) => ({
-      instance: s._id.instance,
-      ts: s.ts,
-      shards: s.shards,
-      queueDepth: s.queueDepth,
-      dropped: s.dropped,
-      failedFlushes: s.failedFlushes,
-      internalErrors: s.internalErrors,
-      sdkVersion: s.sdkVersion ?? null,
-    })),
+    sdkInstances: sdks,
     // A day's failures are `null`, not 0, when none of its rollups failed: `sum() FILTER` over no rows.
     runs30d: runs.map((r) => ({ day: r._id, runs: r.runs, failures: r.failing > 0 ? r.failures : null })),
     servers,
