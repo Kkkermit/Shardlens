@@ -72,7 +72,7 @@ The collector logs a warning at start-up when the bot or you would have no way i
 
 | Variable         | What it is                                                                                                  |
 | ---------------- | ----------------------------------------------------------------------------------------------------------- |
-| `CLICKHOUSE_URL` | Optional. `http://user:password@host:8123/database` of a ClickHouse server to use as an [analytics store](../../self-hosting/scaling/#clickhouse-preview). The database is created if missing. `docker-compose.clickhouse.yml` sets it. Never logged. |
+| `CLICKHOUSE_URL` | Optional. `http://user:password@host:8123/database` of a ClickHouse server to use as an [analytics store](../../self-hosting/scaling/#clickhouse-preview). The database is created if missing. `docker-compose.clickhouse.yml` sets it. Never logged. PostgreSQL only: refused with a MongoDB `DATABASE_URL`. |
 
 ## Your own database
 
