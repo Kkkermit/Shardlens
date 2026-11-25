@@ -1,15 +1,15 @@
 # @shardlens/discordjs
 
-Self-hosted, privacy-first analytics and health monitoring for discord.js bots. This is the SDK you add to your bot;
-it sends events to a [Shardlens collector](https://kkkermit.github.io/Shardlens/getting-started/quick-start/) that you
-run yourself.
+Self-hosted, privacy-first analytics and health monitoring for discord.js bots. This is the SDK you add to your bot.
+It keeps everything in the MongoDB your bot already uses, with nothing else to run, or sends events to a
+[Shardlens collector](https://kkkermit.github.io/Shardlens/getting-started/quick-start/) on a server of yours.
 
 - Works with discord.js 14.12 or newer and 15, TypeScript or JavaScript, ESM or CommonJS, Node.js 22.12+.
 - Needs the `Guilds` intent only. User IDs are hashed inside your bot; message content is never collected.
 - Never throws into your bot: bounded memory, no I/O in listeners, every internal error caught and counted.
 
 ```sh
-npm install @shardlens/discordjs
+npm install @shardlens/discordjs @shardlens/collector
 ```
 
 ```ts
@@ -17,10 +17,8 @@ import { Client, Events, GatewayIntentBits } from 'discord.js';
 import { createShardlens } from '@shardlens/discordjs';
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
-const lens = createShardlens(client, {
-  endpoint: process.env.SHARDLENS_URL, // https://stats.example.com
-  apiKey: process.env.SHARDLENS_INGEST_KEY, // slk_ingest_…
-});
+// Your bot's own MongoDB. With a collector on a server instead: { endpoint, apiKey }, and no @shardlens/collector.
+const lens = createShardlens(client, { mongodb: process.env.MONGODB_URI });
 
 // Optional: record handler time and errors.
 client.on(
@@ -41,6 +39,9 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 
 await client.login(process.env.DISCORD_TOKEN);
 ```
+
+Then run `npx shardlens dashboard` in your bot's folder to open the dashboard
+([on your MongoDB](https://kkkermit.github.io/Shardlens/self-hosting/mongodb/)).
 
 Slash commands, context menus, buttons, select menus, modals and autocomplete are recorded on their own. Prefix
 commands are recorded where your parser matches one, with `lens.wrapMessageCommand()` or `lens.trackMessageCommand()`,

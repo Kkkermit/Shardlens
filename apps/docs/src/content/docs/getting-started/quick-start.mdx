@@ -1,19 +1,65 @@
 ---
 title: Quick start
-description: Self-host Shardlens and send your bot's first events in under 10 minutes.
+description: Add Shardlens to your bot in two minutes, on the MongoDB your bot already uses. Nothing else to run.
 sidebar:
   order: 1
 ---
 
 import { Aside, Code, Steps, TabItem, Tabs } from '@astrojs/starlight/components';
+import mongodb from '../../../../snippets/mongodb.ts?raw';
 import quickStart from '../../../../snippets/quick-start.ts?raw';
 
-You need a server with Docker and a domain name pointing at it (for HTTPS), and a bot on discord.js 14.12 or later, or 15.
+You need a bot on discord.js 14.12 or later, or 15, on Node 22.12 or later. If your bot already uses MongoDB (Atlas,
+including its free tier, or your own server), Shardlens keeps everything there: no server, Docker, domain or keys.
+No MongoDB? [Run the collector on a server](#without-mongodb-run-the-collector-on-a-server) instead.
 
-<Aside type="tip" title="Already have a dashboard, or want none?">
-  This page sets up the Shardlens dashboard. To show the numbers in a dashboard of your own, or to run without one,
-  see [Choose your setup](../choose-your-setup/): the steps for your bot are the same.
+<Steps>
+
+1. **Install two packages in your bot**
+
+   <Tabs syncKey="pkg">
+     <TabItem label="npm">`npm install @shardlens/discordjs @shardlens/collector`</TabItem>
+     <TabItem label="pnpm">`pnpm add @shardlens/discordjs @shardlens/collector`</TabItem>
+     <TabItem label="yarn">`yarn add @shardlens/discordjs @shardlens/collector`</TabItem>
+     <TabItem label="bun">`bun add @shardlens/discordjs @shardlens/collector`</TabItem>
+   </Tabs>
+
+2. **Add one line, with the connection string your bot already has**
+
+   <Code code={mongodb} lang="ts" title="bot.ts" mark={7} />
+
+   Use whatever your `.env` calls it (`MONGODB_URI`, `MONGO_URL`, …). Shardlens adds its own collections, all
+   prefixed `shardlens_`, in the database the string names, beside your bot's.
+
+3. **Start your bot and run a command**
+
+   Events are stored from inside the bot. Every process of a sharded bot writes to the same database.
+
+4. **Open the dashboard**
+
+   In your bot's folder, on your computer or the bot's host:
+
+   ```sh
+   npx shardlens dashboard
+   ```
+
+   It finds the connection string in your `.env`, serves the dashboard on this machine and prints a link that signs
+   you in. Open it: the Overview counts your command within seconds.
+
+</Steps>
+
+<Aside type="tip">
+  Only the `Guilds` intent is needed. Shardlens never reads message content, and user IDs never leave your bot: they
+  are hashed in process before anything is stored.
 </Aside>
+
+To keep the dashboard open for good, at your own address, serve it from the bot or from a small host: see
+[On your MongoDB](../../self-hosting/mongodb/#keep-the-dashboard-running).
+
+## Without MongoDB: run the collector on a server
+
+The collector stores events in PostgreSQL and serves the dashboard at your domain. You need a server with Docker and a
+domain pointing at it.
 
 <Steps>
 
@@ -28,13 +74,13 @@ You need a server with Docker and a domain name pointing at it (for HTTPS), and 
    ```
 
    Caddy gets a certificate for your domain, the collector creates its tables, and the dashboard is served at
-   `https://stats.example.com`. The bot's two settings are in `bot.env`.
+   `https://stats.example.com`.
 
 2. **Install the SDK in your bot**
 
    <Tabs syncKey="pkg">
-     <TabItem label="pnpm">`pnpm add @shardlens/discordjs`</TabItem>
      <TabItem label="npm">`npm install @shardlens/discordjs`</TabItem>
+     <TabItem label="pnpm">`pnpm add @shardlens/discordjs`</TabItem>
      <TabItem label="yarn">`yarn add @shardlens/discordjs`</TabItem>
      <TabItem label="bun">`bun add @shardlens/discordjs`</TabItem>
    </Tabs>
@@ -49,15 +95,11 @@ You need a server with Docker and a domain name pointing at it (for HTTPS), and 
 4. **Open the dashboard**
 
    Go to your domain and sign in with your read key (`SHARDLENS_READ_KEY` in `.env`), or with Discord once you have
-   [set up Discord sign-in](../../self-hosting/docker-compose/#discord-sign-in). Run a command in your bot: the live
-   tiles on the Overview count it within seconds, and the chart and checklist follow within a minute or two, without
-   reloading.
+   [set up Discord sign-in](../../self-hosting/docker-compose/#discord-sign-in).
 
 </Steps>
 
-<Aside type="tip">
-  Only the `Guilds` intent is needed. Shardlens never reads message content and user IDs never leave your bot.
-</Aside>
+Already have a dashboard of your own, or want none? [Choose your setup](../choose-your-setup/) compares the options.
 
 ## Next steps
 

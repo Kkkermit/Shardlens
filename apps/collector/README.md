@@ -3,9 +3,26 @@
 The [Shardlens](https://github.com/Kkkermit/Shardlens) collector: ingest, rollups, the query API, live updates and the
 dashboard. Shardlens is self-hosted, privacy-first analytics and health monitoring for discord.js bots.
 
+## In your bot, on your MongoDB
+
+If your bot uses MongoDB, the collector can run inside it, on the same database: no server, Docker or keys. Install
+this package beside the SDK and give the SDK your connection string; it starts the collector for you.
+
+```sh
+npm install @shardlens/discordjs @shardlens/collector
+```
+
+```ts
+createShardlens(client, { mongodb: process.env.MONGODB_URI });
+```
+
+`npx shardlens dashboard` in the bot's folder opens the dashboard. To run it yourself, `startMongoCollector` from
+`@shardlens/collector/mongodb` does what the SDK does: [On your MongoDB](https://kkkermit.github.io/Shardlens/self-hosting/mongodb/).
+It needs Node.js 24.11 or newer and MongoDB 7.0 or newer.
+
 ## Run it with Docker
 
-Most people run the collector as a container next to PostgreSQL 16 or newer, behind Caddy for HTTPS. The
+Without MongoDB, run the collector as a container next to PostgreSQL 16 or newer, behind Caddy for HTTPS. The
 [quick start](https://kkkermit.github.io/Shardlens/getting-started/quick-start/) has the whole setup:
 
 ```sh
@@ -49,7 +66,8 @@ Either way, the collector can also [copy every event into your own database](htt
 
 ## Links
 
-- [Embedded mode](https://kkkermit.github.io/Shardlens/self-hosting/embedded/) ·
+- [On your MongoDB](https://kkkermit.github.io/Shardlens/self-hosting/mongodb/) ·
+  [embedded mode](https://kkkermit.github.io/Shardlens/self-hosting/embedded/) ·
   [Docker Compose](https://kkkermit.github.io/Shardlens/self-hosting/docker-compose/) ·
   [upgrading](https://kkkermit.github.io/Shardlens/self-hosting/upgrading/) ·
   [security](https://kkkermit.github.io/Shardlens/operations/security/)

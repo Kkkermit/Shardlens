@@ -1,6 +1,6 @@
 ---
 title: CLI
-description: The shardlens command-line tool — init, keys, privacy and doctor.
+description: The shardlens command-line tool — init, keys, privacy, dashboard and doctor.
 ---
 
 The `shardlens` package is a small CLI for setting up and checking an install. It needs Node.js 22.12 or newer and has
@@ -18,8 +18,8 @@ rather than ignored. The CLI never asks questions, so it works the same in scrip
 
 | Exit code | Meaning                                                                                       |
 | --------- | --------------------------------------------------------------------------------------------- |
-| `0`       | Done. For `doctor`: no check failed (checks it couldn't run are warnings).                     |
-| `1`       | It failed: `init` found its files already there or couldn't write them, or a `doctor` check failed. |
+| `0`       | Done. For `doctor`: no check failed (checks it couldn't run are warnings). For `dashboard`: stopped with Ctrl+C. |
+| `1`       | It failed: `init` found its files already there or couldn't write them, a `doctor` check failed, or `dashboard` couldn't start. |
 | `2`       | Wrong usage: an unknown command or option, a missing or invalid value. Nothing was changed.    |
 
 ## `init`
@@ -128,6 +128,28 @@ app language, whether they are an admin, a manager or a member there, server or 
 worked and how quickly), that option values are not recorded except the ones you list, how user IDs are pseudonymised
 or, in audit mode, encrypted and for how long, how long detailed records are kept, and how to opt out or ask for
 erasure. [What is collected](../../concepts/data-collected/) has every field.
+
+## `dashboard`
+
+Opens the dashboard of a bot that keeps its data [in its own MongoDB](../../self-hosting/mongodb/) (the SDK's
+`mongodb` option), on this machine, until you stop it with Ctrl+C. Run it in your bot's folder.
+
+```sh
+npx shardlens dashboard
+```
+
+| Option          | Meaning                                                                                  |
+| --------------- | ---------------------------------------------------------------------------------------- |
+| `--uri <uri>`   | The MongoDB connection string. Default: the first of `MONGODB_URI`, `MONGO_URI`, `MONGODB_URL`, `MONGO_URL`, `MONGODB_CONNECTION_STRING`, `MONGO_CONNECTION_STRING`, `DATABASE_URL`, `DB_URI` and `DB_URL` that holds a `mongodb://` or `mongodb+srv://` string, from the environment and then from the `.env` in the current folder. |
+| `--app-id <id>` | Your Discord application ID. Needed only when several bots keep their Shardlens data in the same database. |
+| `--port <port>` | The port to serve the dashboard on, on `127.0.0.1`. Default `8080`.                       |
+
+It prints a link that signs you in as the bot's owner, settings included. Each link works once, within 15 minutes; run
+the command again for a new one. The dashboard listens on `127.0.0.1` only, so nobody else on the network can open it.
+
+The collector itself comes from the `@shardlens/collector` installed in your bot's folder (the `mongodb` option needs it
+too), so the CLI stays free of dependencies. Outside a folder that has it, the command says so and stops. It never
+prints the connection string.
 
 ## `doctor`
 

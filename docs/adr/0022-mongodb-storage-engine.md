@@ -47,7 +47,7 @@ replacing documents rather than incrementing them, so they are idempotent and la
 PostgreSQL handles them. Retention is TTL indexes, not dropped partitions. Unique-user rows expire with their salt.
 
 **Same privacy model.** User IDs are hashed in the bot with the period's salt, as before. Salts live in
-`shardlens_salts` and are deleted when their period ends (plus the grace day), which makes the hashes they produced
+`shardlens_salts` and are deleted seven days after their period ends, as on PostgreSQL, which makes the hashes they produced
 unlinkable; unique-user rows go with them. The audit key is never stored in MongoDB (an environment variable only).
 There is still no per-user view and no `groupBy: user`.
 

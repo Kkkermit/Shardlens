@@ -1,12 +1,16 @@
 # shardlens
 
-The [Shardlens](https://github.com/Kkkermit/Shardlens) command-line tool: set up a self-hosted collector, create keys,
-write a paragraph for your privacy policy and check your setup. Shardlens is self-hosted, privacy-first analytics and
+The [Shardlens](https://github.com/Kkkermit/Shardlens) command-line tool: open the dashboard of a bot that keeps its data
+in its own MongoDB, set up a self-hosted collector, create keys, write a paragraph for your privacy policy and check
+your setup. Shardlens is self-hosted, privacy-first analytics and
 health monitoring for discord.js bots.
 
 Needs Node.js 22.12 or newer; no dependencies.
 
 ```sh
+# In your bot's folder: the dashboard of a bot on its own MongoDB, with a one-time sign-in link
+npx shardlens dashboard
+
 # Write docker-compose.yml, a Caddyfile, a .env with generated secrets and keys, and bot.env with your bot's two settings
 npx shardlens init --domain stats.example.com --app-id 123456789012345678
 
@@ -23,7 +27,9 @@ npx shardlens privacy
 npx shardlens doctor --url https://stats.example.com --key slk_ingest_…
 ```
 
-`init` never overwrites files without `--force`, and with it keeps the secrets of an existing `.env`, so it is safe to run
+`dashboard` reads the bot's MongoDB connection string (`MONGODB_URI` and similar names) from the environment or the
+`.env` in the current folder, runs the collector from the `@shardlens/collector` installed there, and serves on
+`127.0.0.1` only. `init` never overwrites files without `--force`, and with it keeps the secrets of an existing `.env`, so it is safe to run
 again on a running collector. `doctor` also reads `SHARDLENS_URL` and `SHARDLENS_INGEST_KEY` from the environment or from
 a `.env` in the current folder. It only talks to the collector URL you give it, never over plain HTTP except to
 localhost, and never prints the key. `shardlens --help` lists every option.

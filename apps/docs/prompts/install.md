@@ -6,11 +6,11 @@ You are adding Shardlens to the discord.js bot in this repository. Everything yo
 
 Shardlens is self-hosted, privacy-first analytics and health monitoring for discord.js bots (MIT).
 
-- It has two parts: an **SDK** inside the bot (`@shardlens/discordjs`, what you are installing) and a **collector** with a dashboard that the bot's owner runs separately, or inside the bot in embedded mode. The SDK sends batches of events to the collector over HTTPS.
+- It has two parts: an **SDK** inside the bot (`@shardlens/discordjs`, what you are installing) and a **collector** that stores events and serves the dashboard. If the bot already uses MongoDB, the collector runs inside the bot on that same database (the SDK's `mongodb` option): nothing else to run, and this is what you set up. Otherwise the owner runs the collector on a server (or inside the bot in embedded mode), and the SDK sends it batches of events over HTTPS.
 - The dashboard is the owner's choice, and the SDK is the same for all three: the Shardlens dashboard (the default), a dashboard they already have (it reads every number through `@shardlens/client`), or none. If I haven't said which I want, assume the Shardlens dashboard and ask me at the end; don't build anything for the other two unless I ask.
 - The SDK records interactions (command name, outcome, response time), prefix commands the bot reports, servers joined and left, REST and shard health. It never records message content, and user IDs are hashed inside the bot before anything is sent.
 - It listens through public discord.js events only. It does not change how the bot behaves, never throws into the bot, and needs no Gateway intent beyond `Guilds`.
-- Requirements: discord.js 14.12 or newer, or 15; Node.js 22.12 or newer (24.11 for embedded mode). It ships ESM and CommonJS builds with types.
+- Requirements: discord.js 14.12 or newer, or 15; Node.js 22.12 or newer (24.11 when the collector runs inside the bot: on MongoDB or in embedded mode); MongoDB 7.0 or newer. It ships ESM and CommonJS builds with types.
 
 Repository: https://github.com/Kkkermit/Shardlens · Docs: https://kkkermit.github.io/Shardlens/
 
@@ -24,6 +24,7 @@ Repository: https://github.com/Kkkermit/Shardlens · Docs: https://kkkermit.gith
 - Whether the bot has prefix (message) commands: a `messageCreate` listener that checks a prefix or a mention, or a framework's message commands. Note whether the prefix comes from a database, whether there are aliases, and whether slash and prefix commands share the same command code.
 - Whether that code already catches command errors itself (a `try`/`catch` that replies "something went wrong").
 - How environment variables and settings are loaded (a `.env` file, a config file, a validation schema), and whether the bot already handles `SIGINT`/`SIGTERM`.
+- Whether the bot uses MongoDB (`mongodb` or `mongoose` in its dependencies), and the name of the setting that holds its connection string (`MONGODB_URI`, `MONGO_URL`, a field of a config file, …). Never print its value. If it does, and Node.js is 24.11 or newer, set Shardlens up on that database (the MongoDB variant below). On older Node.js, use the collector variant and tell me why at the end.
 
 Stop and tell me, instead of continuing, if:
 
@@ -32,13 +33,21 @@ Stop and tell me, instead of continuing, if:
 
 ## 2. Install the SDK
 
-Install `@shardlens/discordjs` with the project's own package manager. Don't add any other dependency (embedded mode, below, adds two more, and my own dashboard adds `@shardlens/client`, only if I asked for them).
+Install `@shardlens/discordjs` with the project's own package manager, and on MongoDB `@shardlens/collector` too. Don't add any other dependency (embedded mode, below, adds two more, and my own dashboard adds `@shardlens/client`, only if I asked for them).
 
 If the registry answers that the package doesn't exist, stop and tell me: Shardlens may not be published yet. Never install it from a tarball, a fork or a similarly named package.
 
 ## 3. Create Shardlens next to the client
 
-In the file that constructs the `Client`, after the client exists and before `client.login()`:
+In the file that constructs the `Client`, after the client exists and before `client.login()`. **On MongoDB**, pass the connection string the bot already reads, from the same place it reads it (here `MONGODB_URI`; use the project's own name, never a hard-coded string):
+
+```ts
+import { createShardlens } from '@shardlens/discordjs';
+
+const lens = createShardlens(client, { mongodb: process.env.MONGODB_URI });
+```
+
+Shardlens adds its own collections (prefixed `shardlens_`) to that database and never touches the bot's. It connects with its own client: don't pass it the bot's mongoose or MongoDB connection object, and don't change how the bot connects. **With a collector** instead (no MongoDB):
 
 ```ts
 import { createShardlens } from '@shardlens/discordjs';
@@ -51,7 +60,7 @@ const lens = createShardlens(client, {
 
 In CommonJS, use `const { createShardlens } = require('@shardlens/discordjs');`.
 
-- Call it exactly once per process.
+- Call it exactly once per process. On MongoDB that is still once per process: every process of a sharded bot writes to the same database.
 - **`ShardingManager`:** put it in the shard file (the one that constructs the `Client`), never in the manager file.
 - **discord-hybrid-sharding:** put it in the cluster file, after `client.cluster = new ClusterClient(client)` has been set. Never in the `ClusterManager` file.
 - **Internal sharding** (`shards: 'auto'`) and single-process bots need nothing special.
@@ -249,7 +258,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 
 ## 6. Document the two settings
 
-Skip this step in embedded mode, which uses neither setting.
+Skip this step on MongoDB and in embedded mode, which use neither setting.
 
 Add `SHARDLENS_URL=` and `SHARDLENS_INGEST_KEY=` (empty) to `.env.example` or wherever the project documents its environment. If the project validates its environment (zod, envalid, a config file), declare both as **optional strings and nothing more**: no format checks, no "both or neither" rule, no failure. The SDK checks them itself, logs one warning and records nothing when they are wrong. Add one line about Shardlens to the README's setup section if there is one.
 
@@ -379,16 +388,17 @@ const collector = await startEmbeddedCollector({
 ## Check your work
 
 - Run the project's own type-check, lint, build and test scripts, and fix anything you broke.
-- If `SHARDLENS_URL` and `SHARDLENS_INGEST_KEY` are set in my environment or the bot's `.env`, run `npx shardlens doctor` from the bot's folder and show me its output. It checks Node.js, discord.js, the collector and the key. Never print the key.
+- With a collector: if `SHARDLENS_URL` and `SHARDLENS_INGEST_KEY` are set in my environment or the bot's `.env`, run `npx shardlens doctor` from the bot's folder and show me its output. It checks Node.js, discord.js, the collector and the key. Never print the key.
 - Don't start the bot yourself unless I ask.
 
 ## Tell me when you're done
 
 - Which files you changed, and what each change does.
 - What I still need to do:
-  1. With a standalone collector: run one with `npx shardlens init --domain <my domain> --app-id <my application ID>`, then `docker compose up -d` in the folder it creates. Ask me which dashboard I want if I haven't said: the Shardlens dashboard (nothing to add), my own (`--dashboard own`) or none (`--dashboard none`); https://kkkermit.github.io/Shardlens/getting-started/choose-your-setup/ compares them. It prints nothing secret; the bot's two settings are in the generated `bot.env`. Guide: https://kkkermit.github.io/Shardlens/getting-started/quick-start/ Then set `SHARDLENS_URL` and `SHARDLENS_INGEST_KEY` where the bot runs.
-  2. In embedded mode instead: set the application ID if you added a setting for it, start the bot, and open the dashboard with the read key (say where it is).
-  3. To see what would be sent before any of that, pass `dryRun: true` once and run a command in the bot.
+  1. On MongoDB: start the bot and run a command, then run `npx shardlens dashboard` in the bot's folder and open the link it prints. It finds the connection string in `.env` by itself (if the bot reads it from somewhere else, `--uri` passes it). Guide: https://kkkermit.github.io/Shardlens/self-hosting/mongodb/
+  2. With a standalone collector: run one with `npx shardlens init --domain <my domain> --app-id <my application ID>`, then `docker compose up -d` in the folder it creates. Ask me which dashboard I want if I haven't said: the Shardlens dashboard (nothing to add), my own (`--dashboard own`) or none (`--dashboard none`); https://kkkermit.github.io/Shardlens/getting-started/choose-your-setup/ compares them. It prints nothing secret; the bot's two settings are in the generated `bot.env`. Guide: https://kkkermit.github.io/Shardlens/getting-started/quick-start/ Then set `SHARDLENS_URL` and `SHARDLENS_INGEST_KEY` where the bot runs.
+  3. In embedded mode instead: set the application ID if you added a setting for it, start the bot, and open the dashboard with the read key (say where it is).
+  4. To see what would be sent before any of that, pass `dryRun: true` once and run a command in the bot.
 - Anything you skipped or weren't sure about.
 
 ## If you need more
