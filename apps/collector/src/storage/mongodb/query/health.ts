@@ -35,18 +35,39 @@ const PROCESS_GAUGES = [
 type Reliability = QueryAnswer<'reliability'>;
 
 /**
- * The slot a gauge sample fills (`postgres/query/gauge-samples.ts`): its shard, or for a process-wide sample the
- * shards its process last reported holding, or the process alone when it holds none. A key to group by: one process
- * per slot is kept in each minute.
+ * The slot a gauge sample fills, named as `postgres/query/gauge-samples.ts` names it: its shard, or for a process-wide
+ * sample the shards its process last reported holding, or the process alone when it holds none. One process per slot
+ * is kept in each minute, and slots are added up in the order of their names.
  */
 function slotOf(shard: unknown, shards: unknown, instance: unknown): Document {
+  const listed = {
+    $reduce: {
+      input: shards,
+      initialValue: '',
+      in: { $concat: ['$$value', { $cond: [{ $eq: ['$$value', ''] }, '', ','] }, { $toString: '$$this' }] },
+    },
+  };
   return {
     $cond: [
       { $gte: [shard, 0] },
-      { s: shard },
-      { $cond: [{ $gt: [{ $size: shards }, 0] }, { sh: shards }, { i: instance }] },
+      { $concat: ['shard ', { $toString: shard }] },
+      {
+        $cond: [
+          { $gt: [{ $size: shards }, 0] },
+          { $concat: ['shards ', listed] },
+          { $concat: ['instance ', instance] },
+        ],
+      },
     ],
   };
+}
+
+/**
+ * `field` of `list`'s documents added up one after another in order, as PostgreSQL's `sum` and `avg` of a `float8` add
+ * the rows they are given: `$sum` and `$avg` add with extra precision, which can differ in the last digit.
+ */
+function addedInOrder(list: unknown, field: string): Document {
+  return { $reduce: { input: list, initialValue: 0, in: { $add: ['$$value', `$$this.${field}`] } } };
 }
 
 /** Pipeline stages that put the process's last health report into `field` (an `_id` to look up, `{ appId, instance }`). */
@@ -125,11 +146,19 @@ async function gauge(m: Mongo, appId: string, spec: Spec<'gauge'>): Promise<Quer
           source: { $top: { sortBy: { last: -1, '_id.i': 1 }, output: { s: '$_id.s', v: '$v', mx: '$mx' } } },
         },
       },
+      // PostgreSQL combines a minute's slots in the order of their names, and averages the interval's minutes in the
+      // order they came: added the same way, the answers agree to the last digit.
       {
         $group: {
           _id: { m: '$_id.m', s: spec.perShard ? '$source.s' : null },
-          v: additive ? { $sum: '$source.v' } : { $avg: '$source.v' },
-          mx: additive ? { $sum: '$source.mx' } : { $max: '$source.mx' },
+          slots: { $push: { slot: '$_id.slot', v: '$source.v', mx: '$source.mx' } },
+        },
+      },
+      { $set: { slots: { $sortArray: { input: '$slots', sortBy: { slot: 1 } } } } },
+      {
+        $set: {
+          v: additive ? addedInOrder('$slots', 'v') : { $divide: [addedInOrder('$slots', 'v'), { $size: '$slots' }] },
+          mx: additive ? addedInOrder('$slots', 'mx') : { $max: '$slots.mx' },
         },
       },
       {
@@ -143,8 +172,19 @@ async function gauge(m: Mongo, appId: string, spec: Spec<'gauge'>): Promise<Quer
             },
             s: '$_id.s',
           },
-          value: { $avg: '$v' },
+          minutes: { $push: { m: '$_id.m', v: '$v' } },
           max: { $max: '$mx' },
+        },
+      },
+      {
+        $project: {
+          max: 1,
+          value: {
+            $divide: [
+              addedInOrder({ $sortArray: { input: '$minutes', sortBy: { m: 1 } } }, 'v'),
+              { $size: '$minutes' },
+            ],
+          },
         },
       },
       { $sort: { '_id.t': 1, '_id.s': 1 } },
