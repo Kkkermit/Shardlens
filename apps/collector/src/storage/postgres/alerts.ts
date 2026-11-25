@@ -43,9 +43,10 @@ async function evaluateMetric(db: Db, appId: string, metric: string, windowS: nu
       return r.rows[0]?.v ?? null;
     }
     case 'invalid_requests_pct': {
-      // Discord's ban threshold counts the last 10 minutes regardless of the rule's window.
+      // Discord's ban threshold counts the last 10 minutes regardless of the rule's window. As float8: `pg` returns
+      // numeric as a string, which the alert message's formatting can't take.
       const r = await db.query<{ v: number | null }>(
-        `SELECT 100.0 * sum(count401 + count403 + count429) / 10000 AS v
+        `SELECT (100.0 * sum(count401 + count403 + count429) / 10000)::float8 AS v
            FROM rest_invalid WHERE app_id = $1 AND ts > now() - interval '10 minutes'`,
         [appId],
       );

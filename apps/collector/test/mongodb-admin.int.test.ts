@@ -140,8 +140,6 @@ async function addGuild(appId: string, guildId: string, opts: { name?: string; l
 }
 
 /** PostgreSQL answers `numeric` as a string. */
-const asNumber = (v: unknown) => (typeof v === 'string' ? Number(v) : v);
-
 beforeAll(async () => {
   const [mb, pgc] = await Promise.all([
     mongoStore(),
@@ -521,9 +519,11 @@ describe('alerts', () => {
     for (const appId of [empty, busy, quiet]) {
       for (const metric of [...ALERT_METRICS, 'no_such_metric']) {
         for (const windowS of [60, 300, 600, 3_600, 86_400]) {
-          const fromPg = asNumber(await pg.alerts.metricValue(appId, metric, windowS));
+          const fromPg = await pg.alerts.metricValue(appId, metric, windowS);
           const fromMongo = await mongo.alerts.metricValue(appId, metric, windowS);
           expect(fromMongo, `${metric} over ${windowS} s`).toBe(fromPg);
+          // The alert job formats the value with toFixed: a numeric string from PostgreSQL stopped the run.
+          expect(fromPg === null || typeof fromPg === 'number', `${metric} from PostgreSQL`).toBe(true);
           expect(fromMongo === null || typeof fromMongo === 'number').toBe(true);
         }
       }
