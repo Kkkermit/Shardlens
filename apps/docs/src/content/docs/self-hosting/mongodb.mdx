@@ -146,11 +146,17 @@ environment with `mongodb: { uri, auditKey: process.env.SHARDLENS_AUDIT_KEY }` a
 
 ## Size and the Atlas free tier
 
-The free tier allows 512 MB of storage and 100 operations a second. Each process writes a batch about every 5 seconds
-(a few operations, whatever the number of events in it), and the jobs add a few a minute, so the operation limit is far
-off for most bots. Storage is what fills: mostly single events, which go after the days set in Settings. If you get
-close to the limit, keep single events for fewer days, or move to a paid tier: counts by hour and day stay small for
-years.
+The free tier allows 512 MB of storage and 100 operations a second.
+
+- **Operations** are far off for most bots. Each process writes a batch about every 5 seconds, a few operations whatever
+  the number of events in it; the background jobs add a few a minute, and live tiles cost nothing while no dashboard
+  is open.
+- **Storage** is what fills, mostly with single events, which go after the days set in **Settings → Data retention**.
+  A slash command takes about 360 bytes uncompressed (about 150 on disk), with its share of the unique-user counts and
+  rollups on top. At the default 35 days that is room for roughly 30,000 commands a day; at 14 days, about 75,000.
+  Counts by hour and day stay small for years.
+
+Past that, keep single events for fewer days, or move to a paid tier.
 
 ## Compared with the other setups
 
