@@ -74,11 +74,9 @@ export async function leakCheck(bot, { dir, logs, needles: { token, users, inter
   const dashboardLog = join(logs, `${bot}-dashboard.log`);
   if (existsSync(dashboardLog)) sources['the shardlens dashboard log'] = readFileSync(dashboardLog, 'utf8');
   let rows;
-  if (!copy) {
-    rows = undefined;
-  } else if (copy.sqlite) {
+  if (copy?.sqlite) {
     ({ text: sources['the copy'], rows } = dumpSqlite(join(dir, copy.sqlite)));
-  } else {
+  } else if (copy) {
     const [db, database] = Object.entries(copy)[0];
     sources['the copy'] = dump(db, database);
     rows = copyRows(db, database);

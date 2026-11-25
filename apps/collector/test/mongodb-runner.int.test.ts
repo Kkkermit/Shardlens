@@ -120,6 +120,18 @@ describe('the MongoDB runner', () => {
     expect(collector.appId).toBe('1234567890123456780');
   });
 
+  it('starts with SHARDLENS_SETTINGS_KEY listed in the environment with no value, as a .env often has it', async () => {
+    const before = process.env.SHARDLENS_SETTINGS_KEY;
+    process.env.SHARDLENS_SETTINGS_KEY = '';
+    try {
+      const collector = await start();
+      expect(collector.appId).toBe(APP_ID);
+    } finally {
+      if (before === undefined) delete process.env.SHARDLENS_SETTINGS_KEY;
+      else process.env.SHARDLENS_SETTINGS_KEY = before;
+    }
+  });
+
   it('refuses what it cannot use, before connecting', async () => {
     await expect(startMongoCollector({ uri: 'postgres://localhost/db', appId: APP_ID })).rejects.toThrow(
       'must start with mongodb://',
@@ -133,5 +145,15 @@ describe('the MongoDB runner', () => {
     await expect(startMongoCollector({ uri: backing.databaseUrl, appId: APP_ID, database: 'a.b' })).rejects.toThrow(
       'database must be a MongoDB database name',
     );
+    const short = Buffer.alloc(16).toString('base64');
+    await expect(
+      startMongoCollector({ uri: backing.databaseUrl, appId: APP_ID, mode: 'audit', auditKey: short }),
+    ).rejects.toThrow('auditKey must be 32 random bytes');
+    await expect(startMongoCollector({ uri: backing.databaseUrl, appId: APP_ID, settingsKey: short })).rejects.toThrow(
+      'settingsKey must be 32 random bytes',
+    );
+    await expect(
+      startMongoCollector({ uri: backing.databaseUrl, appId: APP_ID, dashboard: { publicUrl: 'stats.example.com' } }),
+    ).rejects.toThrow('dashboard.publicUrl must be a URL');
   });
 });

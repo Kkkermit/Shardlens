@@ -235,15 +235,7 @@ function attach(client: Client, options: ShardlensOptions): Shardlens {
   }
 
   const inBot = mongoDBSettings(options, warn);
-  const collector = inBot
-    ? new MongoDBCollector(client, inBot, options.mode, (message) => {
-        try {
-          (options.logger ?? console).info?.(message);
-        } catch {
-          // a broken logger must not break the SDK
-        }
-      })
-    : undefined;
+  const collector = inBot ? new MongoDBCollector(client, inBot, options.mode, options.logger ?? console) : undefined;
 
   // Core counts what it could not spool (`spool_full`) but can't see what the spool later evicts at its size cap.
   let spoolEvicted = 0;

@@ -5,9 +5,9 @@
  * the dashboard. Every process of a sharded bot can run one against the same database: they share keys, and
  * background jobs run in one of them at a time.
  */
-import type { FastifyInstance } from 'fastify';
 import { startCollector } from './app.js';
 import type { Config } from './env.js';
+import { inProcessFetch } from './in-process-fetch.js';
 import { SignInLinks } from './security/sign-in-links.js';
 import { MONGODB_URL, openMongo } from './storage/mongodb/connect.js';
 import { appSecrets, onlyApp, seedGeneratedKeys } from './storage/mongodb/secrets.js';
@@ -90,38 +90,11 @@ export interface MongoCollector {
   close(): Promise<void>;
 }
 
-/** A `fetch` answered by `app.inject`, with the ingest key: no socket, no port. */
-function inProcessFetch(app: FastifyInstance, ingestKey: string): typeof fetch {
-  return async (input, init) => {
-    const request = new Request(input, init);
-    request.signal.throwIfAborted();
-    const url = new URL(request.url);
-    const headers = Object.fromEntries(request.headers);
-    headers.authorization = `Bearer ${ingestKey}`;
-    // Answers come back as they are: nothing here would decompress one.
-    delete headers['accept-encoding'];
-    const body = request.method === 'GET' || request.method === 'HEAD' ? undefined : await request.arrayBuffer();
-    const res = await app.inject({
-      method: request.method as 'GET',
-      url: `${url.pathname}${url.search}`,
-      headers,
-      ...(body ? { payload: Buffer.from(body) } : {}),
-    });
-    const out = new Headers();
-    for (const [name, value] of Object.entries(res.headers)) {
-      if (value === undefined) continue;
-      for (const one of Array.isArray(value) ? value : [value]) out.append(name, String(one));
-    }
-    const empty = res.statusCode === 204 || res.statusCode === 304 || request.method === 'HEAD';
-    return new Response(empty ? null : res.rawPayload, { status: res.statusCode, headers: out });
-  };
-}
-
 /**
- * Starts the collector on your MongoDB in this process. Resolves once it can take events (and, with `dashboard`, once
- * the dashboard listens). The first start of an app creates its collections, indexes and keys.
+ * Refuses what the collector couldn't use, before anything connects, with an error that names the option: a key that
+ * isn't one would otherwise fail the start once connected, and a bad database name the first write.
  */
-export async function startMongoCollector(options: MongoCollectorOptions): Promise<MongoCollector> {
+function checkOptions(options: MongoCollectorOptions, envSettingsKey: string | undefined): void {
   if (typeof options.uri !== 'string' || !MONGODB_URL.test(options.uri)) {
     throw new Error('Shardlens: the MongoDB connection string must start with mongodb:// or mongodb+srv://');
   }
@@ -129,10 +102,32 @@ export async function startMongoCollector(options: MongoCollectorOptions): Promi
     throw new Error('Shardlens: appId must be your Discord application ID');
   }
   if (options.mode === 'audit' && !options.auditKey) throw new Error("Shardlens: mode 'audit' needs auditKey");
-  // MongoDB's own rule for database names, checked here so a mistake says so instead of failing on first write.
+  for (const [name, key] of [
+    ['auditKey', options.auditKey],
+    ['settingsKey', options.settingsKey],
+    ['SHARDLENS_SETTINGS_KEY', options.settingsKey === undefined ? envSettingsKey : undefined],
+  ] as const) {
+    if (key !== undefined && (typeof key !== 'string' || Buffer.from(key, 'base64').length !== 32)) {
+      throw new Error(`Shardlens: ${name} must be 32 random bytes, base64 (openssl rand -base64 32)`);
+    }
+  }
+  // MongoDB's own rule for database names.
   if (options.database !== undefined && !/^[^/\\. "$*<>:|?]{1,63}$/.test(options.database)) {
     throw new Error('Shardlens: database must be a MongoDB database name');
   }
+  if (options.dashboard?.publicUrl !== undefined && !URL.canParse(options.dashboard.publicUrl)) {
+    throw new Error('Shardlens: dashboard.publicUrl must be a URL, such as https://stats.example.com');
+  }
+}
+
+/**
+ * Starts the collector on your MongoDB in this process. Resolves once it can take events (and, with `dashboard`, once
+ * the dashboard listens). The first start of an app creates its collections, indexes and keys.
+ */
+export async function startMongoCollector(options: MongoCollectorOptions): Promise<MongoCollector> {
+  // Empty counts as unset, as it does for the collector image: a `.env` often lists the variable with no value.
+  const envSettingsKey = process.env.SHARDLENS_SETTINGS_KEY?.trim() || undefined;
+  checkOptions(options, envSettingsKey);
 
   // Every process of a sharded bot opens its own: the driver's default of 100 connections each could reach a hosted
   // tier's limit. Ingest is one batch at a time; a dashboard's page asks a few queries at once.
@@ -154,7 +149,7 @@ export async function startMongoCollector(options: MongoCollectorOptions): Promi
       publicUrl,
       appId,
       sessionSecret: secrets.sessionSecret,
-      settingsKey: options.settingsKey ?? process.env.SHARDLENS_SETTINGS_KEY ?? secrets.settingsKey,
+      settingsKey: options.settingsKey ?? envSettingsKey ?? secrets.settingsKey,
       auditKey: options.auditKey,
       discord: dashboard?.discord,
       discordPublicKey: options.discordPublicKey,
