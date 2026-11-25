@@ -658,6 +658,26 @@ describe('MongoStore', () => {
       expect(await m.c.dirtyBuckets.countDocuments()).toBe(0);
     });
 
+    it('recomputes the minute of a late message command, as PostgreSQL does', async () => {
+      const ts = Date.now() - 20 * MINUTE;
+      await write([
+        {
+          id: uuidv7(ts),
+          ts,
+          type: 'message_command',
+          command: 'late_prefix',
+          options: [],
+          channelType: 0,
+          guild: '112233445566778899',
+          user: user(1),
+          outcome: 'ok',
+        },
+      ]);
+      await store.jobs.runRollups(new Date());
+      const [doc] = await rollup('1m', { metric: 'interactions', 'dims.command': 'late_prefix' });
+      expect(doc).toMatchObject({ bucket: new Date(minuteOf(ts)), count: 1, dims: { kind: 9 } });
+    });
+
     it('rolls up an event that arrived just under 2 minutes late, and reaches back when runs fall behind', async () => {
       const arrived = Date.now();
       await write(

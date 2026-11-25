@@ -262,9 +262,9 @@ async function writeEvents(m: Mongo, ctx: IngestContext, items: readonly IngestI
       case 'message_command': {
         const user = userHash(index, e.user);
         if (!user) continue;
+        markLate(e.ts);
         // Stored with interactions so every command view counts it. A message has no user language, install type,
         // entitlements or response, so those fields hold empty values that the deadline and premium figures skip.
-        // Not marked late: PostgreSQL's writer doesn't mark message commands either.
         interactionIds.push(e.id);
         interactions.push(
           compact<InteractionDoc>({
