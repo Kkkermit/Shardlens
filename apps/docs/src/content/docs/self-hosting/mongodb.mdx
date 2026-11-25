@@ -42,6 +42,16 @@ already, and each writes its own events to the same database. They share one set
 (rollups, unique users, retention, alerts, reports) run in one process at a time: if that one stops, another takes over
 within a minute or two.
 
+### When MongoDB is down
+
+Your bot keeps running. Events wait in memory (up to `maxQueueSize`, 10,000 by default, or on disk with `spool`) and
+are stored once the database answers again; a short blip passes unnoticed, and a longer outage logs one line each way:
+
+```text
+Shardlens: can't reach MongoDB (HTTP 500). Retrying; events wait in memory.
+Shardlens: connected to MongoDB.
+```
+
 ## Open the dashboard
 
 In your bot's folder, on your computer or the bot's host:
