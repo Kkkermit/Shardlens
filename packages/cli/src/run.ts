@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
+import { dashboard } from './dashboard.js';
 import { doctor } from './doctor.js';
 import { readEnvFile } from './env-file.js';
 import { type DashboardChoice, init, isDashboardChoice, UsageError } from './init.js';
@@ -35,6 +36,12 @@ Commands
               --webhook-events          you receive Discord webhook events
               --retention <days>        raw-data retention, 7 to 90 (default 35)
               --audit-retention <days>  audit retention, 1 to 90 (default 30)
+  dashboard Open the dashboard of a bot that keeps its data in its own MongoDB (the mongodb option), on this
+            machine, signed in by a one-time link. Run it in your bot's folder
+              --uri <uri>               the MongoDB connection string (default: MONGODB_URI, MONGO_URI and
+                                        similar names, from the environment or the .env here)
+              --app-id <id>             your Discord application ID, when several bots share the database
+              --port <port>             the port to serve it on (default 8080)
   doctor    Check Node.js, discord.js, the collector and your ingest key
               --url <url>               the collector (default SHARDLENS_URL)
               --key <key>               an ingest key (default SHARDLENS_INGEST_KEY)
@@ -62,6 +69,8 @@ const OPTIONS = {
   'audit-retention': { type: 'string' },
   url: { type: 'string' },
   key: { type: 'string' },
+  uri: { type: 'string' },
+  port: { type: 'string' },
   help: { type: 'boolean', short: 'h' },
   version: { type: 'boolean', short: 'v' },
 } as const;
@@ -74,6 +83,7 @@ const COMMANDS: Record<string, readonly string[]> = {
   keys: ['scope'],
   privacy: ['audit', 'ids-only', 'option-values', 'webhook-events', 'retention', 'audit-retention'],
   doctor: ['url', 'key'],
+  dashboard: ['uri', 'app-id', 'port'],
 };
 
 /** Prints a command-line mistake and returns its exit code. */
@@ -122,6 +132,8 @@ export async function run(argv: string[]): Promise<number> {
         return keysCommand(values.scope);
       case 'privacy':
         return privacyCommand(values);
+      case 'dashboard':
+        return await dashboardCommand(values);
       default:
         return await doctorCommand(values);
     }
@@ -184,6 +196,28 @@ const LOOK: Record<DashboardChoice, (url: string) => string> = {
      @shardlens/client and SHARDLENS_READ_KEY, or copy every event into your own database with
      SHARDLENS_SINK_URL: ${DOCS}/getting-started/choose-your-setup/`,
 };
+
+async function dashboardCommand(values: Values): Promise<number> {
+  const port = values.port === undefined ? undefined : Number(values.port);
+  if (port !== undefined && !(Number.isInteger(port) && port >= 1 && port <= 65_535)) {
+    return usage('--port must be a port number, 1 to 65535.');
+  }
+  if (values['app-id'] !== undefined && !/^\d{17,20}$/.test(values['app-id'])) {
+    return usage('--app-id must be your Discord application ID.');
+  }
+  return dashboard({
+    uri: values.uri,
+    appId: values['app-id'],
+    port,
+    cwd: process.cwd(),
+    env: process.env,
+    until: new Promise((resolve) => {
+      process.once('SIGINT', resolve);
+      process.once('SIGTERM', resolve);
+    }),
+    print: (line) => console.log(line),
+  });
+}
 
 function keysCommand(scope = 'ingest'): number {
   if (scope !== 'ingest' && scope !== 'read' && scope !== 'activity') {

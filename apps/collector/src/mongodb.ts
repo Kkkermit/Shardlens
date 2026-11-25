@@ -20,8 +20,11 @@ export interface MongoCollectorOptions {
    * Shardlens keeps its collections (prefixed `shardlens_`) in the database the string names, or in `shardlens`.
    */
   uri: string;
-  /** Your Discord application ID. */
-  appId: string;
+  /**
+   * Your Discord application ID. Default: the one bot whose collector has run on this database before (what
+   * `npx shardlens dashboard` relies on).
+   */
+  appId?: string | undefined;
   /**
    * Serve the dashboard, and the API `@shardlens/client` reads, on a port. Left out, nothing listens: events are
    * stored from this process, and `npx shardlens dashboard` shows them. When several processes ask for the same port,
@@ -60,6 +63,8 @@ export interface MongoCollectorOptions {
 }
 
 export interface MongoCollector {
+  /** The app whose events this collector stores. */
+  readonly appId: string;
   /**
    * Answers the collector's HTTP API in this process, signed in as the app's ingest key: what the SDK sends its
    * events through (`createShardlens` does this for you).
@@ -103,6 +108,21 @@ async function loadSecrets(c: Collections, appId: string): Promise<SecretDoc> {
   return doc;
 }
 
+/** The app whose collector has run on this database, when there is exactly one. */
+async function onlyApp(c: Collections): Promise<string> {
+  const apps = await c.secrets
+    .find({ _id: { $regex: /^app:\d+$/ } }, { projection: { _id: 1 } })
+    .limit(2)
+    .toArray();
+  const only = apps.length === 1 ? apps[0]?._id.slice('app:'.length) : undefined;
+  if (only) return only;
+  throw new Error(
+    apps.length === 0
+      ? 'Shardlens has no data in this database yet: start your bot with the mongodb option first, or give the application ID.'
+      : 'Several bots keep their Shardlens data in this database: give the application ID of the one to show.',
+  );
+}
+
 /** A `fetch` answered by `app.inject`, with the ingest key: no socket, no port. */
 function inProcessFetch(app: FastifyInstance, ingestKey: string): typeof fetch {
   return async (input, init) => {
@@ -138,13 +158,16 @@ export async function startMongoCollector(options: MongoCollectorOptions): Promi
   if (typeof options.uri !== 'string' || !MONGODB_URL.test(options.uri)) {
     throw new Error('Shardlens: the MongoDB connection string must start with mongodb:// or mongodb+srv://');
   }
-  if (!/^\d{17,20}$/.test(options.appId)) throw new Error('Shardlens: appId must be your Discord application ID');
+  if (options.appId !== undefined && !/^\d{17,20}$/.test(options.appId)) {
+    throw new Error('Shardlens: appId must be your Discord application ID');
+  }
   if (options.mode === 'audit' && !options.auditKey) throw new Error("Shardlens: mode 'audit' needs auditKey");
 
   const m = await openMongo(options.uri, 'shardlens');
   try {
+    const appId = options.appId ?? (await onlyApp(m.c));
     const store = new MongoStore(m);
-    const secrets = await loadSecrets(m.c, options.appId);
+    const secrets = await loadSecrets(m.c, appId);
     const dashboard = options.dashboard;
     const port = dashboard?.port ?? 8080;
     const host = dashboard?.host ?? '127.0.0.1';
@@ -152,7 +175,7 @@ export async function startMongoCollector(options: MongoCollectorOptions): Promi
     const config: Config = {
       databaseUrl: 'mongodb',
       publicUrl,
-      appId: options.appId,
+      appId,
       sessionSecret: secrets.sessionSecret,
       settingsKey: options.settingsKey ?? process.env.SHARDLENS_SETTINGS_KEY ?? secrets.settingsKey,
       auditKey: options.auditKey,
@@ -188,6 +211,7 @@ export async function startMongoCollector(options: MongoCollectorOptions): Promi
         : (dashboard?.publicUrl ?? `http://localhost:${new URL(collector.address).port}`);
     let closed: Promise<void> | undefined;
     return {
+      appId,
       fetch: inProcessFetch(collector.server, secrets.ingestKey),
       dashboardUrl,
       signInLink: () => (dashboardUrl && links ? links.issue(dashboardUrl) : undefined),
