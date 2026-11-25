@@ -237,13 +237,16 @@ export const scenarios = {
         await w.sleep(40);
       }
 
-      // Opt-out through the /privacy command: neither the opt-out itself nor anything after it is recorded.
-      const quitter = U[9];
-      w.slash(quitter, g1, 'privacy', [{ type: 1, name: 'optout', options: [] }]);
-      await w.sleep(300);
-      for (let i = 0; i < 3; i++) {
-        w.slash(quitter, g1, 'ping');
-        await w.sleep(40);
+      // Opt-out through the /privacy command: neither the opt-out itself nor anything after it is recorded. Only for a
+      // bot whose install added the command, which the install prompt does on request only.
+      if (this.privacyCommand !== false) {
+        const quitter = U[9];
+        w.slash(quitter, g1, 'privacy', [{ type: 1, name: 'optout', options: [] }]);
+        await w.sleep(300);
+        for (let i = 0; i < 3; i++) {
+          w.slash(quitter, g1, 'ping');
+          await w.sleep(40);
+        }
       }
 
       for (let i = 0; i < 2; i++) {
@@ -395,5 +398,5 @@ export const scenarios = {
 // The same scenarios for bots that keep their own data in MongoDB.
 scenarios['mongo-prefix'] = { ...scenarios['js-prefix'], appId: '1100000000000000011' };
 scenarios['mongo-sharded'] = { ...scenarios['ts-sharded'], appId: '1100000000000000012' };
-scenarios['mongo-hybrid'] = { ...scenarios['ts-guide'], appId: '1100000000000000013' };
+scenarios['mongo-hybrid'] = { ...scenarios['ts-guide'], appId: '1100000000000000013', privacyCommand: false };
 scenarios['mongo-modular'] = { ...scenarios.sapphire, appId: '1100000000000000014' };
