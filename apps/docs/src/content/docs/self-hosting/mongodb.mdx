@@ -95,6 +95,13 @@ On MongoDB the collector needs neither `SHARDLENS_SESSION_SECRET` nor `SHARDLENS
 bot generated in the database. The bot keeps writing its own events, so the image only serves the dashboard, alerts,
 reports and [webhook events](../../guides/webhook-events/).
 
+### A dashboard of your own
+
+To show the numbers in a dashboard or admin panel you already have, run the collector image as above, with the
+dashboard off (`SHARDLENS_DASHBOARD=off`) if you want none of its pages, and a read key in `SHARDLENS_READ_KEY`
+(`npx shardlens keys --scope read` makes one). Your panel's server then reads every number with
+[`@shardlens/client`](../../guides/your-own-dashboard/), from the image's address and that key.
+
 ## Where things are kept
 
 | Collection                                   | What it holds                                                        |
