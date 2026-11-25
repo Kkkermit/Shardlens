@@ -102,9 +102,24 @@ export async function startMongoCollector(options: MongoCollectorOptions): Promi
     throw new Error('Shardlens: appId must be your Discord application ID');
   }
   if (options.mode === 'audit' && !options.auditKey) throw new Error("Shardlens: mode 'audit' needs auditKey");
+  // Empty counts as unset, as it does for the collector image: a `.env` often lists the variable with no value.
+  const envSettingsKey = process.env.SHARDLENS_SETTINGS_KEY?.trim() || undefined;
+  // Checked before connecting, so a mistake names the setting rather than failing the start once connected.
+  for (const [name, key] of [
+    ['auditKey', options.auditKey],
+    ['settingsKey', options.settingsKey],
+    ['SHARDLENS_SETTINGS_KEY', options.settingsKey === undefined ? envSettingsKey : undefined],
+  ] as const) {
+    if (key !== undefined && (typeof key !== 'string' || Buffer.from(key, 'base64').length !== 32)) {
+      throw new Error(`Shardlens: ${name} must be 32 random bytes, base64 (openssl rand -base64 32)`);
+    }
+  }
   // MongoDB's own rule for database names, checked here so a mistake says so instead of failing on first write.
   if (options.database !== undefined && !/^[^/\\. "$*<>:|?]{1,63}$/.test(options.database)) {
     throw new Error('Shardlens: database must be a MongoDB database name');
+  }
+  if (options.dashboard?.publicUrl !== undefined && !URL.canParse(options.dashboard.publicUrl)) {
+    throw new Error('Shardlens: dashboard.publicUrl must be a URL, such as https://stats.example.com');
   }
 
   // Every process of a sharded bot opens its own: the driver's default of 100 connections each could reach a hosted
@@ -127,7 +142,7 @@ export async function startMongoCollector(options: MongoCollectorOptions): Promi
       publicUrl,
       appId,
       sessionSecret: secrets.sessionSecret,
-      settingsKey: options.settingsKey ?? process.env.SHARDLENS_SETTINGS_KEY ?? secrets.settingsKey,
+      settingsKey: options.settingsKey ?? envSettingsKey ?? secrets.settingsKey,
       auditKey: options.auditKey,
       discord: dashboard?.discord,
       discordPublicKey: options.discordPublicKey,
