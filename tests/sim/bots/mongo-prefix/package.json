@@ -1,0 +1,17 @@
+{
+  "name": "modbot",
+  "version": "2.3.1",
+  "description": "Moderation bot with custom prefixes per server",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "discord.js": "^14.28.1",
+    "dotenv": "^16.4.5",
+    "mongoose": "^8.9.5"
+  }
+}
