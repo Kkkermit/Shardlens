@@ -6,7 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { GUILD_EVENT } from '../src/ingest/codes.js';
 import { runSalts } from '../src/jobs/scheduler.js';
 import { collections, LAYOUT_VERSION } from '../src/storage/mongodb/collections.js';
-import { databaseName, type Mongo } from '../src/storage/mongodb/connect.js';
+import { databaseName, type Mongo, openMongo } from '../src/storage/mongodb/connect.js';
 import { nextId } from '../src/storage/mongodb/ids.js';
 import { MongoStore } from '../src/storage/mongodb/store.js';
 import { ensureSalt } from '../src/storage/salts.js';
@@ -57,6 +57,17 @@ describe('MongoStore', () => {
   afterAll(() => backing?.close());
 
   describe('connection and set-up', () => {
+    it('caps its connection pool, unless the connection string sets one', async () => {
+      const capped = await openMongo(backing.databaseUrl, 'test', { maxPoolSize: 5 });
+      const chosen = await openMongo(`${backing.databaseUrl}?maxPoolSize=3`, 'test', { maxPoolSize: 5 });
+      try {
+        expect(capped.client.options.maxPoolSize).toBe(5);
+        expect(chosen.client.options.maxPoolSize).toBe(3);
+      } finally {
+        await Promise.all([capped.client.close(), chosen.client.close()]);
+      }
+    });
+
     it('is ready on a standalone server, and prepares twice without complaint', async () => {
       await store.ready();
       await store.prepare();

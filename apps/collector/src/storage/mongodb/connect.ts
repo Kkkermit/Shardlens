@@ -21,8 +21,15 @@ export function databaseName(url: string): string {
 }
 
 /** Connects, failing within 10 seconds when no server answers. The caller closes `client`. */
-export async function openMongo(url: string, appName = 'shardlens-collector'): Promise<Mongo> {
-  const client = new MongoClient(url, { serverSelectionTimeoutMS: 10_000, appName });
+export async function openMongo(
+  url: string,
+  appName = 'shardlens-collector',
+  opts: { maxPoolSize?: number | undefined } = {},
+): Promise<Mongo> {
+  // A `maxPoolSize` in the connection string is the owner's choice and stays.
+  const pool =
+    opts.maxPoolSize !== undefined && !/[?&]maxPoolSize=/i.test(url) ? { maxPoolSize: opts.maxPoolSize } : {};
+  const client = new MongoClient(url, { serverSelectionTimeoutMS: 10_000, appName, ...pool });
   await client.connect();
   const db = client.db(databaseName(url));
   return { client, db, c: collections(db) };

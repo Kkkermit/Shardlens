@@ -16,7 +16,8 @@ import { MongoStore } from './storage/mongodb/store.js';
 export interface MongoCollectorOptions {
   /**
    * Your MongoDB's connection string, `mongodb://` or `mongodb+srv://`: the `MONGODB_URI` your bot already uses.
-   * Shardlens keeps its collections (prefixed `shardlens_`) in the database the string names, or in `shardlens`.
+   * Shardlens keeps its collections (prefixed `shardlens_`) in the database the string names, or in `shardlens`. It
+   * opens at most 5 connections per process (10 while it serves the dashboard), unless the string sets `maxPoolSize`.
    */
   uri: string;
   /**
@@ -124,7 +125,9 @@ export async function startMongoCollector(options: MongoCollectorOptions): Promi
   }
   if (options.mode === 'audit' && !options.auditKey) throw new Error("Shardlens: mode 'audit' needs auditKey");
 
-  const m = await openMongo(options.uri, 'shardlens');
+  // Every process of a sharded bot opens its own: the driver's default of 100 connections each could reach a hosted
+  // tier's limit. Ingest is one batch at a time; a dashboard's page asks a few queries at once.
+  const m = await openMongo(options.uri, 'shardlens', { maxPoolSize: options.dashboard ? 10 : 5 });
   try {
     const appId = options.appId ?? (await onlyApp(m.c));
     const store = new MongoStore(m);
