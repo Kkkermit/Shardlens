@@ -19,9 +19,9 @@ import type {
 import { mongoAdminAudit } from './admin-audit.js';
 import { mongoAlerts } from './alerts.js';
 import { mongoApps } from './apps.js';
-import { ensureIndexes } from './collections.js';
 import type { Mongo } from './connect.js';
 import { mongoDemo } from './demo.js';
+import { prepareIndexes } from './indexes.js';
 import { mongoIngest } from './ingest/write.js';
 import { mongoJobs } from './jobs.js';
 import { mongoKeys } from './keys.js';
@@ -33,6 +33,7 @@ import { mongoReports } from './scheduled-reports.js';
 import { mongoSessions } from './sessions.js';
 import { mongoSettings } from './settings.js';
 import { mongoWebhookEvents } from './webhook-events.js';
+import { refusedInput } from './writes.js';
 
 /**
  * The collector's store on MongoDB (ADR 0022): the owner's own database, a standalone server, a replica set or Atlas.
@@ -76,15 +77,16 @@ export class MongoStore implements Store {
     this.demo = mongoDemo(m);
   }
 
+  /** Nothing to make ahead of time but the indexes, which the database keeps once made (`indexes.ts`). */
   async prepare(): Promise<void> {
-    await ensureIndexes(this.mongo.db);
+    await prepareIndexes(this.mongo);
   }
 
   async ready(): Promise<void> {
     await this.mongo.db.command({ ping: 1 });
   }
 
-  refusedInput(_error: unknown): string | undefined {
-    return undefined;
+  refusedInput(error: unknown): string | undefined {
+    return refusedInput(error);
   }
 }
