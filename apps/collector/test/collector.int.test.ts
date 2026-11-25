@@ -22,6 +22,7 @@ import {
   INGEST_KEY,
   ingest,
   interaction,
+  onPostgres,
   query,
   READ_KEY,
   sdkHasher,
@@ -1156,8 +1157,11 @@ describe('dashboard login', () => {
       expect(session).toMatchObject({ httpOnly: true, secure: true, sameSite: 'Lax' });
       const me = await app.inject({ method: 'GET', url: '/auth/me', cookies: { shardlens_session: session!.value } });
       expect(me.json()).toMatchObject({ authenticated: true, method: 'discord' });
-      const stored = await h.db.query('SELECT * FROM sessions');
-      expect(JSON.stringify(stored.rows)).not.toContain('discord-access-token');
+      // MongoDB's sessions hold the fields `sessions.create` is given (mongodb-admin.int.test.ts).
+      if (onPostgres) {
+        const stored = await h.db.query('SELECT * FROM sessions');
+        expect(JSON.stringify(stored.rows)).not.toContain('discord-access-token');
+      }
 
       // Discord refuses the code (used twice, or expired): no session, and only the error's name is known.
       tokenAnswer = () => Response.json({ error: 'invalid_grant' }, { status: 400 });
@@ -1366,14 +1370,19 @@ describe('keys from the environment', () => {
     const keys = new KeyStore(h.store);
     expect(await keys.verify(first, 'read')).toBeUndefined();
     expect(await keys.verify(second, 'read')).toBeDefined();
-    const signedIn = await h.db.query<{ n: number }>(
-      'SELECT count(*)::int AS n FROM sessions s JOIN api_keys k ON k.id = s.key_id WHERE k.revoked_at IS NOT NULL',
-    );
-    expect(signedIn.rows[0]?.n).toBe(0);
-    const audit = await h.db.query<{ details: { by: string; variable: string } }>(
-      "SELECT details FROM admin_audit WHERE action = 'key_revoke' AND details->>'by' = 'environment'",
-    );
-    expect(audit.rows.map((r) => r.details)).toEqual([expect.objectContaining({ variable: 'SHARDLENS_READ_KEY' })]);
+    const cookie = session.cookies.find((c) => c.name === 'shardlens_session')?.value as string;
+    expect(await h.store.sessions.find(createHash('sha256').update(cookie).digest())).toBeUndefined();
+    // That the session was deleted, not only refused, and the audit: MongoDB's in mongodb-admin.int.test.ts.
+    if (onPostgres) {
+      const signedIn = await h.db.query<{ n: number }>(
+        'SELECT count(*)::int AS n FROM sessions s JOIN api_keys k ON k.id = s.key_id WHERE k.revoked_at IS NOT NULL',
+      );
+      expect(signedIn.rows[0]?.n).toBe(0);
+      const audit = await h.db.query<{ details: { by: string; variable: string } }>(
+        "SELECT details FROM admin_audit WHERE action = 'key_revoke' AND details->>'by' = 'environment'",
+      );
+      expect(audit.rows.map((r) => r.details)).toEqual([expect.objectContaining({ variable: 'SHARDLENS_READ_KEY' })]);
+    }
 
     // An instance still started with the old value can't take the new one away, nor bring the old one back.
     await seedKey(h.store, APP_ID, first, 'SHARDLENS_READ_KEY');
