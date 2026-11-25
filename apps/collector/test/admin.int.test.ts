@@ -254,6 +254,24 @@ describe('admin access', () => {
          ON CONFLICT DO NOTHING`,
         [APP_ID],
       );
+    } else {
+      const now = new Date();
+      await h.mongo.c.guilds.updateOne(
+        { _id: { appId: APP_ID, guildId: '400000000000000001' } },
+        {
+          $setOnInsert: {
+            name: '',
+            memberCount: 0,
+            features: [],
+            joinedAt: now,
+            botPermissions: '18446744073709551615',
+            detectedAtStartup: false,
+            baseline: false,
+            updatedAt: now,
+          },
+        },
+        { upsert: true },
+      );
     }
     const res = await h.app.inject({
       method: 'POST',
