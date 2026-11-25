@@ -83,6 +83,35 @@ describe('shardlens dashboard', () => {
     }
   });
 
+  it('reads a setting with an unusual name from .env when told its name', async () => {
+    await writeFile(join(dir, '.env'), `BOT_DATABASE=${URI}\n`);
+    const fake = fakeCollector();
+    expect(
+      await dashboard({
+        envName: 'BOT_DATABASE',
+        cwd: dir,
+        env: {},
+        until: Promise.resolve(),
+        print,
+        load: async () => fake.module,
+      }),
+    ).toBe(0);
+    expect(fake.starts[0]?.uri).toBe(URI);
+    expect(lines.join('\n')).toContain('from the MongoDB in BOT_DATABASE');
+    lines = [];
+    expect(
+      await dashboard({
+        envName: 'NOT_THERE',
+        cwd: dir,
+        env: {},
+        until: Promise.resolve(),
+        print,
+        load: async () => fake.module,
+      }),
+    ).toBe(1);
+    expect(lines.join('\n')).toContain('NOT_THERE is not set');
+  });
+
   it('says where it looked when there is no connection string', async () => {
     const code = await dashboard({ cwd: dir, env: {}, until: Promise.resolve(), print, load: async () => undefined });
     expect(code).toBe(1);
@@ -90,7 +119,15 @@ describe('shardlens dashboard', () => {
   });
 
   it('says to install the collector when the bot’s folder has none', async () => {
-    const code = await dashboard({ uri: URI, cwd: dir, env: {}, until: Promise.resolve(), print });
+    // As the real loader finds nothing: it resolves from the folder upwards, as the bot's own imports do.
+    const code = await dashboard({
+      uri: URI,
+      cwd: dir,
+      env: {},
+      until: Promise.resolve(),
+      print,
+      load: async () => undefined,
+    });
     expect(code).toBe(1);
     expect(lines.join('\n')).toContain('npm install @shardlens/collector');
   });
@@ -117,6 +154,7 @@ describe('shardlens dashboard', () => {
       expect(await run(['dashboard', '--port', '0'])).toBe(2);
       expect(await run(['dashboard', '--app-id', 'mybot'])).toBe(2);
       expect(await run(['dashboard', '--domain', 'x'])).toBe(2);
+      expect(await run(['dashboard', '--env', 'not a name'])).toBe(2);
     } finally {
       error.mockRestore();
     }

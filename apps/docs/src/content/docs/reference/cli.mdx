@@ -140,7 +140,8 @@ npx shardlens dashboard
 
 | Option          | Meaning                                                                                  |
 | --------------- | ---------------------------------------------------------------------------------------- |
-| `--uri <uri>`   | The MongoDB connection string. Default: the first of `MONGODB_URI`, `MONGO_URI`, `MONGODB_URL`, `MONGO_URL`, `MONGODB_CONNECTION_STRING`, `MONGO_CONNECTION_STRING`, `DATABASE_URL`, `DB_URI` and `DB_URL` that holds a `mongodb://` or `mongodb+srv://` string, from the environment and then from the `.env` in the current folder. |
+| `--env <name>`  | The setting that holds the connection string, read from the environment, then from the `.env` in the current folder, when your bot calls it something other than the names below. |
+| `--uri <uri>`   | The connection string itself, which then stays in your shell history. Default: the first of `MONGODB_URI`, `MONGO_URI`, `MONGODB_URL`, `MONGO_URL`, `MONGODB_CONNECTION_STRING`, `MONGO_CONNECTION_STRING`, `DATABASE_URL`, `DB_URI` and `DB_URL` that holds a `mongodb://` or `mongodb+srv://` string, from the environment and then from the `.env` in the current folder. |
 | `--app-id <id>` | Your Discord application ID. Needed only when several bots keep their Shardlens data in the same database. |
 | `--port <port>` | The port to serve the dashboard on, on `127.0.0.1`. Default `8080`.                       |
 

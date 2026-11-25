@@ -60,6 +60,8 @@ async function loadCollector(cwd: string): Promise<CollectorModule | undefined> 
 
 export interface DashboardOptions {
   uri?: string | undefined;
+  /** The variable that holds the connection string, when the bot calls it something unusual. */
+  envName?: string | undefined;
   appId?: string | undefined;
   port?: number | undefined;
   /** The bot's folder: its `.env`, and where `@shardlens/collector` is installed. */
@@ -80,18 +82,27 @@ export interface DashboardOptions {
  */
 export async function dashboard(options: DashboardOptions): Promise<number> {
   const file = join(options.cwd, '.env');
-  const found = options.uri
-    ? { name: '--uri', uri: options.uri }
-    : (findMongoUri(options.env) ?? findMongoUri((await readEnvFile(file)) ?? {}));
+  const fromFile = async () => (await readEnvFile(file)) ?? {};
+  const named = options.envName;
+  let found: { name: string; uri: string } | undefined;
+  if (options.uri) found = { name: '--uri', uri: options.uri };
+  else if (named) {
+    const uri = options.env[named]?.trim() || (await fromFile())[named];
+    if (!uri) {
+      options.print(`${named} is not set in the environment or in ${file}.`);
+      return 1;
+    }
+    found = { name: named, uri };
+  } else found = findMongoUri(options.env) ?? findMongoUri(await fromFile());
   if (!found) {
     options.print(
       `No MongoDB connection string found: looked for ${MONGODB_VARIABLES.join(', ')} in the environment and in ${file}. ` +
-        "Pass it with --uri, or run this in your bot's folder.",
+        "Name your bot's setting with --env NAME, or run this in your bot's folder.",
     );
     return 1;
   }
   if (!MONGODB_URL.test(found.uri)) {
-    options.print('--uri must be a mongodb:// or mongodb+srv:// connection string.');
+    options.print(`${found.name} must be a mongodb:// or mongodb+srv:// connection string.`);
     return 1;
   }
   const module = await (options.load ?? loadCollector)(options.cwd);
