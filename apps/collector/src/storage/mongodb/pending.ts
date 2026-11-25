@@ -9,3 +9,13 @@ export function pending<T extends object>(area: string): T {
     },
   });
 }
+
+/** As {@link pending}, for part of an area that is spread into the whole (a proxy has no keys to spread). */
+export function pendingMethods<T extends object>(area: string, methods: readonly (keyof T & string)[]): T {
+  return Object.fromEntries(
+    methods.map((method) => [
+      method,
+      () => Promise.reject(new Error(`MongoStore: ${area}.${method} is not written yet`)),
+    ]),
+  ) as T;
+}
