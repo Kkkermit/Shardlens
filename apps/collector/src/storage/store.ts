@@ -338,7 +338,6 @@ type Stored<T> = T extends string
 
 /**
  * The answer to a query of kind `K`: the shape `@shardlens/client` types (`results.ts`), which the dashboard reads too.
- * `test/client.int.test.ts` checks every answer against it, strictly.
  */
 export type QueryAnswer<K extends QuerySpec['kind']> = Stored<QueryResults[K]>;
 
