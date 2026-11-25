@@ -3,8 +3,49 @@ import type { Logger, SaltPeriod, ShardlensExporter } from '@shardlens/core';
 /** Metric groups that can be switched off with {@link ShardlensOptions.disable}. */
 export type MetricGroup = 'interactions' | 'guilds' | 'rest' | 'gateway' | 'process' | 'premium' | 'app';
 
+/** The `mongodb` option in full. */
+export interface MongoDBOptions {
+  /** Your MongoDB's connection string (`mongodb://` or `mongodb+srv://`): the `MONGODB_URI` your bot already uses. */
+  uri: string;
+  /**
+   * Also serve the dashboard from the bot, on a port (default 8080) of `127.0.0.1` unless `host` says otherwise. The
+   * SDK logs a one-time sign-in link when it starts. With several processes, the first to start serves it. Without
+   * this, `npx shardlens dashboard` shows the dashboard on your machine.
+   */
+  dashboard?:
+    | {
+        port?: number | undefined;
+        host?: string | undefined;
+        /** The URL people open the dashboard at, behind a proxy or a domain. */
+        publicUrl?: string | undefined;
+        /** "Sign in with Discord", besides the one-time links. */
+        discord?: { clientId: string; clientSecret: string } | undefined;
+        /** Discord user IDs allowed in with Discord sign-in besides the app owner and team. */
+        extraAdmins?: readonly string[] | undefined;
+        /** Behind a reverse proxy, the number of proxies in front (`1` for one). */
+        trustProxy?: boolean | number | undefined;
+      }
+    | undefined;
+  /** 32 random bytes, base64, to allow audit mode (`mode: 'audit'`). Kept out of MongoDB: set it from your environment. */
+  auditKey?: string | undefined;
+  /** Your application's public key, to receive Discord webhook events (needs a public HTTPS dashboard). */
+  discordPublicKey?: string | undefined;
+  /**
+   * Encrypts the webhook URLs of alerts and reports: 32 random bytes, base64. Default `SHARDLENS_SETTINGS_KEY`, else
+   * one generated and kept in the database. Every process must use the same one.
+   */
+  settingsKey?: string | undefined;
+}
+
 /** Options for `createShardlens(client, options)`. Every one is optional. */
 export interface ShardlensOptions {
+  /**
+   * Keep everything in your own MongoDB, with nothing else to run: the connection string your bot already uses, such
+   * as `process.env.MONGODB_URI`. Needs `npm install @shardlens/collector`. Shardlens adds collections prefixed
+   * `shardlens_` and stores events from this process; `npx shardlens dashboard` shows them. Use instead of `endpoint`
+   * and `apiKey`.
+   */
+  mongodb?: string | MongoDBOptions | undefined;
   /**
    * Your collector's URL, for example `https://stats.example.com`. HTTPS, or HTTP to localhost only. Leave out with
    * `apiKey` to run with exporters only.

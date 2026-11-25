@@ -604,6 +604,9 @@ importers:
 
   packages/discordjs:
     dependencies:
+      '@shardlens/collector':
+        specifier: workspace:^
+        version: link:../../apps/collector
       '@shardlens/core':
         specifier: workspace:^
         version: link:../core
