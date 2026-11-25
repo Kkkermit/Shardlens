@@ -225,18 +225,22 @@ class MongoLiveChannel implements LiveChannel {
     }
   }
 
-  /** Sends what is held, once another instance listens. One flush at a time. */
-  #flush(): Promise<void> {
-    this.#flushing ??= this.#send().finally(() => {
+  /**
+   * Sends what is held, once another instance listens. One flush at a time. `recheck` asks whether anyone listens
+   * even if it was asked less than {@link LISTENER_CHECK_MS} ago: the recheck timer can fire a moment before that by
+   * `performance.now()`, and the cached "nobody" would hold the counts back for another round.
+   */
+  #flush(recheck = false): Promise<void> {
+    this.#flushing ??= this.#send(recheck).finally(() => {
       this.#flushing = undefined;
       this.#keepChecking();
     });
     return this.#flushing;
   }
 
-  async #send(): Promise<void> {
-    for (;;) {
-      if (this.#stopped || !(await this.#anotherListens())) return;
+  async #send(recheck: boolean): Promise<void> {
+    for (let first = true; ; first = false) {
+      if (this.#stopped || !(await this.#anotherListens(recheck && first))) return;
       for (const [appId, { instance, seconds }] of this.#unsent) {
         const counts: LiveShareDoc['counts'] = [...seconds].map(([s, [n, e]]) => [s, n, e]);
         this.#outbox.push({ _id: new ObjectId().toHexString(), instance, appId, counts });
@@ -264,8 +268,8 @@ class MongoLiveChannel implements LiveChannel {
     }
   }
 
-  async #anotherListens(): Promise<boolean> {
-    if (performance.now() - this.#checkedAt < LISTENER_CHECK_MS) return this.#othersListen;
+  async #anotherListens(fresh: boolean): Promise<boolean> {
+    if (!fresh && performance.now() - this.#checkedAt < LISTENER_CHECK_MS) return this.#othersListen;
     const listener = await this.#m.c.liveListeners.findOne(
       { _id: { $ne: this.#id }, $expr: { $gt: ['$at', { $subtract: ['$$NOW', LISTENER_FRESH_MS] }] } },
       { projection: { _id: 1 } },
@@ -288,7 +292,7 @@ class MongoLiveChannel implements LiveChannel {
     if (this.#unsent.size === 0 && this.#outbox.length === 0) return;
     this.#recheck = later(() => {
       this.#recheck = undefined;
-      void this.#flush().catch(() => undefined);
+      void this.#flush(true).catch(() => undefined);
     }, LISTENER_CHECK_MS);
   }
 }

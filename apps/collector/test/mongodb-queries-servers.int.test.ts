@@ -11,6 +11,7 @@ import {
   type Harness,
   ingest,
   mongoStore,
+  postgresStore,
   query,
   READ_KEY,
   sdkHasher,
@@ -797,7 +798,7 @@ const byGuildDims = (guild: string): RollupDoc['dims'] => ({ kind: 1, command: '
 
 beforeAll(async () => {
   [pg, mg] = await Promise.all([
-    startHarness({ discordPublicKey }),
+    startHarness({ discordPublicKey, store: postgresStore }),
     startHarness({ discordPublicKey, store: mongoStore }),
   ]);
   const batches = script();

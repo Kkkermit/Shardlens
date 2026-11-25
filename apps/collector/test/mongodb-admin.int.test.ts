@@ -1337,6 +1337,9 @@ describe('job leader', () => {
     await m.c.leases.deleteMany({});
     const contenders = Array.from({ length: 5 }, () => mongoLeader(m, fast));
     const lost: number[] = [];
+    // Connections open first: on a busy machine, a contender still connecting when the first's 1.5-second lease runs
+    // out takes it fairly (the first has stopped leading by then), which is not what this race is about.
+    await Promise.all(contenders.map(() => m.db.command({ ping: 1 })));
     const won = await Promise.all(contenders.map((c, i) => c.tryLead(() => lost.push(i))));
     expect(won.filter(Boolean)).toHaveLength(1);
     const leader = won.indexOf(true);
