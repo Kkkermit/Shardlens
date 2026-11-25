@@ -139,7 +139,6 @@ async function addGuild(appId: string, guildId: string, opts: { name?: string; l
   });
 }
 
-/** PostgreSQL answers `numeric` as a string. */
 beforeAll(async () => {
   const [mb, pgc] = await Promise.all([
     mongoStore(),
