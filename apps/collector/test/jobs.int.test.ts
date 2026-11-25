@@ -9,7 +9,7 @@ import {
   ensurePartitionsPatiently,
 } from '../src/storage/postgres/partitions.js';
 import { activeSalts, ensureSalt, UPCOMING_SALT_MS } from '../src/storage/salts.js';
-import { APP_ID, type Harness, startHarness } from './harness.js';
+import { APP_ID, type Harness, onPostgres, startHarness } from './harness.js';
 
 const MINUTE = 60_000;
 const DAY = 86_400_000;
@@ -41,7 +41,7 @@ async function rolledUp(name: string, bucket: number): Promise<number> {
   return res.rows[0]?.n ?? 0;
 }
 
-describe('rollup runs', () => {
+describe.runIf(onPostgres)('rollup runs', () => {
   it('rolls up an event that arrived just under 2 minutes late, too young to be marked dirty', async () => {
     const arrived = Date.now();
     const ts = arrived - 115_000;
@@ -122,7 +122,7 @@ describe('rollup runs', () => {
   });
 });
 
-describe('partitions', () => {
+describe.runIf(onPostgres)('partitions', () => {
   it('lets collectors starting together on one database create the same partitions', async () => {
     const pools = [1, 2, 3].map(() => createPool(h.config.databaseUrl, 1));
     const ahead = new Date(Date.now() + 400 * DAY);
@@ -173,7 +173,7 @@ describe('partitions', () => {
   });
 });
 
-describe('unique users', () => {
+describe.runIf(onPostgres)('unique users', () => {
   const users = (n: number) => Array.from({ length: n }, () => randomBytes(16));
   const seen = async (period: string, day: string, hashes: Buffer[]) => {
     for (const hash of hashes) {
@@ -229,7 +229,7 @@ describe('salts', () => {
   });
 });
 
-describe('upgrading from rollups cut in the server time zone', () => {
+describe.runIf(onPostgres)('upgrading from rollups cut in the server time zone', () => {
   const rows = async (table: 'rollup_1h' | 'rollup_1d') =>
     (
       await h.db.query<{ bucket: Date; count: number }>(

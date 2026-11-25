@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { bucketOf, uuidv7 } from '@shardlens/core';
+import { Event } from '@shardlens/schema';
+import { Binary, UUID } from 'mongodb';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { signInProblems } from '../src/app.js';
 import { createPool, migrate } from '../src/db.js';
@@ -11,6 +13,7 @@ import { runSalts } from '../src/jobs/scheduler.js';
 import { allowedUser } from '../src/routes/auth.js';
 import { KeyStore, seedKey } from '../src/security/auth.js';
 import { buildServer } from '../src/server.js';
+import { dimsKey, rollupId } from '../src/storage/mongodb/collections.js';
 import { periodIdent } from '../src/storage/periods.js';
 import { PostgresStore } from '../src/storage/postgres/store.js';
 import { activeSalts } from '../src/storage/salts.js';
@@ -22,6 +25,7 @@ import {
   INGEST_KEY,
   ingest,
   interaction,
+  onPostgres,
   query,
   READ_KEY,
   sdkHasher,
@@ -41,7 +45,7 @@ afterAll(async () => {
 });
 
 describe('schema and SQL helpers', () => {
-  it('matches the TypeScript histogram bucket for every duration', async () => {
+  it.runIf(onPostgres)('matches the TypeScript histogram bucket for every duration', async () => {
     const samples = [0, 0.5, 1, 1.5, 2, 5, 10, 50, 80, 120, 200, 999, 3_000, 9_999, 59_999, 60_000, 120_000];
     const res = await h.db.query<{ ms: number; b: number }>(
       'SELECT ms, shardlens_bucket(ms) AS b FROM unnest($1::float8[]) AS ms',
@@ -105,7 +109,8 @@ describe('ingest', () => {
       expect((await ingest(h.app, batch)).json()).toMatchObject({ duplicates: 2 });
       expect(h.live.tiles(APP_ID)).toMatchObject({ perMinute: before.perMinute + 2, errors15m: before.errors15m + 1 });
     } finally {
-      await h.db.query("DELETE FROM interactions WHERE command = 'live_probe'");
+      if (onPostgres) await h.db.query("DELETE FROM interactions WHERE command = 'live_probe'");
+      else await h.mongo.c.interactions.deleteMany({ command: 'live_probe' });
     }
   });
 
@@ -147,8 +152,13 @@ describe('ingest', () => {
       });
       expect(meta.json().name).toBe('Newer name');
     } finally {
-      await h.db.query('DELETE FROM app_info WHERE app_id = $1', [APP_ID]);
-      await h.db.query("UPDATE apps SET name = '' WHERE app_id = $1", [APP_ID]);
+      if (onPostgres) {
+        await h.db.query('DELETE FROM app_info WHERE app_id = $1', [APP_ID]);
+        await h.db.query("UPDATE apps SET name = '' WHERE app_id = $1", [APP_ID]);
+      } else {
+        await h.mongo.c.appInfo.deleteOne({ _id: APP_ID });
+        await h.mongo.c.apps.updateOne({ _id: APP_ID }, { $set: { name: '' }, $unset: { nameAt: '' } });
+      }
     }
   });
 
@@ -158,8 +168,10 @@ describe('ingest', () => {
     const withActor = interaction(user, { actor: { userId: '444444444444444444' } });
     const res = await ingest(h.app, envelope([interaction(user), withActor]));
     expect(res.json()).toMatchObject({ accepted: 1, rejected: [{ index: 1, reason: 'actor_in_privacy_mode' }] });
-    const stored = await h.db.query("SELECT count(*)::int AS n FROM interactions WHERE options @> '{category}'");
-    expect(stored.rows[0].n).toBeGreaterThan(0);
+    const stored = onPostgres
+      ? (await h.db.query("SELECT count(*)::int AS n FROM interactions WHERE options @> '{category}'")).rows[0].n
+      : await h.mongo.c.interactions.countDocuments({ options: 'category' });
+    expect(stored).toBeGreaterThan(0);
 
     const audit = await ingest(h.app, envelope([interaction(user)], { mode: 'audit' }));
     expect(audit.statusCode).toBe(400);
@@ -245,36 +257,39 @@ describe('ingest', () => {
     });
   });
 
-  it('rolls up late events older than minute retention straight into hourly and daily rollups', async () => {
-    // A raw row 20 days old (minute rollups only cover 14 days), marked dirty the way ingest marks late events.
-    const ts = new Date(Date.now() - 20 * 86_400_000);
-    await h.db.query(
-      `INSERT INTO interactions (id, ts, app_id, env, kind, command, locale, user_hash, salt_period, premium, outcome, ack_ms)
+  it.runIf(onPostgres)(
+    'rolls up late events older than minute retention straight into hourly and daily rollups',
+    async () => {
+      // A raw row 20 days old (minute rollups only cover 14 days), marked dirty the way ingest marks late events.
+      const ts = new Date(Date.now() - 20 * 86_400_000);
+      await h.db.query(
+        `INSERT INTO interactions (id, ts, app_id, env, kind, command, locale, user_hash, salt_period, premium, outcome, ack_ms)
        VALUES ($1, $2, $3, 'production', 1, 'late_one', 'en-GB', $4, '2026-01', false, 0, 100)`,
-      [uuidv7(ts.getTime()), ts, APP_ID, Buffer.alloc(16)],
-    );
-    await h.db.query("INSERT INTO dirty_buckets (app_id, bucket) VALUES ($1, date_trunc('minute', $2::timestamptz))", [
-      APP_ID,
-      ts,
-    ]);
-    await h.store.jobs.runRollups(new Date());
-    const n = async (table: string) =>
-      (
-        await h.db.query(
-          `SELECT coalesce(sum(count), 0)::int AS n FROM ${table} WHERE metric = 'interactions' AND dims->>'command' = 'late_one'`,
-        )
-      ).rows[0].n;
-    expect(await n('rollup_1h')).toBe(1);
-    expect(await n('rollup_1d')).toBe(1);
-    expect(await n('rollup_1m')).toBe(0);
-    const left = await h.db.query('SELECT count(*)::int AS n FROM dirty_buckets');
-    expect(left.rows[0].n).toBe(0);
-  });
+        [uuidv7(ts.getTime()), ts, APP_ID, Buffer.alloc(16)],
+      );
+      await h.db.query(
+        "INSERT INTO dirty_buckets (app_id, bucket) VALUES ($1, date_trunc('minute', $2::timestamptz))",
+        [APP_ID, ts],
+      );
+      await h.store.jobs.runRollups(new Date());
+      const n = async (table: string) =>
+        (
+          await h.db.query(
+            `SELECT coalesce(sum(count), 0)::int AS n FROM ${table} WHERE metric = 'interactions' AND dims->>'command' = 'late_one'`,
+          )
+        ).rows[0].n;
+      expect(await n('rollup_1h')).toBe(1);
+      expect(await n('rollup_1d')).toBe(1);
+      expect(await n('rollup_1m')).toBe(0);
+      const left = await h.db.query('SELECT count(*)::int AS n FROM dirty_buckets');
+      expect(left.rows[0].n).toBe(0);
+    },
+  );
 
   it('warns at start-up when the bot or its owner would have no way in, and says why Discord sign-in is refused', async () => {
     expect(await signInProblems(h.store, h.config)).toEqual([]);
     const fresh = { ...h.config, appId: '1234567890123456780' };
-    await h.db.query('INSERT INTO apps (app_id) VALUES ($1) ON CONFLICT DO NOTHING', [fresh.appId]);
+    await h.store.apps.register(fresh.appId);
     expect(await signInProblems(h.store, fresh)).toEqual([
       expect.stringMatching(/^No ingest key/),
       expect.stringMatching(/^No way to open the dashboard/),
@@ -294,10 +309,24 @@ describe('ingest', () => {
 
     const deps = { config: discordOnly, store: h.store } as unknown as Parameters<typeof allowedUser>[0];
     expect(await allowedUser(deps, fresh.appId, '334455667788990011')).toBe('bot_not_reported');
-    await h.db.query(
-      `INSERT INTO app_info (app_id, ts, name, dashboard_user_ids) VALUES ($1, now(), 'bot', ARRAY[334455667788990011]::bigint[])`,
-      [fresh.appId],
-    );
+    const report = Event.parse({
+      id: uuidv7(),
+      ts: Date.now(),
+      type: 'app_info',
+      name: 'bot',
+      approximateGuildCount: null,
+      approximateUserInstallCount: null,
+      approximateUserAuthorizationCount: null,
+      dashboardUserIds: ['334455667788990011'],
+      eventWebhooksStatus: null,
+      skus: [],
+      nodeVersion: 'v24.11.0',
+      libVersion: '14.22.0',
+    });
+    const from = { env: 'production', release: undefined, instance: 'test:1', shards: [0], sdkVersion: 'test@1' };
+    await h.store.ingest.write({ ...from, appId: fresh.appId, livePeriods: new Set(), now: new Date() }, [
+      { index: 0, event: report },
+    ]);
     expect(await allowedUser(deps, fresh.appId, '334455667788990011')).toBe('ok');
     expect(await allowedUser(deps, fresh.appId, '445566778899001122')).toBe('not_a_team_member');
   });
@@ -316,9 +345,13 @@ describe('ingest', () => {
 describe('ingest edge cases', () => {
   // Two days back, outside the ranges the rollup tests below count.
   const earlier = () => Date.now() - 2 * 86_400_000;
-  const cleanUp = () => h.db.query("DELETE FROM interactions WHERE command LIKE 'edge_%'");
+  const cleanUp = () =>
+    onPostgres
+      ? h.db.query("DELETE FROM interactions WHERE command LIKE 'edge_%'")
+      : h.mongo.c.interactions.deleteMany({ command: /^edge_/ });
 
-  it('stores the rest of a batch when the database refuses one of its values', async () => {
+  // MongoDB holds any number a validated event carries: nothing in a batch is refused there.
+  it.runIf(onPostgres)('stores the rest of a batch when the database refuses one of its values', async () => {
     const { hasher, period } = await sdkHasher(h.app);
     const user = (await hasher.hash('700000000000000111', period))!;
     const res = await ingest(
@@ -346,10 +379,11 @@ describe('ingest edge cases', () => {
       ]),
     );
     expect(res.json(), res.body).toMatchObject({ accepted: 1, rejected: [] });
-    const row = await h.db.query(
-      "SELECT option_values->>'category' AS v FROM interactions WHERE command = 'edge_emoji'",
-    );
-    expect(row.rows[0].v).toBe('pizza \ufffd');
+    const value = onPostgres
+      ? (await h.db.query("SELECT option_values->>'category' AS v FROM interactions WHERE command = 'edge_emoji'"))
+          .rows[0].v
+      : (await h.mongo.c.interactions.findOne({ command: 'edge_emoji' }))?.optionValues?.category;
+    expect(value).toBe('pizza \ufffd');
     await cleanUp();
   });
 
@@ -369,8 +403,10 @@ describe('ingest edge cases', () => {
     expect((await send(0)).json()).toMatchObject({ accepted: 1 });
     // The retry is sent a little later: network delay makes the measured skew differ by milliseconds.
     expect((await send(7)).json()).toMatchObject({ accepted: 0, duplicates: 1 });
-    const rows = await h.db.query("SELECT count(*)::int AS n FROM interactions WHERE command = 'edge_skewed'");
-    expect(rows.rows[0].n).toBe(1);
+    const stored = onPostgres
+      ? (await h.db.query("SELECT count(*)::int AS n FROM interactions WHERE command = 'edge_skewed'")).rows[0].n
+      : await h.mongo.c.interactions.countDocuments({ command: 'edge_skewed' });
+    expect(stored).toBe(1);
     await cleanUp();
   });
 
@@ -384,7 +420,8 @@ describe('ingest edge cases', () => {
     );
     expect(res.statusCode).toBe(202);
     expect(res.json()).toMatchObject({ accepted: 1, rejected: [] });
-    await h.db.query('DELETE FROM command_registry WHERE command_id = $1', [command.id]);
+    if (onPostgres) await h.db.query('DELETE FROM command_registry WHERE command_id = $1', [command.id]);
+    else await h.mongo.c.commandRegistry.deleteOne({ _id: { appId: APP_ID, commandId: command.id } });
   });
 
   it('keeps two entitlements bought in the same millisecond, and counts a retried event as a duplicate', async () => {
@@ -405,8 +442,10 @@ describe('ingest edge cases', () => {
     const batch = envelope([await entitlement('700000000000000114'), await entitlement('700000000000000115')]);
     expect((await ingest(h.app, batch)).json()).toMatchObject({ accepted: 2, duplicates: 0 });
     expect((await ingest(h.app, batch)).json()).toMatchObject({ accepted: 0, duplicates: 2 });
-    const rows = await h.db.query('SELECT count(*)::int AS n FROM entitlements WHERE sku_id = 1300000000000000002');
-    expect(rows.rows[0].n).toBe(2);
+    const stored = onPostgres
+      ? (await h.db.query('SELECT count(*)::int AS n FROM entitlements WHERE sku_id = 1300000000000000002')).rows[0].n
+      : await h.mongo.c.entitlements.countDocuments({ skuId: '1300000000000000002' });
+    expect(stored).toBe(2);
   });
 
   it('marks the minute of a late server outage for the rollups to recount', async () => {
@@ -419,8 +458,10 @@ describe('ingest edge cases', () => {
     );
     expect(res.json()).toMatchObject({ accepted: 1 });
     const minute = new Date(Math.floor(ts / 60_000) * 60_000);
-    const dirty = await h.db.query('SELECT count(*)::int AS n FROM dirty_buckets WHERE bucket = $1', [minute]);
-    expect(dirty.rows[0].n).toBe(1);
+    const marked = onPostgres
+      ? (await h.db.query('SELECT count(*)::int AS n FROM dirty_buckets WHERE bucket = $1', [minute])).rows[0].n
+      : await h.mongo.c.dirtyBuckets.countDocuments({ '_id.bucket': minute });
+    expect(marked).toBe(1);
   });
 });
 
@@ -440,9 +481,15 @@ describe('rollups, uniques and queries', () => {
         }),
       );
     }
-    await h.db.query('DELETE FROM interactions');
-    await h.db.query('DELETE FROM uniques');
-    await h.db.query('DELETE FROM unique_counts');
+    if (onPostgres) {
+      await h.db.query('DELETE FROM interactions');
+      await h.db.query('DELETE FROM uniques');
+      await h.db.query('DELETE FROM unique_counts');
+    } else {
+      await h.mongo.c.interactions.deleteMany({});
+      await h.mongo.c.uniques.deleteMany({});
+      await h.mongo.c.uniqueCounts.deleteMany({});
+    }
     const res = await ingest(h.app, envelope(events));
     expect(res.json().accepted).toBe(100);
     await h.store.jobs.runRollups(new Date());
@@ -472,11 +519,26 @@ describe('rollups, uniques and queries', () => {
   it('labels days older than 13 months with their UTC date, the only days kept that long', async () => {
     const day = new Date(Date.now() - 400 * 86_400_000).toISOString().slice(0, 10);
     const dims = { kind: 1, command: 'old_day', sub: null, outcome: 0 };
-    await h.db.query(
-      `INSERT INTO rollup_1d (app_id, bucket, metric, dims_hash, dims, count, sum)
-       VALUES ($1, $2, 'interactions', sha256(convert_to($3::jsonb::text, 'UTF8')), $3::jsonb, 7, 0)`,
-      [APP_ID, `${day}T00:00:00Z`, JSON.stringify(dims)],
-    );
+    if (onPostgres) {
+      await h.db.query(
+        `INSERT INTO rollup_1d (app_id, bucket, metric, dims_hash, dims, count, sum)
+         VALUES ($1, $2, 'interactions', sha256(convert_to($3::jsonb::text, 'UTF8')), $3::jsonb, 7, 0)`,
+        [APP_ID, `${day}T00:00:00Z`, JSON.stringify(dims)],
+      );
+    } else {
+      const bucket = new Date(`${day}T00:00:00Z`);
+      const key = dimsKey(dims);
+      await h.mongo.c.rollup1d.insertOne({
+        _id: rollupId(APP_ID, 'interactions', bucket, key),
+        appId: APP_ID,
+        metric: 'interactions',
+        bucket,
+        dims,
+        dimsKey: key,
+        count: 7,
+        sum: 0,
+      });
+    }
     const from = new Date(Date.parse(`${day}T00:00:00Z`) - 2 * 86_400_000).toISOString();
     const to = new Date(Date.parse(`${day}T00:00:00Z`) + 2 * 86_400_000).toISOString();
     const res = await query(h.app, {
@@ -488,7 +550,8 @@ describe('rollups, uniques and queries', () => {
       filters: [{ field: 'command', value: 'old_day' }],
     });
     expect(res.json().points).toEqual([expect.objectContaining({ t: `${day}T00:00:00`, value: 7 })]);
-    await h.db.query("DELETE FROM rollup_1d WHERE dims->>'command' = 'old_day'");
+    if (onPostgres) await h.db.query("DELETE FROM rollup_1d WHERE dims->>'command' = 'old_day'");
+    else await h.mongo.c.rollup1d.deleteMany({ 'dims.command': 'old_day' });
   });
 
   it('counts every interaction exactly once in rollups', async () => {
@@ -544,10 +607,17 @@ describe('rollups, uniques and queries', () => {
   });
 
   it('counts unique users per day from salted hashes only', async () => {
-    const res = await h.db.query<{ users: number }>(
-      "SELECT sum(users)::int AS users FROM unique_counts WHERE grain = 'month' AND scope = 'global'",
-    );
-    expect(res.rows[0]?.users).toBe(10);
+    const users = onPostgres
+      ? (
+          await h.db.query<{ users: number }>(
+            "SELECT sum(users)::int AS users FROM unique_counts WHERE grain = 'month' AND scope = 'global'",
+          )
+        ).rows[0]?.users
+      : (await h.mongo.c.uniqueCounts.find({ '_id.grain': 'month', '_id.scope': 'global' }).toArray()).reduce(
+          (a, d) => a + d.users,
+          0,
+        );
+    expect(users).toBe(10);
   });
 
   it('never lets a query group by user', async () => {
@@ -673,7 +743,8 @@ describe('rollups, uniques and queries', () => {
   });
 
   it('adds memory up across the processes of a sharded bot, and shows the worst event-loop delay', async () => {
-    await h.db.query('DELETE FROM gauges');
+    if (onPostgres) await h.db.query('DELETE FROM gauges');
+    else await h.mongo.c.gauges.deleteMany({});
     const ts = Date.now() - 30_000;
     const sample = (rssBytes: number, delayMs: number, shard: number) => ({
       id: uuidv7(),
@@ -699,8 +770,13 @@ describe('rollups, uniques and queries', () => {
   });
 
   it('counts a restarted process once, not alongside the process it replaced', async () => {
-    await h.db.query('DELETE FROM gauges');
-    await h.db.query('DELETE FROM sdk_health');
+    if (onPostgres) {
+      await h.db.query('DELETE FROM gauges');
+      await h.db.query('DELETE FROM sdk_health');
+    } else {
+      await h.mongo.c.gauges.deleteMany({});
+      await h.mongo.c.sdkHealth.deleteMany({});
+    }
     const minute = Math.floor((Date.now() - 120_000) / 60_000) * 60_000;
     const report = (instance: string, shard: number, ts: number, rssBytes: number, guilds: number) =>
       ingest(
@@ -737,82 +813,88 @@ describe('rollups, uniques and queries', () => {
 });
 
 describe('servers and snapshots', () => {
-  it('imports existing servers as a baseline, then detects joins and removals while offline', async () => {
-    await h.db.query('DELETE FROM guilds');
-    await h.db.query('DELETE FROM guild_events');
-    await h.db.query('UPDATE apps SET shard_count = NULL, baseline_done = false');
-    const a = snowflakeOnShard(0, 2, 1);
-    const b = snowflakeOnShard(1, 2, 2);
-    const c = snowflakeOnShard(0, 2, 3);
-    const snapshot = (shard: number, guilds: string[]) => ({
-      id: uuidv7(),
-      ts: Date.now(),
-      type: 'guild_snapshot',
-      shards: [shard],
-      shardCount: 2,
-      guilds,
-    });
+  it.runIf(onPostgres)(
+    'imports existing servers as a baseline, then detects joins and removals while offline',
+    async () => {
+      await h.db.query('DELETE FROM guilds');
+      await h.db.query('DELETE FROM guild_events');
+      await h.db.query('UPDATE apps SET shard_count = NULL, baseline_done = false');
+      const a = snowflakeOnShard(0, 2, 1);
+      const b = snowflakeOnShard(1, 2, 2);
+      const c = snowflakeOnShard(0, 2, 3);
+      const snapshot = (shard: number, guilds: string[]) => ({
+        id: uuidv7(),
+        ts: Date.now(),
+        type: 'guild_snapshot',
+        shards: [shard],
+        shardCount: 2,
+        guilds,
+      });
 
-    // First run: both shards report; existing servers are a baseline, not joins.
-    await ingest(h.app, envelope([snapshot(0, [a]), snapshot(1, [b])]));
-    let events = await h.db.query('SELECT kind FROM guild_events');
-    expect(events.rowCount).toBe(0);
-    const baseline = await h.db.query('SELECT count(*)::int AS n FROM guilds WHERE baseline');
-    expect(baseline.rows[0].n).toBe(2);
+      // First run: both shards report; existing servers are a baseline, not joins.
+      await ingest(h.app, envelope([snapshot(0, [a]), snapshot(1, [b])]));
+      let events = await h.db.query('SELECT kind FROM guild_events');
+      expect(events.rowCount).toBe(0);
+      const baseline = await h.db.query('SELECT count(*)::int AS n FROM guilds WHERE baseline');
+      expect(baseline.rows[0].n).toBe(2);
 
-    // Restart: on shard 0, `a` left and `c` joined while the bot was offline. Shard 1 is untouched.
-    await ingest(h.app, envelope([snapshot(0, [c])]));
-    events = await h.db.query(
-      'SELECT guild_id::text AS id, kind, detected_at_startup AS d FROM guild_events ORDER BY kind',
-    );
-    expect(events.rows).toEqual([
-      { id: c, kind: 1, d: true },
-      { id: a, kind: 2, d: true },
-    ]);
-    const bRow = await h.db.query('SELECT left_at FROM guilds WHERE guild_id = $1', [b]);
-    expect(bRow.rows[0].left_at).toBeNull();
-  });
+      // Restart: on shard 0, `a` left and `c` joined while the bot was offline. Shard 1 is untouched.
+      await ingest(h.app, envelope([snapshot(0, [c])]));
+      events = await h.db.query(
+        'SELECT guild_id::text AS id, kind, detected_at_startup AS d FROM guild_events ORDER BY kind',
+      );
+      expect(events.rows).toEqual([
+        { id: c, kind: 1, d: true },
+        { id: a, kind: 2, d: true },
+      ]);
+      const bRow = await h.db.query('SELECT left_at FROM guilds WHERE guild_id = $1', [b]);
+      expect(bRow.rows[0].left_at).toBeNull();
+    },
+  );
 
-  it('keeps a server whose profile arrives before the last shard reports as an existing install', async () => {
-    await h.db.query('DELETE FROM guilds');
-    await h.db.query('DELETE FROM guild_events');
-    await h.db.query('UPDATE apps SET shard_count = NULL, baseline_done = false');
-    const a = snowflakeOnShard(0, 2, 31);
-    const b = snowflakeOnShard(1, 2, 32);
-    const snapshot = (shard: number, guilds: string[]) => ({
-      id: uuidv7(),
-      ts: Date.now(),
-      type: 'guild_snapshot',
-      shards: [shard],
-      shardCount: 2,
-      guilds,
-    });
-    const update = (guild: string) => ({
-      id: uuidv7(),
-      ts: Date.now(),
-      type: 'guild_update',
-      info: guildInfo(guild, { joinedAt: Date.now() - 3 * 86_400_000 }),
-    });
+  it.runIf(onPostgres)(
+    'keeps a server whose profile arrives before the last shard reports as an existing install',
+    async () => {
+      await h.db.query('DELETE FROM guilds');
+      await h.db.query('DELETE FROM guild_events');
+      await h.db.query('UPDATE apps SET shard_count = NULL, baseline_done = false');
+      const a = snowflakeOnShard(0, 2, 31);
+      const b = snowflakeOnShard(1, 2, 32);
+      const snapshot = (shard: number, guilds: string[]) => ({
+        id: uuidv7(),
+        ts: Date.now(),
+        type: 'guild_snapshot',
+        shards: [shard],
+        shardCount: 2,
+        guilds,
+      });
+      const update = (guild: string) => ({
+        id: uuidv7(),
+        ts: Date.now(),
+        type: 'guild_update',
+        info: guildInfo(guild, { joinedAt: Date.now() - 3 * 86_400_000 }),
+      });
 
-    // A ShardingManager spawns shards seconds apart: shard 0 is ready and sends its profiles before shard 1 starts.
-    await ingest(h.app, envelope([snapshot(0, [a])], { source: { shards: [0], instance: 'host:1' } }));
-    await ingest(h.app, envelope([update(a)], { source: { shards: [0], instance: 'host:1' } }));
-    await ingest(h.app, envelope([snapshot(1, [b]), update(b)], { source: { shards: [1], instance: 'host:2' } }));
+      // A ShardingManager spawns shards seconds apart: shard 0 is ready and sends its profiles before shard 1 starts.
+      await ingest(h.app, envelope([snapshot(0, [a])], { source: { shards: [0], instance: 'host:1' } }));
+      await ingest(h.app, envelope([update(a)], { source: { shards: [0], instance: 'host:1' } }));
+      await ingest(h.app, envelope([snapshot(1, [b]), update(b)], { source: { shards: [1], instance: 'host:2' } }));
 
-    const rows = await h.db.query('SELECT guild_id::text AS id, baseline FROM guilds');
-    expect(rows.rows).toHaveLength(2);
-    expect(rows.rows).toEqual(
-      expect.arrayContaining([
-        { id: a, baseline: true },
-        { id: b, baseline: true },
-      ]),
-    );
-    const week = { from: new Date(Date.now() - 7 * 86_400_000).toISOString(), to: new Date().toISOString() };
-    const growth = (await query(h.app, { kind: 'growth', range: week })).json();
-    expect(growth.sizeAtInstall).toEqual([]);
-  });
+      const rows = await h.db.query('SELECT guild_id::text AS id, baseline FROM guilds');
+      expect(rows.rows).toHaveLength(2);
+      expect(rows.rows).toEqual(
+        expect.arrayContaining([
+          { id: a, baseline: true },
+          { id: b, baseline: true },
+        ]),
+      );
+      const week = { from: new Date(Date.now() - 7 * 86_400_000).toISOString(), to: new Date().toISOString() };
+      const growth = (await query(h.app, { kind: 'growth', range: week })).json();
+      expect(growth.sizeAtInstall).toEqual([]);
+    },
+  );
 
-  it('waits for every shard of a new layout before diffing (resharding)', async () => {
+  it.runIf(onPostgres)('waits for every shard of a new layout before diffing (resharding)', async () => {
     const before = await h.db.query('SELECT count(*)::int AS n FROM guild_events');
     const x = snowflakeOnShard(0, 3, 9);
     await ingest(
@@ -825,98 +907,107 @@ describe('servers and snapshots', () => {
     expect(pending.rows[0].n).toBe(1);
   });
 
-  it("finishes a new shard layout without undoing the joins and leaves since each shard's snapshot", async () => {
-    await h.db.query('DELETE FROM guilds');
-    await h.db.query('DELETE FROM guild_events');
-    await h.db.query('DELETE FROM snapshot_pending');
-    await h.db.query('UPDATE apps SET shard_count = 2, baseline_done = true');
-    const leaving = snowflakeOnShard(0, 4, 41);
-    const joining = snowflakeOnShard(0, 4, 42);
-    await h.db.query('INSERT INTO guilds (app_id, guild_id, joined_at) VALUES ($1, $2, now())', [APP_ID, leaving]);
-    const at = Date.now() - 60_000;
-    const snapshot = (shard: number, guilds: string[], ts: number) => ({
-      id: uuidv7(ts),
-      ts,
-      type: 'guild_snapshot',
-      shards: [shard],
-      shardCount: 4,
-      guilds,
-    });
+  it.runIf(onPostgres)(
+    "finishes a new shard layout without undoing the joins and leaves since each shard's snapshot",
+    async () => {
+      await h.db.query('DELETE FROM guilds');
+      await h.db.query('DELETE FROM guild_events');
+      await h.db.query('DELETE FROM snapshot_pending');
+      await h.db.query('UPDATE apps SET shard_count = 2, baseline_done = true');
+      const leaving = snowflakeOnShard(0, 4, 41);
+      const joining = snowflakeOnShard(0, 4, 42);
+      await h.db.query('INSERT INTO guilds (app_id, guild_id, joined_at) VALUES ($1, $2, now())', [APP_ID, leaving]);
+      const at = Date.now() - 60_000;
+      const snapshot = (shard: number, guilds: string[], ts: number) => ({
+        id: uuidv7(ts),
+        ts,
+        type: 'guild_snapshot',
+        shards: [shard],
+        shardCount: 4,
+        guilds,
+      });
 
-    // Shard 0 of the new layout reports first; then a server joins and another leaves before the last shard reports.
-    await ingest(h.app, envelope([snapshot(0, [leaving], at)]));
-    await ingest(
-      h.app,
-      envelope([
-        {
-          id: uuidv7(at + 10_000),
-          ts: at + 10_000,
-          type: 'guild_join',
-          info: guildInfo(joining),
-          detectedAtStartup: false,
-        },
-        { id: uuidv7(at + 20_000), ts: at + 20_000, type: 'guild_leave', guild: leaving, detectedAtStartup: false },
-      ]),
-    );
-    await ingest(h.app, envelope([1, 2, 3].map((shard) => snapshot(shard, [], at + 30_000))));
+      // Shard 0 of the new layout reports first; then a server joins and another leaves before the last shard reports.
+      await ingest(h.app, envelope([snapshot(0, [leaving], at)]));
+      await ingest(
+        h.app,
+        envelope([
+          {
+            id: uuidv7(at + 10_000),
+            ts: at + 10_000,
+            type: 'guild_join',
+            info: guildInfo(joining),
+            detectedAtStartup: false,
+          },
+          { id: uuidv7(at + 20_000), ts: at + 20_000, type: 'guild_leave', guild: leaving, detectedAtStartup: false },
+        ]),
+      );
+      await ingest(h.app, envelope([1, 2, 3].map((shard) => snapshot(shard, [], at + 30_000))));
 
-    const rows = await h.db.query('SELECT guild_id::text AS id, left_at IS NULL AS active FROM guilds');
-    expect(rows.rows).toHaveLength(2);
-    expect(rows.rows).toEqual(
-      expect.arrayContaining([
-        { id: leaving, active: false },
-        { id: joining, active: true },
-      ]),
-    );
-    const detected = await h.db.query('SELECT count(*)::int AS n FROM guild_events WHERE detected_at_startup');
-    expect(detected.rows[0].n).toBe(0);
-  });
+      const rows = await h.db.query('SELECT guild_id::text AS id, left_at IS NULL AS active FROM guilds');
+      expect(rows.rows).toHaveLength(2);
+      expect(rows.rows).toEqual(
+        expect.arrayContaining([
+          { id: leaving, active: false },
+          { id: joining, active: true },
+        ]),
+      );
+      const detected = await h.db.query('SELECT count(*)::int AS n FROM guild_events WHERE detected_at_startup');
+      expect(detected.rows[0].n).toBe(0);
+    },
+  );
 
-  it('counts the commands a server ran before removing the bot, when both arrive in one batch', async () => {
-    const { hasher, period } = await sdkHasher(h.app);
-    const user = (await hasher.hash('300000000000000009', period)) as string;
-    const [tried, never] = [snowflakeOnShard(0, 1, 71), snowflakeOnShard(0, 1, 72)];
-    const at = Date.now() - 120_000;
-    const event = (offset: number, fields: object) => ({ id: uuidv7(at + offset), ts: at + offset, ...fields });
-    const join = (guild: string) =>
-      event(0, { type: 'guild_join', info: guildInfo(guild, { joinedAt: at }), detectedAtStartup: false });
-    const leave = (guild: string) => event(20_000, { type: 'guild_leave', guild, detectedAtStartup: false });
-    const res = await ingest(
-      h.app,
-      envelope([
-        join(tried),
-        join(never),
-        // Not in the order they happened: the SDK sends server events ahead of commands.
-        leave(tried),
-        leave(never),
-        interaction(user, event(10_000, { guild: tried })),
-        interaction(user, event(15_000, { guild: tried })),
-        // After the removal, a user install run in those servers: not the servers using the bot.
-        interaction(user, event(30_000, { guild: tried })),
-        interaction(user, event(30_000, { guild: never })),
-      ]),
-    );
-    expect(res.json()).toMatchObject({ accepted: 8 });
-    const rows = await h.db.query<{ id: string; first: Date | null; last: Date | null }>(
-      `SELECT guild_id::text AS id, first_command_at AS first, last_command_at AS last
+  it.runIf(onPostgres)(
+    'counts the commands a server ran before removing the bot, when both arrive in one batch',
+    async () => {
+      const { hasher, period } = await sdkHasher(h.app);
+      const user = (await hasher.hash('300000000000000009', period)) as string;
+      const [tried, never] = [snowflakeOnShard(0, 1, 71), snowflakeOnShard(0, 1, 72)];
+      const at = Date.now() - 120_000;
+      const event = (offset: number, fields: object) => ({ id: uuidv7(at + offset), ts: at + offset, ...fields });
+      const join = (guild: string) =>
+        event(0, { type: 'guild_join', info: guildInfo(guild, { joinedAt: at }), detectedAtStartup: false });
+      const leave = (guild: string) => event(20_000, { type: 'guild_leave', guild, detectedAtStartup: false });
+      const res = await ingest(
+        h.app,
+        envelope([
+          join(tried),
+          join(never),
+          // Not in the order they happened: the SDK sends server events ahead of commands.
+          leave(tried),
+          leave(never),
+          interaction(user, event(10_000, { guild: tried })),
+          interaction(user, event(15_000, { guild: tried })),
+          // After the removal, a user install run in those servers: not the servers using the bot.
+          interaction(user, event(30_000, { guild: tried })),
+          interaction(user, event(30_000, { guild: never })),
+        ]),
+      );
+      expect(res.json()).toMatchObject({ accepted: 8 });
+      const rows = await h.db.query<{ id: string; first: Date | null; last: Date | null }>(
+        `SELECT guild_id::text AS id, first_command_at AS first, last_command_at AS last
          FROM guilds WHERE guild_id = ANY($1::bigint[])`,
-      [[tried, never]],
-    );
-    const times = Object.fromEntries(rows.rows.map((r) => [r.id, [r.first?.getTime(), r.last?.getTime()]]));
-    // The last command before the removal, not the first: the one after it is left out.
-    expect(times).toEqual({ [tried]: [at + 10_000, at + 15_000], [never]: [undefined, undefined] });
-  });
+        [[tried, never]],
+      );
+      const times = Object.fromEntries(rows.rows.map((r) => [r.id, [r.first?.getTime(), r.last?.getTime()]]));
+      // The last command before the removal, not the first: the one after it is left out.
+      expect(times).toEqual({ [tried]: [at + 10_000, at + 15_000], [never]: [undefined, undefined] });
+    },
+  );
 
-  it('ignores a snapshot of a shard outside the layout instead of counting it toward a new one', async () => {
-    await h.db.query('DELETE FROM snapshot_pending');
-    const res = await ingest(
-      h.app,
-      envelope([{ id: uuidv7(), ts: Date.now(), type: 'guild_snapshot', shards: [7], shardCount: 4, guilds: [] }]),
-    );
-    expect(res.json()).toMatchObject({ accepted: 1 });
-    const pending = await h.db.query('SELECT count(*)::int AS n FROM snapshot_pending');
-    expect(pending.rows[0].n).toBe(0);
-  });
+  it.runIf(onPostgres)(
+    'ignores a snapshot of a shard outside the layout instead of counting it toward a new one',
+    async () => {
+      await h.db.query('DELETE FROM snapshot_pending');
+      const res = await ingest(
+        h.app,
+        envelope([{ id: uuidv7(), ts: Date.now(), type: 'guild_snapshot', shards: [7], shardCount: 4, guilds: [] }]),
+      );
+      expect(res.json()).toMatchObject({ accepted: 1 });
+      const pending = await h.db.query('SELECT count(*)::int AS n FROM snapshot_pending');
+      expect(pending.rows[0].n).toBe(0);
+    },
+  );
 
   it('records joins with a full profile and keeps Discord text as data', async () => {
     const id = snowflakeOnShard(1, 2, 20);
@@ -939,7 +1030,7 @@ describe('servers and snapshots', () => {
   });
 });
 
-describe('database server settings', () => {
+describe.runIf(onPostgres)('database server settings', () => {
   it('buckets days in UTC whatever time zone the database server uses', async () => {
     const name = (await h.db.query<{ name: string }>('SELECT current_database() AS name')).rows[0]?.name;
     await h.db.query(`ALTER DATABASE "${name}" SET timezone TO 'Pacific/Kiritimati'`);
@@ -984,7 +1075,7 @@ describe('database server settings', () => {
   });
 });
 
-describe('salt lifecycle', () => {
+describe.runIf(onPostgres)('salt lifecycle', () => {
   it('destroys expired salts: final counts kept, hashes deleted, secret NULL, partition dropped', async () => {
     await h.db.query(
       `INSERT INTO salts (app_id, period, secret, period_end, destroy_after)
@@ -1012,14 +1103,14 @@ describe('salt lifecycle', () => {
 });
 
 describe('retention', () => {
-  it('drops raw partitions past their retention', async () => {
+  it.runIf(onPostgres)('drops raw partitions past their retention', async () => {
     await h.db.query("SELECT shardlens_ensure_daily_partitions(ARRAY['interactions'], '2020-01-01', '2020-01-01')");
     await h.store.jobs.runRetention(new Date());
     const res = await h.db.query("SELECT to_regclass('interactions_20200101') AS t");
     expect(res.rows[0].t).toBeNull();
   });
 
-  it('forgets the SDK health of bot processes that stopped reporting a month ago', async () => {
+  it.runIf(onPostgres)('forgets the SDK health of bot processes that stopped reporting a month ago', async () => {
     await h.db.query(
       `INSERT INTO sdk_health (app_id, instance, ts, queue_depth, dropped, failed_flushes, internal_errors)
        VALUES ($1, 'gone:1', now() - interval '31 days', 0, '{}', 0, '{}'), ($1, 'alive:2', now(), 0, '{}', 0, '{}')`,
@@ -1036,26 +1127,46 @@ describe('retention', () => {
     const DAY = 86_400_000;
     const old = Date.now() - 50 * DAY;
     const day = new Date(old).toISOString().slice(0, 10);
-    await h.db.query("SELECT shardlens_ensure_daily_partitions(ARRAY['interactions'], $1::date, $1::date)", [day]);
+    const id = uuidv7(old);
     // Ingest accepts 35 days back at most, but rows collected live stay for the whole retention.
-    await h.db.query(
-      `INSERT INTO interactions (id, ts, app_id, env, kind, command, locale, user_hash, salt_period, premium, outcome)
-       VALUES ($1, $2, $3, 'production', 1, 'archive', 'en-GB', $4, $5, false, 0)`,
-      [uuidv7(old), new Date(old), APP_ID, Buffer.alloc(16, 7), day.slice(0, 7)],
-    );
+    if (onPostgres) {
+      await h.db.query("SELECT shardlens_ensure_daily_partitions(ARRAY['interactions'], $1::date, $1::date)", [day]);
+      await h.db.query(
+        `INSERT INTO interactions (id, ts, app_id, env, kind, command, locale, user_hash, salt_period, premium, outcome)
+         VALUES ($1, $2, $3, 'production', 1, 'archive', 'en-GB', $4, $5, false, 0)`,
+        [id, new Date(old), APP_ID, Buffer.alloc(16, 7), day.slice(0, 7)],
+      );
+    } else {
+      await h.mongo.c.interactions.insertOne({
+        _id: new UUID(id),
+        ts: new Date(old),
+        appId: APP_ID,
+        env: 'production',
+        kind: 1,
+        command: 'archive',
+        options: [],
+        locale: 'en-GB',
+        userHash: new Binary(Buffer.alloc(16, 7)),
+        saltPeriod: day.slice(0, 7),
+        premium: false,
+        outcome: 0,
+        weight: 1,
+      });
+    }
     const range = { from: new Date(Date.now() - 60 * DAY).toISOString(), to: new Date().toISOString() };
     const detail = async () => (await query(h.app, { kind: 'command', name: 'archive', range })).json();
     try {
-      await h.db.query('UPDATE apps SET raw_retention_days = 90 WHERE app_id = $1', [APP_ID]);
+      await h.store.apps.update(APP_ID, { rawRetentionDays: 90 });
       const kept = await detail();
       expect(kept.totals.runs).toBe(1);
       expect(kept.from).toBe(range.from);
-      await h.db.query('UPDATE apps SET raw_retention_days = 7 WHERE app_id = $1', [APP_ID]);
+      await h.store.apps.update(APP_ID, { rawRetentionDays: 7 });
       const cut = await detail();
       expect(Date.parse(cut.from)).toBeGreaterThan(Date.now() - 7 * DAY - 60_000);
     } finally {
-      await h.db.query('UPDATE apps SET raw_retention_days = 35 WHERE app_id = $1', [APP_ID]);
-      await h.db.query(`DROP TABLE IF EXISTS "interactions_${day.replace(/-/g, '')}"`);
+      await h.store.apps.update(APP_ID, { rawRetentionDays: 35 });
+      if (onPostgres) await h.db.query(`DROP TABLE IF EXISTS "interactions_${day.replace(/-/g, '')}"`);
+      else await h.mongo.c.interactions.deleteOne({ _id: new UUID(id) });
     }
   });
 });

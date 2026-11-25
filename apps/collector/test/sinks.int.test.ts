@@ -21,6 +21,7 @@ import {
   INGEST_KEY,
   ingest,
   interaction,
+  onPostgres,
   sdkHasher,
   startHarness,
 } from './harness.js';
@@ -74,7 +75,8 @@ beforeAll(async () => {
   const mysql = await new MySqlContainer(process.env.SHARDLENS_TEST_MYSQL_IMAGE ?? 'mysql:8.4').start();
   const maria = await new MariaDbContainer(process.env.SHARDLENS_TEST_MARIADB_IMAGE ?? 'mariadb:11.4').start();
   containers.push(mongo, mysql, maria);
-  await h.db.query('CREATE DATABASE bot_data');
+  // The PostgreSQL sink writes to a database of the harness's server, when the store runs on one.
+  if (onPostgres) await h.db.query('CREATE DATABASE bot_data');
   const pgUrl = h.config.databaseUrl.replace(/\/[^/]+$/, '/bot_data');
   const sqliteFile = join(dir, 'events.db');
   const mongoUrl = `${mongo.getConnectionString()}/mybot?directConnection=true`;
@@ -142,7 +144,9 @@ afterAll(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-describe.each(['MongoDB', 'MySQL', 'MariaDB', 'PostgreSQL', 'SQLite'])('%s sink', (name) => {
+const sinks = ['MongoDB', 'MySQL', 'MariaDB', ...(onPostgres ? ['PostgreSQL'] : []), 'SQLite'];
+
+describe.each(sinks)('%s sink', (name) => {
   let app: FastifyInstance;
   let mirror: SinkMirror;
   let reader: Reader;

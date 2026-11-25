@@ -1,6 +1,16 @@
 import { uuidv7 } from '@shardlens/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { APP_ID, envelope, type Harness, ingest, interaction, query, sdkHasher, startHarness } from './harness.js';
+import {
+  APP_ID,
+  envelope,
+  type Harness,
+  ingest,
+  interaction,
+  onPostgres,
+  query,
+  sdkHasher,
+  startHarness,
+} from './harness.js';
 
 const GUILD = '112233445566778899';
 
@@ -54,17 +64,20 @@ const range = () => ({
 });
 
 describe('message (prefix) commands', () => {
-  it('stores them with interactions, with no language, install type, entitlement or response', async () => {
-    const rows = await h.db.query(
-      `SELECT context, install, locale, premium, ack_ms, guild_id::text AS guild, member_tier
+  it.runIf(onPostgres)(
+    'stores them with interactions, with no language, install type, entitlement or response',
+    async () => {
+      const rows = await h.db.query(
+        `SELECT context, install, locale, premium, ack_ms, guild_id::text AS guild, member_tier
          FROM interactions WHERE kind = 9 ORDER BY guild_id NULLS LAST`,
-    );
-    expect(rows.rows).toEqual([
-      { context: 0, install: null, locale: '', premium: false, ack_ms: null, guild: GUILD, member_tier: 2 },
-      { context: 0, install: null, locale: '', premium: false, ack_ms: null, guild: GUILD, member_tier: 2 },
-      { context: 1, install: null, locale: '', premium: false, ack_ms: null, guild: null, member_tier: 0 },
-    ]);
-  });
+      );
+      expect(rows.rows).toEqual([
+        { context: 0, install: null, locale: '', premium: false, ack_ms: null, guild: GUILD, member_tier: 2 },
+        { context: 0, install: null, locale: '', premium: false, ack_ms: null, guild: GUILD, member_tier: 2 },
+        { context: 1, install: null, locale: '', premium: false, ack_ms: null, guild: null, member_tier: 0 },
+      ]);
+    },
+  );
 
   it('counts both surfaces in the command list, with failures and unique users', async () => {
     const res = await query(h.app, { kind: 'commands', range: range() });
@@ -83,10 +96,14 @@ describe('message (prefix) commands', () => {
         expect.objectContaining({ key: 'message_command', count: 3 }),
       ]),
     );
-    const users = await h.db.query(
-      "SELECT count(DISTINCT user_hash)::int AS n FROM uniques WHERE scope = 'command' AND scope_key = 'ban'",
-    );
-    expect(users.rows[0].n).toBe(3);
+    const users = onPostgres
+      ? (
+          await h.db.query(
+            "SELECT count(DISTINCT user_hash)::int AS n FROM uniques WHERE scope = 'command' AND scope_key = 'ban'",
+          )
+        ).rows[0].n
+      : (await h.mongo.c.uniques.distinct('_id.userHash', { '_id.scope': 'command', '_id.scopeKey': 'ban' })).length;
+    expect(users).toBe(3);
   });
 
   it('leaves them out of deadline, response and premium figures, which only interactions have', async () => {

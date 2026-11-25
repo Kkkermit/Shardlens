@@ -1,7 +1,7 @@
 import type { AddressInfo } from 'node:net';
 import { ShardlensClient, uuidv7, type WireEvent } from '@shardlens/core';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { APP_ID, type Harness, INGEST_KEY, startHarness } from './harness.js';
+import { APP_ID, type Harness, INGEST_KEY, onPostgres, startHarness } from './harness.js';
 
 let h: Harness;
 let endpoint: string;
@@ -58,19 +58,32 @@ describe('SDK → collector over HTTP', () => {
     await client.shutdown({ timeoutMs: 2_000 });
 
     expect(client.stats()).toMatchObject({ queueDepth: 0, failedFlushes: 0 });
-    const rows = await h.db.query<{ n: number; users: number }>(
-      "SELECT count(*)::int AS n, count(DISTINCT user_hash)::int AS users FROM interactions WHERE command = 'e2e'",
-    );
-    expect(rows.rows[0]).toEqual({ n: 25, users: 5 });
-    const health = await h.db.query('SELECT instance FROM sdk_health WHERE app_id = $1', [APP_ID]);
-    expect(health.rows.map((r) => r.instance)).toContain('e2e:1');
-    const custom = await h.db.query("SELECT props FROM custom_events WHERE name = 'e2e_done'");
-    expect(custom.rows[0]?.props).toEqual({ ok: true });
-    // No raw user ID anywhere in the database.
-    const leak = await h.db.query(
-      "SELECT count(*)::int AS n FROM interactions WHERE user_hash::text LIKE '%600000000000000000%'",
-    );
-    expect(leak.rows[0]?.n).toBe(0);
+    if (onPostgres) {
+      const rows = await h.db.query<{ n: number; users: number }>(
+        "SELECT count(*)::int AS n, count(DISTINCT user_hash)::int AS users FROM interactions WHERE command = 'e2e'",
+      );
+      expect(rows.rows[0]).toEqual({ n: 25, users: 5 });
+      const health = await h.db.query('SELECT instance FROM sdk_health WHERE app_id = $1', [APP_ID]);
+      expect(health.rows.map((r) => r.instance)).toContain('e2e:1');
+      const custom = await h.db.query("SELECT props FROM custom_events WHERE name = 'e2e_done'");
+      expect(custom.rows[0]?.props).toEqual({ ok: true });
+      // No raw user ID anywhere in the database.
+      const leak = await h.db.query(
+        "SELECT count(*)::int AS n FROM interactions WHERE user_hash::text LIKE '%600000000000000000%'",
+      );
+      expect(leak.rows[0]?.n).toBe(0);
+    } else {
+      const { c } = h.mongo;
+      const stored = await c.interactions.find({ command: 'e2e' }).toArray();
+      expect(stored).toHaveLength(25);
+      expect(new Set(stored.map((d) => Buffer.from(d.userHash.buffer).toString('hex'))).size).toBe(5);
+      const health = await c.sdkHealth.find({ '_id.appId': APP_ID }).toArray();
+      expect(health.map((d) => d._id.instance)).toContain('e2e:1');
+      expect((await c.customEvents.findOne({ name: 'e2e_done' }))?.props).toEqual({ ok: true });
+      // No raw user ID anywhere in the database.
+      const hashes = stored.map((d) => Buffer.from(d.userHash.buffer).toString('hex')).join();
+      expect(JSON.stringify(stored) + hashes).not.toContain('600000000000000000');
+    }
   });
 
   afterEach(() => {
@@ -114,9 +127,17 @@ describe('SDK → collector over HTTP', () => {
 
     const dropped = Object.values(client.stats().dropped).reduce((a, b) => a + b, 0);
     expect(dropped).toBe(0);
-    const rows = await h.db.query<{ n: number; distinct_ids: number }>(
-      "SELECT count(*)::int AS n, count(DISTINCT id)::int AS distinct_ids FROM custom_events WHERE name = 'outage_probe'",
-    );
-    expect(rows.rows[0]).toEqual({ n: 300, distinct_ids: 300 });
+    const stored = onPostgres
+      ? (
+          await h.db.query<{ n: number; distinct_ids: number }>(
+            "SELECT count(*)::int AS n, count(DISTINCT id)::int AS distinct_ids FROM custom_events WHERE name = 'outage_probe'",
+          )
+        ).rows[0]
+      : {
+          // `_id` is the event ID: documents are distinct events.
+          n: await h.mongo.c.customEvents.countDocuments({ name: 'outage_probe' }),
+          distinct_ids: (await h.mongo.c.customEvents.distinct('_id', { name: 'outage_probe' })).length,
+        };
+    expect(stored).toEqual({ n: 300, distinct_ids: 300 });
   });
 });
