@@ -1,0 +1,23 @@
+{
+  "name": "nexus-bot",
+  "version": "4.0.0-beta.3",
+  "private": true,
+  "type": "module",
+  "description": "Community bot with a modular core: polls, per-server settings and stats. MongoDB for storage.",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node --env-file-if-exists=.env dist/index.js",
+    "dev": "tsc -p tsconfig.json --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "engines": { "node": ">=22.12" },
+  "dependencies": {
+    "discord.js": "^14.28.1",
+    "mongodb": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3"
+  }
+}

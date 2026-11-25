@@ -391,3 +391,9 @@ export const scenarios = {
     },
   },
 };
+
+// The same scenarios for bots that keep their own data in MongoDB.
+scenarios['mongo-prefix'] = { ...scenarios['js-prefix'], appId: '1100000000000000011' };
+scenarios['mongo-sharded'] = { ...scenarios['ts-sharded'], appId: '1100000000000000012' };
+scenarios['mongo-hybrid'] = { ...scenarios['ts-guide'], appId: '1100000000000000013' };
+scenarios['mongo-modular'] = { ...scenarios.sapphire, appId: '1100000000000000014' };

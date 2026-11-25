@@ -1,0 +1,23 @@
+{
+  "name": "shardbot",
+  "version": "0.7.2",
+  "private": true,
+  "type": "module",
+  "description": "Fun bot (echo, roulette, server stats), sharded with ShardingManager, data in MongoDB.",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node --env-file-if-exists=.env dist/index.js",
+    "deploy": "node --env-file-if-exists=.env dist/deploy.js",
+    "watch": "tsc --watch"
+  },
+  "engines": { "node": ">=22.12" },
+  "dependencies": {
+    "discord.js": "^14.28.1",
+    "mongodb": "^6.20.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "typescript": "^5.9.3"
+  }
+}
