@@ -94,6 +94,14 @@ export function sumHistograms(list: unknown): Document {
   };
 }
 
+/** A group of `SourceRow`: the metric's events of one app, bucket and set of dimensions. */
+const plain = (metric: string, dims: Document) => (grain: Grain) => ({
+  a: '$appId',
+  t: truncate('$ts', grain),
+  m: { $literal: metric },
+  d: dims,
+});
+
 /** A metric of interactions with their first-response latency: count by weight, ack time summed, its histogram. */
 function latency(name: string, where: Document, dims: Document): RollupSource {
   return {
@@ -104,7 +112,7 @@ function latency(name: string, where: Document, dims: Document): RollupSource {
       { $match: { ...inWindow(apps, from, to), ...where } },
       {
         $group: {
-          _id: { a: '$appId', t: truncate('$ts', grain), m: { $literal: name }, d: dims, b: ACK_BUCKET },
+          _id: { ...plain(name, dims)(grain), b: ACK_BUCKET },
           count: { $sum: '$weight' },
           sum: { $sum: { $multiply: [{ $ifNull: ['$ackMs', 0] }, '$weight'] } },
           min: { $min: '$ackMs' },
@@ -134,13 +142,6 @@ function counter(
     ],
   };
 }
-
-const plain = (metric: string, dims: Document) => (grain: Grain) => ({
-  a: '$appId',
-  t: truncate('$ts', grain),
-  m: { $literal: metric },
-  d: dims,
-});
 
 /** Every metric the rollup job keeps, in PostgreSQL's order. */
 export const ROLLUP_SOURCES: readonly RollupSource[] = [

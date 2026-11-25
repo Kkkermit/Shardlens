@@ -85,7 +85,7 @@ export function entitlementDoc(e: {
 
 const emptyResult = (): WriteResult => ({ accepted: 0, duplicates: 0, rejected: [], stored: new Set() });
 
-/** Events applied in batch order, after the single events are stored. */
+/** Events applied one after another in batch order, while the single events are inserted. */
 type Ordered = Extract<
   Event,
   {

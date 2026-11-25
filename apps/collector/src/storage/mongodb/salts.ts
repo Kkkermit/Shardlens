@@ -34,7 +34,7 @@ export function mongoSalts({ c }: Mongo): SaltStorage {
     },
 
     async livePeriods(appId, now) {
-      // By `destroyAfter` first: every batch asks, and only a few of an app's salts are still alive.
+      // Every batch asks: the `destroyAfter` index finds the few salts still alive instead of every one the app had.
       const salts = await c.salts
         .find({ destroyAfter: { $gt: now }, '_id.appId': appId, secret: { $exists: true } }, { projection: { _id: 1 } })
         .toArray();

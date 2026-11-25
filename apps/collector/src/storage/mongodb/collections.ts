@@ -107,7 +107,7 @@ export interface InteractionErrorDoc extends EventBase {
   weight: number;
 }
 
-/** One row of a `rest` event: PostgreSQL keys it by (event ID, row number). */
+/** One row of a `rest_window` event: PostgreSQL keys it by (event ID, row number). */
 export interface RestCallDoc {
   _id: { eventId: UUID; row: number };
   ts: Date;
@@ -415,7 +415,10 @@ export interface CounterDoc {
   n: number;
 }
 
-/** Leases: the job leader's (`jobs`), renewed while it leads. */
+/**
+ * Leases: the job leader's, renewed while it leads (`leader.ts`), and each app's snapshot lease (`snapshot:<app ID>`),
+ * held while a startup snapshot is applied (`ingest/snapshots.ts`).
+ */
 export interface LeaseDoc {
   _id: string;
   holder: string;
@@ -443,8 +446,8 @@ export interface LiveListenerDoc {
 }
 
 /**
- * What the in-bot runner and `npx shardlens dashboard` generate on an app's first start (`mongodb.ts`), so every
- * process of the bot, and the dashboard, use the same keys. `_id` is `app:<app ID>`.
+ * An app's secrets and keys, generated on its first start (`secrets.ts`) so that every process of the bot, the
+ * dashboard and the collector image use the same ones. `_id` is `app:<app ID>`.
  */
 export interface SecretDoc {
   _id: string;
@@ -601,6 +604,7 @@ const LAYOUT: { [K in keyof Collections]: { name: string; indexes: IndexDescript
   secrets: { name: 'shardlens_secrets', indexes: [] },
 };
 
+/** The collections MongoStore keeps in `db`. */
 export function collections(db: Db): Collections {
   return Object.fromEntries(
     Object.entries(LAYOUT).map(([key, { name }]) => [key, db.collection(name)]),

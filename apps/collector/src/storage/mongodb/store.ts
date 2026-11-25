@@ -55,7 +55,7 @@ export class MongoStore implements Store {
   readonly live: LiveStorage;
   readonly jobs: JobStorage;
   readonly demo: DemoStorage;
-  /** The connection and collections, for MongoDB's own tests and the runners that made it. */
+  /** The connection and collections the store works on. */
   readonly mongo: Mongo;
 
   constructor(m: Mongo) {

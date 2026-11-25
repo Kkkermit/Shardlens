@@ -2,10 +2,9 @@ import { BUCKETS, bucketOf } from '@shardlens/core';
 import type { Document } from 'mongodb';
 
 /**
- * The upper bound of each latency bucket as PostgreSQL's `shardlens_hist_quantile` gives it: `exp(i / 39 * ln(60000))`
- * with C's libm (glibc and musl agree). V8's `Math.exp`, which `@shardlens/core`'s `bucketUpperMs` uses, differs in the
- * last bit for 7 of the 40, so an answer read from MongoDB would not equal PostgreSQL's. `test/mongodb-admin.int.test.ts`
- * checks this table against a running PostgreSQL.
+ * The upper bound of each latency bucket as PostgreSQL's `shardlens_hist_quantile` gives it, `exp((i + 1) / 39 *
+ * ln(60000))` with C's libm (glibc and musl agree). V8's `Math.exp`, which `@shardlens/core`'s `bucketUpperMs` uses,
+ * differs in the last bit for 7 of the 40, so an answer read from MongoDB would not equal PostgreSQL's.
  */
 export const POSTGRES_BUCKET_UPPER_MS: readonly number[] = [
   1.325918098651769, 1.7580588043323218, 2.331041987158314, 3.090770759490393, 4.098108888791984, 5.433756745894982,
@@ -34,7 +33,7 @@ export const ACK_WEIGHTS: Document[] = [
  */
 export function ackQuantile(rows: readonly { _id: number; w: number }[], q: number): number | null {
   const hist = new Array<number>(BUCKETS).fill(0);
-  // `shardlens_bucket` matches `bucketOf` for every whole millisecond (checked against PostgreSQL in the tests).
+  // `shardlens_bucket` matches `bucketOf` for every whole millisecond.
   for (const row of rows) hist[bucketOf(row._id)]! += row.w;
   const total = hist.reduce((a, b) => a + b, 0);
   if (total === 0) return null;
