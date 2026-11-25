@@ -11,7 +11,7 @@ import { KeyStore, seedKey } from '../src/security/auth.js';
 import type { SignInLinks } from '../src/security/sign-in-links.js';
 import { buildServer } from '../src/server.js';
 import type { ClickHouseStore } from '../src/storage/clickhouse.js';
-import { openMongo } from '../src/storage/mongodb/connect.js';
+import { type Mongo, openMongo } from '../src/storage/mongodb/connect.js';
 import { MongoStore } from '../src/storage/mongodb/store.js';
 import { PostgresStore } from '../src/storage/postgres/store.js';
 import type { Store } from '../src/storage/store.js';
@@ -27,6 +27,8 @@ interface StoreUnderTest {
   databaseUrl: string;
   /** The PostgreSQL pool behind the store, when it has one. */
   db?: Db | undefined;
+  /** The MongoDB connection behind the store, when it has one. */
+  mongo?: Mongo | undefined;
   /** Stops the store and its database. */
   close(): Promise<void>;
 }
@@ -67,6 +69,7 @@ export const mongoStore: StoreFactory = async () => {
   return {
     store: new MongoStore(m),
     databaseUrl: url,
+    mongo: m,
     async close() {
       await m.client.close();
       await container.stop();
@@ -84,6 +87,8 @@ export interface Harness {
    * own (`it.runIf(onPostgres)`): with another store, reading this throws.
    */
   readonly db: Db;
+  /** As `db`, the MongoDB collections behind `store`: with another store, reading this throws. */
+  readonly mongo: Mongo;
   app: FastifyInstance;
   live: LiveHub;
   config: Config;
@@ -144,6 +149,10 @@ export async function startHarness(
     get db() {
       if (!backing.db) throw new Error('This test needs PostgreSQL: it reads or writes rows directly.');
       return backing.db;
+    },
+    get mongo() {
+      if (!backing.mongo) throw new Error('This test needs MongoDB: it reads or writes documents directly.');
+      return backing.mongo;
     },
     app,
     live,

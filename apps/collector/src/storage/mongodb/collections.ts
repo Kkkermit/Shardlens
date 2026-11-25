@@ -23,6 +23,8 @@ import type { AppMode, SessionMethod } from '../store.js';
 export interface AppDoc {
   _id: string;
   name: string;
+  /** When the bot reported `name` (`app_info`), so a late older report can't bring an older name back. */
+  nameAt?: Date;
   mode: AppMode;
   saltPeriod: SaltPeriod;
   timezone: string;
@@ -218,6 +220,8 @@ export interface GuildDoc {
 export interface GuildEventDoc {
   _id: { appId: string; guildId: string; ts: Date; kind: number };
   detectedAtStartup: boolean;
+  /** A join or leave recorded but not yet applied to its server: a retried batch applies it. */
+  pending?: true;
 }
 
 export interface SnapshotPendingDoc {
@@ -272,8 +276,14 @@ export interface RollupDoc {
   hist?: number[];
 }
 
+/**
+ * A minute for the rollup job to recompute: one that late events arrived for, or (`appId` empty) one a rollup run
+ * started on, marked until the run finishes so a run that dies partway is picked up by the next.
+ */
 export interface DirtyBucketDoc {
   _id: { appId: string; bucket: Date };
+  /** Raised by every mark, so a run takes away only the marks it has seen to. */
+  n: number;
 }
 
 export interface ShardEventDoc {
@@ -396,7 +406,10 @@ export interface AdminAuditDoc {
   details: object;
 }
 
-/** Sequences for the decimal IDs of keys, rules and reports ({@link nextId}). */
+/**
+ * Sequences for the decimal IDs of keys, rules and reports ({@link nextId}), and the {@link LAYOUT_VERSION} the indexes
+ * were last made for (`_id: 'index_layout'`).
+ */
 export interface CounterDoc {
   _id: string;
   n: number;
@@ -486,6 +499,12 @@ export interface Collections {
   secrets: Collection<SecretDoc>;
 }
 
+/**
+ * Raise with every change to the indexes below: a start finding the database made for this version or a later one
+ * creates no indexes, which with every process of a sharded bot starting at once would cost each about 40 operations.
+ */
+export const LAYOUT_VERSION = 1;
+
 /** Collection names in the database, and the indexes each keeps besides `_id`. */
 const LAYOUT: { [K in keyof Collections]: { name: string; indexes: IndexDescription[] } } = {
   apps: { name: 'shardlens_apps', indexes: [] },
@@ -509,7 +528,12 @@ const LAYOUT: { [K in keyof Collections]: { name: string; indexes: IndexDescript
   rateLimits: { name: 'shardlens_rate_limits', indexes: [{ key: { appId: 1, ts: 1 } }] },
   customEvents: {
     name: 'shardlens_custom_events',
-    indexes: [{ key: { appId: 1, name: 1, ts: 1 } }, { key: { appId: 1, userHash: 1 }, sparse: true }],
+    indexes: [
+      { key: { appId: 1, name: 1, ts: 1 } },
+      // Funnels, retention and rollups read every name of a time range.
+      { key: { appId: 1, ts: 1 } },
+      { key: { appId: 1, userHash: 1 }, sparse: true },
+    ],
   },
   webhookEvents: {
     name: 'shardlens_webhook_events',
@@ -548,7 +572,7 @@ const LAYOUT: { [K in keyof Collections]: { name: string; indexes: IndexDescript
   rollup1m: { name: 'shardlens_rollup_1m', indexes: [{ key: { appId: 1, metric: 1, bucket: 1 } }] },
   rollup1h: { name: 'shardlens_rollup_1h', indexes: [{ key: { appId: 1, metric: 1, bucket: 1 } }] },
   rollup1d: { name: 'shardlens_rollup_1d', indexes: [{ key: { appId: 1, metric: 1, bucket: 1 } }] },
-  dirtyBuckets: { name: 'shardlens_dirty_buckets', indexes: [] },
+  dirtyBuckets: { name: 'shardlens_dirty_buckets', indexes: [{ key: { '_id.bucket': 1 } }] },
   shardEvents: { name: 'shardlens_shard_events', indexes: [{ key: { '_id.appId': 1, '_id.ts': 1 } }] },
   entitlements: { name: 'shardlens_entitlements', indexes: [{ key: { appId: 1, ts: 1 } }] },
   subscriptions: { name: 'shardlens_subscriptions', indexes: [{ key: { appId: 1, ts: 1 } }] },
