@@ -1200,6 +1200,51 @@ describe('live tiles', () => {
     expect(await m.c.liveListeners.countDocuments()).toBe(0);
   }, 60_000);
 
+  it('sends a share again under its first time when the reply to its write was lost', async () => {
+    await m.c.liveShares.deleteMany({});
+    const shares = m.c.liveShares;
+    let lose = true;
+    const lossy = {
+      updateOne: async (...args: Parameters<typeof shares.updateOne>) => {
+        const written = await shares.updateOne(...args);
+        if (!lose) return written;
+        lose = false;
+        throw new Error('connection reset');
+      },
+    } as unknown as Collection<LiveShareDoc>;
+    const watcher = mongo.live.channel();
+    const publisher = liveWith({ liveShares: lossy }).channel();
+    const got: LiveShare[] = [];
+    await watcher.subscribe(
+      (s) => got.push(s),
+      () => undefined,
+    );
+    await publisher.subscribe(
+      () => undefined,
+      () => undefined,
+    );
+    try {
+      watcher.listen?.(true);
+      await until(async () => (await m.c.liveListeners.countDocuments()) === 1);
+      const s = second();
+      await expect(publisher.publish({ instance: 'p', appId: '1', counts: [[s, 3, 1]] })).rejects.toThrow();
+      const [first] = await m.c.liveShares.find().toArray();
+      if (!first) throw new Error('the write whose reply was lost was not stored');
+      await new Promise((r) => setTimeout(r, 1_100));
+      await publisher.publish({ instance: 'p', appId: '1', counts: [[s + 1, 2, 0]] });
+      // Stamped again, the first share would come back to a watcher once it no longer remembers its ID.
+      expect((await m.c.liveShares.findOne({ _id: first._id }))?.at).toEqual(first.at);
+      await until(() => got.length === 2);
+      expect(got.flatMap((g) => g.counts).sort((a, b) => a[0] - b[0])).toEqual([
+        [s, 3, 1],
+        [s + 1, 2, 0],
+      ]);
+    } finally {
+      await publisher.stop();
+      await watcher.stop();
+    }
+  });
+
   it('reads back the last 15 minutes when a stream opens, and nothing older', async () => {
     await m.c.liveShares.deleteMany({});
     const s = second();
