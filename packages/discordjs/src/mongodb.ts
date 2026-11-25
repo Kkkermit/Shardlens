@@ -19,7 +19,7 @@ export interface CollectorModule {
 /** In a variable, so bundlers leave the optional package to be loaded at run time, and only by bots that ask. */
 const COLLECTOR_MODULE = '@shardlens/collector/mongodb';
 
-/** As long as the transport gives a request to be answered. */
+/** How long the transport lets a request take (its own timeout, in `@shardlens/core`). */
 const REQUEST_TIMEOUT_MS = 10_000;
 
 const isTimeout = (reason: unknown) => (reason as { name?: unknown } | null)?.name === 'TimeoutError';

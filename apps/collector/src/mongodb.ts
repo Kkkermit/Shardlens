@@ -91,10 +91,10 @@ export interface MongoCollector {
 }
 
 /**
- * Starts the collector on your MongoDB in this process. Resolves once it can take events (and, with `dashboard`, once
- * the dashboard listens). The first start of an app creates its collections, indexes and keys.
+ * Refuses what the collector couldn't use, before anything connects, with an error that names the option: a key that
+ * isn't one would otherwise fail the start once connected, and a bad database name the first write.
  */
-export async function startMongoCollector(options: MongoCollectorOptions): Promise<MongoCollector> {
+function checkOptions(options: MongoCollectorOptions, envSettingsKey: string | undefined): void {
   if (typeof options.uri !== 'string' || !MONGODB_URL.test(options.uri)) {
     throw new Error('Shardlens: the MongoDB connection string must start with mongodb:// or mongodb+srv://');
   }
@@ -102,9 +102,6 @@ export async function startMongoCollector(options: MongoCollectorOptions): Promi
     throw new Error('Shardlens: appId must be your Discord application ID');
   }
   if (options.mode === 'audit' && !options.auditKey) throw new Error("Shardlens: mode 'audit' needs auditKey");
-  // Empty counts as unset, as it does for the collector image: a `.env` often lists the variable with no value.
-  const envSettingsKey = process.env.SHARDLENS_SETTINGS_KEY?.trim() || undefined;
-  // Checked before connecting, so a mistake names the setting rather than failing the start once connected.
   for (const [name, key] of [
     ['auditKey', options.auditKey],
     ['settingsKey', options.settingsKey],
@@ -114,13 +111,23 @@ export async function startMongoCollector(options: MongoCollectorOptions): Promi
       throw new Error(`Shardlens: ${name} must be 32 random bytes, base64 (openssl rand -base64 32)`);
     }
   }
-  // MongoDB's own rule for database names, checked here so a mistake says so instead of failing on first write.
+  // MongoDB's own rule for database names.
   if (options.database !== undefined && !/^[^/\\. "$*<>:|?]{1,63}$/.test(options.database)) {
     throw new Error('Shardlens: database must be a MongoDB database name');
   }
   if (options.dashboard?.publicUrl !== undefined && !URL.canParse(options.dashboard.publicUrl)) {
     throw new Error('Shardlens: dashboard.publicUrl must be a URL, such as https://stats.example.com');
   }
+}
+
+/**
+ * Starts the collector on your MongoDB in this process. Resolves once it can take events (and, with `dashboard`, once
+ * the dashboard listens). The first start of an app creates its collections, indexes and keys.
+ */
+export async function startMongoCollector(options: MongoCollectorOptions): Promise<MongoCollector> {
+  // Empty counts as unset, as it does for the collector image: a `.env` often lists the variable with no value.
+  const envSettingsKey = process.env.SHARDLENS_SETTINGS_KEY?.trim() || undefined;
+  checkOptions(options, envSettingsKey);
 
   // Every process of a sharded bot opens its own: the driver's default of 100 connections each could reach a hosted
   // tier's limit. Ingest is one batch at a time; a dashboard's page asks a few queries at once.
