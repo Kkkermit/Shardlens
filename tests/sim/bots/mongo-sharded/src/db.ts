@@ -13,6 +13,15 @@ export interface EchoCount {
   lastEchoAt: Date;
 }
 
+export interface ServerInfo {
+  guildId: string;
+  name: string;
+  memberCount: number;
+  firstSeenAt: Date;
+  lastSeenAt: Date;
+  leftAt?: Date;
+}
+
 export interface Spin {
   guildId: string;
   userId: string;
@@ -28,6 +37,7 @@ export async function connectDb() {
   db = mongo.db();
   await db.collection('echo_counts').createIndex({ guildId: 1 }, { unique: true });
   await db.collection('spins').createIndex({ guildId: 1, userId: 1 });
+  await db.collection('servers').createIndex({ guildId: 1 }, { unique: true });
 }
 
 function database() {
@@ -37,6 +47,14 @@ function database() {
 
 export const echoCounts = () => database().collection<EchoCount>('echo_counts');
 export const spins = () => database().collection<Spin>('spins');
+export const servers = () => database().collection<ServerInfo>('servers');
+
+/** Round trip to the database in ms, for /ping. */
+export async function dbLatency() {
+  const started = performance.now();
+  await database().command({ ping: 1 });
+  return Math.round(performance.now() - started);
+}
 
 export async function closeDb() {
   await mongo.close();

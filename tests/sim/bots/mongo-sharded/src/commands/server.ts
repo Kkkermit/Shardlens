@@ -1,5 +1,5 @@
-import { SlashCommandBuilder } from 'discord.js';
-import { echoCounts } from '../db.js';
+import { SlashCommandBuilder, time } from 'discord.js';
+import { echoCounts, servers } from '../db.js';
 import type { Command } from './index.js';
 
 export default {
@@ -9,9 +9,21 @@ export default {
       await interaction.reply('Use this in a server!');
       return;
     }
-    const echoes = await echoCounts().findOne({ guildId: interaction.guildId });
+    const { guild } = interaction;
+    const [info, echoes] = await Promise.all([
+      servers().findOneAndUpdate(
+        { guildId: guild.id },
+        {
+          $set: { name: guild.name, memberCount: guild.memberCount, lastSeenAt: new Date() },
+          $setOnInsert: { firstSeenAt: new Date() },
+        },
+        { upsert: true, returnDocument: 'after' },
+      ),
+      echoCounts().findOne({ guildId: guild.id }),
+    ]);
     await interaction.reply(
-      `**${interaction.guild.name}** has ${interaction.guild.memberCount} members and has used /echo ${echoes?.count ?? 0} times.`,
+      `**${guild.name}** has ${guild.memberCount} members and has used /echo ${echoes?.count ?? 0} times. ` +
+        `I've known it since ${time(info?.firstSeenAt ?? new Date(), 'D')}.`,
     );
   },
 } satisfies Command;

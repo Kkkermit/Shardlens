@@ -1,6 +1,6 @@
 import { Client, Events, GatewayIntentBits, MessageFlags } from 'discord.js';
 import { commands } from './commands/index.js';
-import { closeDb, connectDb } from './db.js';
+import { closeDb, connectDb, servers } from './db.js';
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const tag = () => `[shard ${client.shard?.ids.join(',') ?? '?'}]`;
@@ -9,8 +9,26 @@ client.once(Events.ClientReady, (c) => {
   console.log(`${tag()} ready as ${c.user.tag} with ${c.guilds.cache.size} servers`);
 });
 
-client.on(Events.GuildCreate, (guild) => console.log(`${tag()} joined ${guild.name}`));
-client.on(Events.GuildDelete, (guild) => console.log(`${tag()} left ${guild.id}`));
+client.on(Events.GuildCreate, async (guild) => {
+  console.log(`${tag()} joined ${guild.name}`);
+  await servers()
+    .updateOne(
+      { guildId: guild.id },
+      {
+        $set: { name: guild.name, memberCount: guild.memberCount, lastSeenAt: new Date() },
+        $setOnInsert: { firstSeenAt: new Date() },
+        $unset: { leftAt: '' },
+      },
+      { upsert: true },
+    )
+    .catch((err) => console.error(`${tag()} could not save server ${guild.id}:`, err));
+});
+client.on(Events.GuildDelete, async (guild) => {
+  console.log(`${tag()} left ${guild.id}`);
+  await servers()
+    .updateOne({ guildId: guild.id }, { $set: { leftAt: new Date() } })
+    .catch((err) => console.error(`${tag()} could not update server ${guild.id}:`, err));
+});
 
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
