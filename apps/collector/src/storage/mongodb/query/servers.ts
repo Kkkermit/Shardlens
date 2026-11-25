@@ -186,8 +186,6 @@ async function servers(m: Mongo, appId: string, spec: Spec<'servers'>, now: Date
     return { total: result?.total[0]?.n ?? 0, rows: (result?.rows ?? []).map((r) => serverRow(r.doc, r.runs)) };
   }
 
-  let total: number;
-  let rows: RowFields[];
   if (spec.sort === 'name') {
     // By the lowercased name's bytes, as PostgreSQL orders text under the C collation and musl's (its Alpine images):
     // MongoDB's `$toLower` lowercases ASCII only, so the order is worked out here from the names alone.
@@ -199,41 +197,43 @@ async function servers(m: Mongo, appId: string, spec: Spec<'servers'>, now: Date
     }));
     keyed.sort((a, b) => dir * Buffer.compare(a.key, b.key) || (a.n < b.n ? -1 : a.n > b.n ? 1 : 0));
     const ids = keyed.slice(spec.offset, spec.offset + spec.limit).map((k) => k.id);
-    const docs = await m.c.guilds
-      .find({ _id: { $in: ids.map((guildId) => ({ appId, guildId })) } }, { projection: ROW_FIELDS })
-      .toArray();
+    const [docs, runs] = await Promise.all([
+      m.c.guilds
+        .find({ _id: { $in: ids.map((guildId) => ({ appId, guildId })) } }, { projection: ROW_FIELDS })
+        .toArray(),
+      runsOf(m, appId, ids, since),
+    ]);
     const byId = new Map(docs.map((d) => [d._id.guildId, d]));
-    total = names.length;
-    rows = ids.flatMap((id) => byId.get(id) ?? []);
-  } else {
-    const key = { members: '$memberCount', joined: '$joinedAt', last_active: '$lastCommandAt' }[spec.sort];
-    const [result] = await m.c.guilds
-      .aggregate<{ total: { n: number }[]; rows: RowFields[] }>([
-        { $match: filter },
-        {
-          $facet: {
-            total: [{ $count: 'n' }],
-            rows: [
-              { $set: { unset: { $cond: [isMissing(key), 1, 0] }, key, idn: NUMERIC_ID } },
-              // NULLS LAST in either direction, then the server ID.
-              { $sort: { unset: 1, key: dir, idn: 1 } },
-              ...page,
-              { $project: ROW_FIELDS },
-            ],
-          },
-        },
-      ])
-      .toArray();
-    total = result?.total[0]?.n ?? 0;
-    rows = result?.rows ?? [];
+    const rows = ids.flatMap((id) => byId.get(id) ?? []);
+    return { total: names.length, rows: rows.map((r) => serverRow(r, runs.get(r._id.guildId) ?? 0)) };
   }
+
+  const key = { members: '$memberCount', joined: '$joinedAt', last_active: '$lastCommandAt' }[spec.sort];
+  const [result] = await m.c.guilds
+    .aggregate<{ total: { n: number }[]; rows: RowFields[] }>([
+      { $match: filter },
+      {
+        $facet: {
+          total: [{ $count: 'n' }],
+          rows: [
+            { $set: { unset: { $cond: [isMissing(key), 1, 0] }, key, idn: NUMERIC_ID } },
+            // NULLS LAST in either direction, then the server ID.
+            { $sort: { unset: 1, key: dir, idn: 1 } },
+            ...page,
+            { $project: ROW_FIELDS },
+          ],
+        },
+      },
+    ])
+    .toArray();
+  const rows = result?.rows ?? [];
   const runs = await runsOf(
     m,
     appId,
     rows.map((r) => r._id.guildId),
     since,
   );
-  return { total, rows: rows.map((r) => serverRow(r, runs.get(r._id.guildId) ?? 0)) };
+  return { total: result?.total[0]?.n ?? 0, rows: rows.map((r) => serverRow(r, runs.get(r._id.guildId) ?? 0)) };
 }
 
 async function server(m: Mongo, appId: string, spec: Spec<'server'>, now: Date): Promise<QueryAnswer<'server'>> {
