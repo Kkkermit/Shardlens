@@ -37,12 +37,16 @@ jobs:
           SHARDLENS_TEST_PG_IMAGE: postgres:${{ matrix.postgres }}-alpine
 
   mongodb:
-    name: collector on MongoDB ${{ matrix.mongodb }}
+    name: collector on MongoDB ${{ matrix.mongodb }}, Node ${{ matrix.node }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        mongodb: ['7.0', '8.0']
+        # The oldest supported MongoDB on the oldest supported Node.js (the collector inside a bot runs on the bot's),
+        # and the newest on the image's.
+        include:
+          - { mongodb: '7.0', node: 22 }
+          - { mongodb: '8.0', node: 24 }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -50,7 +54,7 @@ jobs:
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version-file: .nvmrc
+          node-version: ${{ matrix.node }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm turbo run build --filter=@shardlens/collector...
