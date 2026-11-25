@@ -37,7 +37,7 @@ interface StoreUnderTest {
 export type StoreFactory = () => Promise<StoreUnderTest>;
 
 /** PostgreSQL in a container (16 by default: the oldest supported), migrated. */
-const postgresStore: StoreFactory = async () => {
+export const postgresStore: StoreFactory = async () => {
   const image = process.env.SHARDLENS_TEST_PG_IMAGE ?? 'postgres:16-alpine';
   const container = await new PostgreSqlContainer(image).start();
   const url = container.getConnectionUri();
