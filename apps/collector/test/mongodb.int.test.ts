@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { BUCKETS, bucketOf, periodLabel, uuidv7 } from '@shardlens/core';
 import { Event } from '@shardlens/schema';
-import { Binary, MongoClient, MongoServerError, UUID } from 'mongodb';
+import { Binary, BSON, MongoClient, MongoServerError, UUID } from 'mongodb';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { GUILD_EVENT } from '../src/ingest/codes.js';
 import { runSalts } from '../src/jobs/scheduler.js';
@@ -97,9 +97,10 @@ describe('MongoStore', () => {
       expect(await nextId(m.c, 'test_b')).toBe('1');
     });
 
-    it('calls only a document too large for MongoDB refused input', () => {
+    it('calls only a document too large for MongoDB, or one BSON cannot encode, refused input', () => {
       const error = (code: number) => new MongoServerError({ message: 'refused', code });
       expect(store.refusedInput(error(10334))).toBe('10334');
+      expect(store.refusedInput(new BSON.BSONError('key a\u0000b must not contain null bytes'))).toBe('BSONError');
       expect(store.refusedInput(error(11000))).toBeUndefined();
       expect(store.refusedInput(error(2))).toBeUndefined();
       expect(store.refusedInput(new Error('connection reset'))).toBeUndefined();
@@ -135,29 +136,25 @@ describe('MongoStore', () => {
       expect(await m.c.uniques.countDocuments({ '_id.scope': 'install', '_id.scopeKey': 'guild' })).toBe(global);
     });
 
-    it('stores the rest of a batch, event by event, when MongoDB refuses one of its documents', async () => {
-      const insertMany = m.c.interactions.insertMany.bind(m.c.interactions);
-      m.c.interactions.insertMany = (async (...args: Parameters<typeof insertMany>) => {
-        if (args[0].some((d) => d.command === 'edge_refused')) {
-          throw new MongoServerError({ message: 'object to insert too large', code: 10334 });
-        }
-        return insertMany(...args);
-      }) as typeof insertMany;
-      try {
-        const events = [
-          interaction(user(1), { command: 'edge_kept' }),
-          interaction(user(1), { command: 'edge_refused' }),
-        ];
-        const items = events.map((e, index) => ({ index, event: Event.parse(e) }));
-        const error = await store.ingest.write(context(), items).catch((e: unknown) => e);
-        expect(store.refusedInput(error)).toBe('10334');
-        const res = await store.ingest.writeEach(context(), items);
-        expect(res).toMatchObject({ accepted: 1, rejected: [{ index: 1, reason: 'refused_by_database' }] });
-        expect(res.stored).toEqual(new Set([events[0]!.id]));
-      } finally {
-        m.c.interactions.insertMany = insertMany;
-      }
+    it('stores the rest of a batch, event by event, when one of its events has a key BSON cannot hold', async () => {
+      const events = [
+        interaction(user(1), { command: 'edge_kept' }),
+        interaction(user(1), { command: 'edge_refused', optionValues: { 'nul\u0000name': 'x' } }),
+        { id: uuidv7(), ts: Date.now(), type: 'custom', name: 'edge_refused', props: { 'nul\u0000prop': 1 } },
+      ];
+      const items = events.map((e, index) => ({ index, event: Event.parse(e) }));
+      const error = await store.ingest.write(context(), items).catch((e: unknown) => e);
+      expect(store.refusedInput(error)).toBe('BSONError');
+      const res = await store.ingest.writeEach(context(), items);
+      expect(res).toMatchObject({
+        accepted: 1,
+        rejected: [
+          { index: 1, reason: 'refused_by_database' },
+          { index: 2, reason: 'refused_by_database' },
+        ],
+      });
       expect((await m.c.interactions.find().toArray()).map((d) => d.command)).toEqual(['edge_kept']);
+      expect(await m.c.customEvents.countDocuments()).toBe(0);
     });
 
     it('hands the analytics store only the events stored now', async () => {

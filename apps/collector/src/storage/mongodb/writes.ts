@@ -1,4 +1,5 @@
 import {
+  BSON,
   type Collection,
   type Document,
   MongoBulkWriteError,
@@ -8,10 +9,7 @@ import {
 
 const DUPLICATE_KEY = 11000;
 
-/**
- * Server codes for input MongoDB refuses whatever the retry: a document over 16 MB, written whole or grown by an
- * update. MongoDB holds any number, string or key a validated batch can carry, so nothing else is refused input.
- */
+/** Server codes for input MongoDB refuses whatever the retry: a document over 16 MB, written whole or grown by an update. */
 const REFUSED = new Set([10334, 17419]);
 
 function codesOf(error: MongoServerError): number[] {
@@ -20,8 +18,13 @@ function codesOf(error: MongoServerError): number[] {
   return codes;
 }
 
-/** `Store.refusedInput` for MongoDB: the server's code, as a string, when it refused the input itself. */
+/**
+ * `Store.refusedInput` for MongoDB: the server's code, as a string, when it refused the input itself, or `BSONError`
+ * when the driver could not encode it. MongoDB holds any number or string a validated batch can carry, but a key is a C
+ * string: one with a NUL byte (a custom prop, an option name) fails before anything is sent.
+ */
 export function refusedInput(error: unknown): string | undefined {
+  if (BSON.BSONError.isBSONError(error)) return 'BSONError';
   if (!(error instanceof MongoServerError)) return undefined;
   const code = codesOf(error).find((c) => REFUSED.has(c));
   return code === undefined ? undefined : String(code);
