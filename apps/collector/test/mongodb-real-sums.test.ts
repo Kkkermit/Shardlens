@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { realRatio, realSum } from '../src/storage/mongodb/query/real-sums.js';
+import { countWhenRan, realRatio, realSum, realSumOf, summed } from '../src/storage/mongodb/query/real-sums.js';
 
 /** PostgreSQL's `sum()` of a `real` column, a row at a time. */
 function rowByRow(rows: { w: number; n: number }[]): number | null {
@@ -53,5 +53,31 @@ describe('sums of weights, as PostgreSQL adds a real column', () => {
     expect(realRatio(1, 0)).toBeNull();
     expect(realRatio(1, null)).toBeNull();
     expect(realRatio(null, 2)).toBeNull();
+  });
+
+  it('adds up the rows counted under a figure, 0 or null as PostgreSQL tells no match from no rows', () => {
+    const groups = [
+      { _id: 1, runs: 3, failed: 0 },
+      { _id: 2.5, runs: 2, failed: 0 },
+    ];
+    expect(realSumOf(groups, 'runs')).toBe(8);
+    expect(realSumOf(groups, 'failed')).toBeNull();
+    expect(countWhenRan(groups, 'failed')).toBe(0);
+    expect(countWhenRan<'failed'>([], 'failed')).toBeNull();
+  });
+
+  it('orders keys by their real sums, keeping the order they came in for equal ones', () => {
+    const third = Math.fround(1 / 0.3);
+    expect(
+      summed([
+        { _id: 'b', weights: [{ w: 1, n: 2 }] },
+        { _id: 'c', weights: [{ w: third, n: 7 }] },
+        { _id: 'a', weights: [{ w: 2, n: 1 }] },
+      ]),
+    ).toEqual([
+      { key: 'c', value: rowByRow([{ w: third, n: 7 }]) },
+      { key: 'b', value: 2 },
+      { key: 'a', value: 2 },
+    ]);
   });
 });
