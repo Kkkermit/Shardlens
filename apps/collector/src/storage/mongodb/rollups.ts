@@ -105,7 +105,7 @@ function fold(rows: readonly SourceRow[]): RollupDoc[] {
     { r: SourceRow; count: number; sum: number; min: number | null; max: number | null; hist: number[] | null }
   >();
   for (const r of rows) {
-    const key = `${r._id.a}\0${r._id.m}\0${r._id.t.getTime()}\0${dimsKey(r._id.d)}`;
+    const key = keyString({ appId: r._id.a, metric: r._id.m, dimsKey: dimsKey(r._id.d), bucket: r._id.t.getTime() });
     let g = groups.get(key);
     if (!g) {
       g = { r, count: 0, sum: 0, min: null, max: null, hist: null };
@@ -304,6 +304,7 @@ async function recompute(
   }
 }
 
+/** `JobStorage.backfillRollups`: {@link recompute} for every app. */
 export async function backfillRollups(m: Mongo, from: Date, to: Date, now = new Date()): Promise<void> {
   await recompute(m, from.getTime(), to.getTime(), now, await appRetention(m, now), []);
 }

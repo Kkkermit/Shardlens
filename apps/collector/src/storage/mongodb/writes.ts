@@ -1,16 +1,16 @@
 import {
+  BSON,
   type Collection,
   type Document,
   MongoBulkWriteError,
   MongoServerError,
   type OptionalUnlessRequiredId,
 } from 'mongodb';
-
-const DUPLICATE_KEY = 11000;
+import { isDuplicateKey } from './duplicate-key.js';
 
 /**
  * Server codes for input MongoDB refuses whatever the retry: a document over 16 MB, written whole or grown by an
- * update. MongoDB holds any number, string or key a validated batch can carry, so nothing else is refused input.
+ * update.
  */
 const REFUSED = new Set([10334, 17419]);
 
@@ -20,28 +20,26 @@ function codesOf(error: MongoServerError): number[] {
   return codes;
 }
 
-/** `Store.refusedInput` for MongoDB: the server's code, as a string, when it refused the input itself. */
+/**
+ * `Store.refusedInput` for MongoDB: the server's code, as a string, when it refused the input itself, or `BSONError`
+ * when the driver could not encode it. MongoDB holds any number or string a validated batch can carry, but a key is a C
+ * string: one with a NUL byte (a custom prop, an option name) fails before anything is sent.
+ */
 export function refusedInput(error: unknown): string | undefined {
+  if (BSON.BSONError.isBSONError(error)) return 'BSONError';
   if (!(error instanceof MongoServerError)) return undefined;
   const code = codesOf(error).find((c) => REFUSED.has(c));
   return code === undefined ? undefined : String(code);
 }
 
-/** A write that failed only because a document with its `_id` (or unique key) is there already. */
-export function isDuplicateKey(error: unknown): boolean {
-  if (!(error instanceof MongoServerError)) return false;
-  const codes = codesOf(error);
-  return codes.length > 0 && codes.every((c) => c === DUPLICATE_KEY);
-}
-
 /**
- * Leaves out the fields that are `null` or `undefined` (a NULL column is a missing field, `collections.ts`). Shallow:
- * values inside props and option values are kept as they came.
+ * A copy without the fields that are `null` or `undefined` (a NULL column is a missing field, `collections.ts`).
+ * Shallow: values inside props and option values are kept as they came.
  */
 export function compact<T extends object>(doc: { [K in keyof T]: T[K] | null | undefined }): T {
-  const fields = doc as Record<string, unknown>;
-  for (const key of Object.keys(fields)) if (fields[key] == null) delete fields[key];
-  return doc as T;
+  const out: Record<string, unknown> = {};
+  for (const key in doc) if (doc[key] != null) out[key] = doc[key];
+  return out as T;
 }
 
 /**

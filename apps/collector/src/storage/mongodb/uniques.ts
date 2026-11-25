@@ -1,8 +1,8 @@
-import { type AnyBulkWriteOperation, type Binary, type Document, MaxKey, MinKey, MongoBulkWriteError } from 'mongodb';
+import { type AnyBulkWriteOperation, type Binary, type Document, MaxKey, MinKey } from 'mongodb';
 import { periodBounds } from '../periods.js';
 import type { UniqueCountDoc, UniqueDoc } from './collections.js';
 import type { Mongo } from './connect.js';
-import { isDuplicateKey } from './writes.js';
+import { isDuplicateKey } from './duplicate-key.js';
 
 const DAY = 86_400_000;
 
@@ -38,10 +38,30 @@ const countId = (
 const isoDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
 /**
+ * Writes a count unless it is final: the filter then matches nothing, and the insert the upsert falls back to is
+ * refused as a duplicate. Only day counts carry new users.
+ */
+function countWrite(
+  id: UniqueCountDoc['_id'],
+  final: boolean,
+  users: number,
+  newUsers?: number,
+): AnyBulkWriteOperation<UniqueCountDoc> {
+  return {
+    updateOne: {
+      filter: { _id: id, final: { $ne: true } },
+      update:
+        newUsers === undefined
+          ? { $set: { users, final }, $setOnInsert: { newUsers: 0 } }
+          : { $set: { users, newUsers, final } },
+      upsert: true,
+    },
+  };
+}
+
+/**
  * Unique-user counts for every salt whose secret is still there (or one app, or one period): per day with new users
- * (first day seen in the period), per ISO week wholly inside the period, and for the whole period. A count marked
- * final is never written again: the write's filter then matches nothing, and the insert it falls back to is refused as
- * a duplicate, which is ignored.
+ * (first day seen in the period), per ISO week wholly inside the period, and for the whole period.
  *
  * A week that spans two periods gets no count: the same person has a different hash in each, so the users of the two
  * parts can't be told apart.
@@ -112,31 +132,20 @@ export async function runUniques(m: Mongo, appId?: string, onlyPeriod?: string, 
         ])
         .toArray(),
     ]);
-    const write = (
-      id: UniqueCountDoc['_id'],
-      users: number,
-      newUsers?: number,
-    ): AnyBulkWriteOperation<UniqueCountDoc> => ({
-      updateOne: {
-        filter: { _id: id, final: { $ne: true } },
-        update:
-          newUsers === undefined
-            ? { $set: { users, final }, $setOnInsert: { newUsers: 0 } }
-            : { $set: { users, newUsers, final } },
-        upsert: true,
-      },
-    });
     const start = isoDay(bounds.start);
     const ops = [
-      ...days.map((r) => write(countId(salt.appId, 'day', r._id.d, r._id.s, r._id.k), r.users, r.newUsers)),
-      ...weeks.map((r) => write(countId(salt.appId, 'week', isoDay(r._id.w.getTime()), 'global', r._id.k), r.users)),
-      ...whole.map((r) => write(countId(salt.appId, 'month', start, r._id.s, r._id.k), r.users)),
+      ...days.map((r) => countWrite(countId(salt.appId, 'day', r._id.d, r._id.s, r._id.k), final, r.users, r.newUsers)),
+      ...weeks.map((r) =>
+        countWrite(countId(salt.appId, 'week', isoDay(r._id.w.getTime()), 'global', r._id.k), final, r.users),
+      ),
+      ...whole.map((r) => countWrite(countId(salt.appId, 'month', start, r._id.s, r._id.k), final, r.users)),
     ];
     if (ops.length === 0) continue;
     try {
       await c.uniqueCounts.bulkWrite(ops, { ordered: false });
     } catch (error) {
-      if (!(error instanceof MongoBulkWriteError) || !isDuplicateKey(error)) throw error;
+      // Final counts refusing their rewrite.
+      if (!isDuplicateKey(error)) throw error;
     }
   }
 }
