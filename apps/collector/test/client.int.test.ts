@@ -653,13 +653,8 @@ async function seed() {
   expect(delivered.statusCode).toBe(204);
 
   // What Settings would hold: a required permission the bot lacks in these servers, and a price for the SKU.
-  await h.db.query('INSERT INTO settings (app_id, key, value) VALUES ($1, $2, $3), ($1, $4, $5)', [
-    APP_ID,
-    'required_permissions',
-    JSON.stringify('8192'),
-    'sku_prices',
-    JSON.stringify({ [SKU]: { amount: 4.99, currency: 'USD' } }),
-  ]);
+  await h.store.settings.set(APP_ID, 'required_permissions', '8192');
+  await h.store.settings.set(APP_ID, 'sku_prices', { [SKU]: { amount: 4.99, currency: 'USD' } });
 
   await h.store.jobs.backfillRollups(new Date(t0 - HOUR), new Date(now + MINUTE));
   await h.store.jobs.runUniques();
