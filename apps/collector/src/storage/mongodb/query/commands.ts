@@ -315,8 +315,12 @@ async function command(m: Mongo, appId: string, spec: Spec<'command'>, now: Date
   if (!f) throw new Error('MongoStore: a $facet answered nothing');
 
   const t = f.totals[0];
-  const latency = f.ack.length > 0 ? new Array<number>(BUCKETS).fill(0) : null;
-  for (const row of f.ack) latency![bucketOf(row._id)]! += row.w;
+  // `shardlens_hist_sum(shardlens_hist_one(ack_ms, weight))`: `NULL` when no run has a response time.
+  let latency: number[] | null = null;
+  for (const row of f.ack) {
+    latency ??= new Array<number>(BUCKETS).fill(0);
+    latency[bucketOf(row._id)]! += row.w;
+  }
   const values = <K, V>(rows: Split<K>[], key: (k: K) => V) =>
     rows.map((r) => ({ key: key(r._id), value: real(r.value) }));
   const coded = (field: string) => (k: number | null) => (k === null ? null : decodeValue(field, String(k)));

@@ -1,5 +1,5 @@
 import type { Document } from 'mongodb';
-import type { Spec } from '../../../query/spec.js';
+import type { Filter, Spec } from '../../../query/spec.js';
 import type { HeatmapCell, QueryStorage, SeriesRow, TopRow } from '../../store.js';
 import type { Mongo } from '../connect.js';
 import { byteOrder } from './pg-values.js';
@@ -14,7 +14,7 @@ import { clockText, truncWall, wallClock } from './zoned-buckets.js';
 
 const DAY = 86_400_000;
 
-function matchRollups(appId: string, metric: string, from: Date, to: Date, filters: Spec<'series'>['filters']) {
+function matchRollups(appId: string, metric: string, from: Date, to: Date, filters: readonly Filter[]) {
   return { $match: { appId, metric, bucket: { $gte: from, $lt: to }, ...dimFilters(filters) } };
 }
 

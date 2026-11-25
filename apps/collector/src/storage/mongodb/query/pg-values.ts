@@ -22,26 +22,47 @@ export function realShare(part: number, whole: number): number | null {
   return of === 0 ? null : Math.fround(Math.fround(part) / of);
 }
 
+/** A positive double's exact value as `digits` × 10^−`scale`. */
+function exactDecimal(x: number): { digits: bigint; scale: number } {
+  const view = new DataView(new ArrayBuffer(8));
+  view.setFloat64(0, x);
+  const bits = view.getBigUint64(0);
+  const biased = Number((bits >> 52n) & 0x7ffn);
+  const fraction = bits & 0xf_ffff_ffff_ffffn;
+  const mantissa = biased === 0 ? fraction : fraction | (1n << 52n);
+  const exponent = (biased === 0 ? 1 : biased) - 1075;
+  // m × 2^−k is m × 5^k × 10^−k.
+  return exponent >= 0
+    ? { digits: mantissa << BigInt(exponent), scale: 0 }
+    : { digits: mantissa * 5n ** BigInt(-exponent), scale: -exponent };
+}
+
 /**
- * `round(x::numeric, 1)::float8`: a double becomes a numeric with 15 significant digits (`%.15g`), which `round`
- * rounds half away from zero.
+ * `round(x::numeric, 1)::float8`. A double becomes a numeric with 15 significant digits, as C's `%.15g` prints it
+ * (exactly, ties to even: JavaScript's `toPrecision` rounds ties up, and large doubles often sit on a tie); `round`
+ * then rounds half away from zero, and the numeric's text reads back as the nearest double.
  */
 export function roundTenths(x: number): number {
   if (x === 0 || !Number.isFinite(x)) return x === 0 ? 0 : x;
-  const [mantissa = '0', exponent = '0'] = Math.abs(x).toExponential(14).split('e');
-  const digits = BigInt(mantissa.replace('.', ''));
-  // `digits` × 10^(e − 14) is the numeric; its tenths are `digits` × 10^(e − 13).
-  const drop = 13 - Number(exponent);
-  let tenths: bigint;
-  if (drop <= 0) tenths = digits * 10n ** BigInt(-drop);
-  else if (drop > 15) tenths = 0n;
-  else {
-    tenths = digits / 10n ** BigInt(drop);
-    if ((digits / 10n ** BigInt(drop - 1)) % 10n >= 5n) tenths += 1n;
+  let { digits, scale } = exactDecimal(Math.abs(x));
+  const drop = digits.toString().length - 15;
+  if (drop > 0) {
+    const unit = 10n ** BigInt(drop);
+    const rest = digits % unit;
+    digits /= unit;
+    const half = unit / 2n;
+    if (rest > half || (rest === half && digits % 2n === 1n)) digits += 1n;
+    scale -= drop;
   }
-  if (tenths === 0n) return 0;
-  const value = Number(tenths) / 10;
-  return x < 0 ? -value : value;
+  if (scale > 1) {
+    const unit = 10n ** BigInt(scale - 1);
+    const rest = digits % unit;
+    digits /= unit;
+    if (rest * 2n >= unit) digits += 1n;
+    scale = 1;
+  }
+  if (digits === 0n) return 0;
+  return Number(`${x < 0 ? '-' : ''}${digits}e${-scale}`);
 }
 
 /** `percentile_cont` between two neighbouring values: PostgreSQL interpolates as `lo + fraction × (hi − lo)`. */

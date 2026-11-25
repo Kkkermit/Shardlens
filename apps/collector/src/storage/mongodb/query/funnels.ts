@@ -191,14 +191,14 @@ async function funnel(m: Mongo, appId: string, spec: Spec<'funnel'>): Promise<Qu
     windowHours: spec.windowHours,
     timezone: spec.timezone,
     steps: spec.steps.map((step, i) => {
-      const m = total?.[`m${i + 1}`] as Median | undefined;
+      const middle = total?.[`m${i + 1}`] as Median | undefined;
       return {
         // The bare name: a command may be a prefix command, which the dashboard writes without a slash.
         label: step.name,
         type: step.type,
         name: step.name,
         users: Number(total?.[`s${i + 1}`] ?? 0),
-        medianSeconds: i === 0 || !m ? null : interpolate(m.lo, m.hi, m.share),
+        medianSeconds: i === 0 || !middle ? null : interpolate(middle.lo, middle.hi, middle.share),
       };
     }),
     cohorts: (result?.days ?? []).map((r) => ({

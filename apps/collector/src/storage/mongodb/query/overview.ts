@@ -6,7 +6,7 @@ import { periodStartOf } from './salt-period-start.js';
 
 const DAY = 86_400_000;
 
-/** The home page, as `postgres/query/pages.ts` answers it: one read per section, all at once once the app is read. */
+/** The home page, as `postgres/query/pages.ts` answers it: one read per section, in parallel after the app's own. */
 async function overview(m: Mongo, appId: string, now: Date): Promise<QueryAnswer<'overview'>> {
   const { c } = m;
   const app = await c.apps.findOne({ _id: appId });

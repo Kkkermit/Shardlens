@@ -2,6 +2,7 @@ import { UserHasher, uuidv7 } from '@shardlens/core';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { guildProfiles } from '../src/storage/mongodb/query/guild-profiles.js';
+import { jsonText, realShare, roundTenths } from '../src/storage/mongodb/query/pg-values.js';
 import { periodBounds, periodLabel } from '../src/storage/periods.js';
 import { ensureSalt } from '../src/storage/salts.js';
 import type { Store } from '../src/storage/store.js';
@@ -668,6 +669,60 @@ const METRICS: Record<string, { dims: string[]; filter?: Row; latency?: boolean 
   'guild.joins': { dims: ['detected'], filter: { field: 'detected', value: 'true' } },
   'guild.unavailable': { dims: ['detected'] },
 };
+
+describe("PostgreSQL's arithmetic, as MongoDB answers reproduce it", () => {
+  const r = random(0xa11);
+  const doubles = [
+    ...Array.from({ length: 2_000 }, () => (r.next() - 0.5) * 10 ** Math.floor(r.next() * 24 - 8)),
+    ...Array.from({ length: 500 }, () => Math.round((r.next() - 0.5) * 2e4) / 100 + 0.05),
+    0.05,
+    -0.05,
+    0.15,
+    2.25,
+    -2.25,
+    1e15 + 0.5,
+    123456789012.35,
+    1e-300,
+    1e300,
+  ];
+
+  it('rounds a double to tenths as `round(x::numeric, 1)::float8` does', async () => {
+    const res = await pg.db.query<{ v: number }>(
+      'SELECT round(x::numeric, 1)::float8 AS v FROM unnest($1::float8[]) WITH ORDINALITY t(x, i) ORDER BY i',
+      [doubles],
+    );
+    expect(doubles.map(roundTenths)).toEqual(res.rows.map((row) => row.v));
+  });
+
+  it('divides real sums as a `real` division does', async () => {
+    const pairs = Array.from({ length: 2_000 }, () => [
+      Math.fround(Math.floor(r.next() * 1e4) * r.pick([1, 0.5, 0.25])),
+      Math.fround(1 + Math.floor(r.next() * 1e5) * r.pick([1, 0.5])),
+    ]);
+    const res = await pg.db.query<{ v: number }>(
+      `SELECT (a::real / nullif(b::real, 0))::float8 AS v
+         FROM unnest($1::float8[], $2::float8[]) WITH ORDINALITY t(a, b, i) ORDER BY i`,
+      [pairs.map((p) => p[0]), pairs.map((p) => p[1])],
+    );
+    expect(pairs.map(([a, b]) => realShare(a ?? 0, b ?? 0))).toEqual(res.rows.map((row) => row.v));
+  });
+
+  it("prints JSON values as `jsonb`'s `->>` does", async () => {
+    const values: unknown[] = [...doubles, 0, -0, 1e21, 1e-7, 2 ** 53, 'text', '$x', true, false, null, 7, -12];
+    const res = await pg.db.query<{ v: string | null }>(
+      "SELECT j->>'v' AS v FROM unnest($1::jsonb[]) WITH ORDINALITY t(j, i) ORDER BY i",
+      [values.map((v) => JSON.stringify({ v }))],
+    );
+    const got = await mongo.mongo.db
+      .aggregate<{ v: string | null }>([
+        // Read back from JSON as ingest reads it (`-0` arrives as 0), and literal: `$x` is no field here.
+        { $documents: { $literal: values.map((v) => JSON.parse(JSON.stringify({ v }))) } },
+        { $project: { _id: 0, v: jsonText('$v') } },
+      ])
+      .toArray();
+    expect(got.map((row) => row.v)).toEqual(res.rows.map((row) => row.v));
+  });
+});
 
 describe('charts on MongoDB answer as on PostgreSQL', () => {
   it('series, by every dimension, interval, time zone and stat', async () => {
