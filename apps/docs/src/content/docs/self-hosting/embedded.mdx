@@ -29,7 +29,7 @@ Open `http://127.0.0.1:8080` and sign in with the read key from `secrets.json`, 
 
 Three things to know before you paste it:
 
-- **Node.js 24.11 or newer.** That is the collector's requirement; the SDK on its own runs on 22.12.
+- **Node.js 22.12 or newer**, as for the SDK.
 - **It uses top-level `await`**, which needs an ES module (`"type": "module"`, or a `.mjs` file). In CommonJS, put the
   same lines inside the `async` function that starts your bot, and keep `lens` on the client (`client.lens = lens`) so
   listeners registered earlier can reach it.

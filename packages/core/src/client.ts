@@ -62,6 +62,11 @@ export interface ClientOptions {
   /** Called for the current shard/cluster information each time a batch is built. */
   source?: () => SourceInfo;
   logger?: Logger;
+  /**
+   * What warnings call the collector, as in "can't reach …". Default `the collector at <endpoint's origin>`. For a
+   * `fetch` that answers somewhere else, such as a collector in the same process on the bot's own database.
+   */
+  collectorName?: string;
   /** Override for tests and unusual runtimes. */
   fetch?: typeof fetch;
   /** Randomness in [0, 1), for jitter and sampling. Injectable for tests. */
@@ -732,20 +737,18 @@ export class ShardlensClient<E extends WireEvent = WireEvent> {
     if (this.#warned.has('unreachable') || Date.now() - this.#outageWarnedAt < OUTAGE_WARN_INTERVAL_MS) return;
     this.#outageWarnedAt = Date.now();
     const why = (reason instanceof Error ? reason.message : String(reason)).slice(0, 120);
-    this.#warn(
-      'unreachable',
-      `Shardlens: can't reach the collector at ${this.#collector} (${why}). Retrying; events wait in memory.`,
-    );
+    this.#warn('unreachable', `Shardlens: can't reach ${this.#collector} (${why}). Retrying; events wait in memory.`);
   }
 
   #collectorUp(): void {
     if (!this.#warned.delete('unreachable')) return;
-    this.#log('info', `Shardlens: connected to the collector at ${this.#collector}.`);
+    this.#log('info', `Shardlens: connected to ${this.#collector}.`);
   }
 
   get #collector(): string {
+    if (typeof this.#opts.collectorName === 'string' && this.#opts.collectorName) return this.#opts.collectorName;
     try {
-      return new URL(this.#opts.endpoint ?? '').origin;
+      return `the collector at ${new URL(this.#opts.endpoint ?? '').origin}`;
     } catch {
       return 'the configured endpoint';
     }

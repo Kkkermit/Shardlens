@@ -75,8 +75,13 @@ export class MongoDBCollector {
     let module: CollectorModule;
     try {
       module = await this.#load();
-    } catch {
-      throw new Error('the mongodb option needs the collector: npm install @shardlens/collector');
+    } catch (error) {
+      // Not installed, as opposed to installed and failing to load (which says why).
+      const code = (error as { code?: unknown } | null)?.code;
+      if (code === 'ERR_MODULE_NOT_FOUND' || code === 'MODULE_NOT_FOUND') {
+        throw new Error('the mongodb option needs the collector: npm install @shardlens/collector');
+      }
+      throw new Error(`@shardlens/collector did not load: ${error instanceof Error ? error.message : String(error)}`);
     }
     const collector = await module.startMongoCollector({
       ...this.#settings,

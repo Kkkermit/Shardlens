@@ -26,8 +26,7 @@ later.
 <Code code={mongodb} lang="ts" title="bot.ts" mark={7} />
 
 When the bot has logged in, Shardlens connects to your database, creates its collections and their indexes on the
-first start, and from then on stores events as they arrive. The collector needs Node.js 24.11 or later (the SDK on its
-own runs on 22.12).
+first start, and from then on stores events as they arrive. It needs Node.js 22.12 or later, as the SDK does.
 
 Nothing about your bot's own data changes. Shardlens's collections all start with `shardlens_`, in the database the
 connection string names (`mongodb+srv://…/mybot` uses `mybot`), or in a database called `shardlens` when it names

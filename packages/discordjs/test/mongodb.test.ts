@@ -96,17 +96,35 @@ describe('the mongodb option', () => {
   it('says to install the collector when it is missing', async () => {
     const client = botClient();
     client.application = { id: APP_ID };
+    const missing = Object.assign(new Error("Cannot find package '@shardlens/collector'"), {
+      code: 'ERR_MODULE_NOT_FOUND',
+    });
     const collector = new MongoDBCollector(
       asClient(client),
       settings,
       undefined,
       () => undefined,
-      () => Promise.reject(new Error('Cannot find package')),
+      () => Promise.reject(missing),
     );
     await expect(collector.fetch('http://localhost/v1/config')).rejects.toThrow('npm install @shardlens/collector');
   });
 
-  it('warns instead of starting when the connection string is missing or not MongoDB', () => {
+  it('says why an installed collector failed to load, rather than to install it', async () => {
+    const client = botClient();
+    client.application = { id: APP_ID };
+    const collector = new MongoDBCollector(
+      asClient(client),
+      settings,
+      undefined,
+      () => undefined,
+      () => Promise.reject(new SyntaxError('Unexpected token')),
+    );
+    await expect(collector.fetch('http://localhost/v1/config')).rejects.toThrow(
+      '@shardlens/collector did not load: Unexpected token',
+    );
+  });
+
+  it('warns once, and only about the connection string, when it is missing or not MongoDB', () => {
     for (const mongodb of [undefined, '', 'postgres://localhost/db', { uri: 42 }]) {
       const warn = vi.fn();
       const lens = createShardlens(new Client({ intents: [GatewayIntentBits.Guilds] }), {
@@ -114,6 +132,7 @@ describe('the mongodb option', () => {
         logger: { warn },
       } as never);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('mongodb must be a mongodb://'));
+      expect(warn).toHaveBeenCalledOnce();
       void lens.shutdown({ timeoutMs: 0 });
     }
   });

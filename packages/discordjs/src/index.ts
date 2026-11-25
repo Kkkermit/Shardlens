@@ -12,6 +12,7 @@ import {
   compact,
   errorClass,
   errorCode,
+  type Logger,
   ShardlensClient,
   sanitiseCustomProps,
   uuidv7,
@@ -170,6 +171,17 @@ export function createShardlens(client: Client, options: ShardlensOptions): Shar
   return attach(client, typeof options === 'object' && options !== null ? options : {});
 }
 
+/** A logger that leaves out core's "nothing configured" warning: the `mongodb` option has already said why. */
+function withoutUnconfigured(logger: Logger): Logger {
+  return {
+    warn: (message) => {
+      if (!message.startsWith('Shardlens: no endpoint, apiKey or exporters')) logger.warn(message);
+    },
+    ...(logger.info ? { info: (message: string) => logger.info?.(message) } : {}),
+    ...(logger.debug ? { debug: (message: string) => logger.debug?.(message) } : {}),
+  };
+}
+
 /** The `mongodb` option, checked: `undefined` when it isn't set or can't be used (with a warning saying why). */
 function mongoDBSettings(
   options: ShardlensOptions,
@@ -181,7 +193,7 @@ function mongoDBSettings(
   if (typeof settings?.uri !== 'string' || !/^mongodb(?:\+srv)?:\/\//i.test(settings.uri.trim())) {
     warn(
       'mongodb',
-      'Shardlens: mongodb must be a mongodb:// or mongodb+srv:// connection string (is MONGODB_URI set?); nothing is recorded.',
+      'Shardlens: mongodb must be a mongodb:// or mongodb+srv:// connection string (is the setting it comes from set?); nothing is recorded.',
     );
     return undefined;
   }
@@ -258,7 +270,12 @@ function attach(client: Client, options: ShardlensOptions): Shardlens {
     ...(options.maxQueueSize !== undefined ? { maxQueueSize: options.maxQueueSize } : {}),
     ...(options.sampleRate !== undefined ? { sampleRate: options.sampleRate } : {}),
     ...(options.dryRun !== undefined ? { dryRun: options.dryRun } : {}),
-    ...(options.logger !== undefined ? { logger: options.logger } : {}),
+    ...(collector ? { collectorName: 'MongoDB' } : {}),
+    ...('mongodb' in options && !collector
+      ? { logger: withoutUnconfigured(options.logger ?? console) }
+      : options.logger !== undefined
+        ? { logger: options.logger }
+        : {}),
     ...(collector ? { fetch: collector.fetch } : options.fetch !== undefined ? { fetch: options.fetch } : {}),
   });
 

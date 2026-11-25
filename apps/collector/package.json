@@ -20,7 +20,7 @@
     "self-hosted"
   ],
   "engines": {
-    "node": ">=24.11"
+    "node": ">=22.12"
   },
   "exports": {
     "./embedded": {

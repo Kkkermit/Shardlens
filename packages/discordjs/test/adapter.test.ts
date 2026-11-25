@@ -434,6 +434,50 @@ describe('interactions', () => {
     expect(collector.events('interaction')[0]).toMatchObject({ outcome: 'ok' });
   });
 
+  it('keeps the error of a wrapped command inside a wrapped listener that catches it', async () => {
+    const { collector, client, lens } = setup();
+    await settle();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const interaction = slash(client);
+    client.emit(Events.InteractionCreate, interaction);
+    const command = lens.wrap(async (_i: ChatInputCommandInteraction) => {
+      throw new RangeError('inner');
+    });
+    // The listener logs the failure and never replies: the command's error is still the run's outcome.
+    await lens.wrap(async (i: ChatInputCommandInteraction) => {
+      try {
+        await command(i);
+      } catch {
+        // logged by the bot
+      }
+    })(interaction);
+    vi.advanceTimersByTime(10_001);
+    vi.useRealTimers();
+    await settle();
+    await lens.flush();
+    expect(collector.events('interaction')).toMatchObject([{ outcome: 'error', errorClass: 'RangeError' }]);
+  });
+
+  it('times the outermost of nested wrapped handlers, and sends one row when it ends', async () => {
+    const { collector, client, lens } = setup();
+    await settle();
+    const interaction = slash(client);
+    client.emit(Events.InteractionCreate, interaction);
+    const command = lens.wrap(async (i: ChatInputCommandInteraction) => {
+      await i.reply({ content: 'hi' });
+    });
+    await lens.wrap(async (i: ChatInputCommandInteraction) => {
+      await command(i);
+      await new Promise((r) => setTimeout(r, 30));
+    })(interaction);
+    await settle();
+    await lens.flush();
+    const rows = collector.events('interaction');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ outcome: 'ok' });
+    expect(rows[0]?.handlerMs).toBeGreaterThanOrEqual(25);
+  });
+
   it('sends interactions with no response after 10 seconds as no_response', async () => {
     const { collector, client, lens } = setup();
     await settle();

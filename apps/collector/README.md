@@ -18,7 +18,7 @@ createShardlens(client, { mongodb: process.env.MONGODB_URI });
 
 `npx shardlens dashboard` in the bot's folder opens the dashboard. To run it yourself, `startMongoCollector` from
 `@shardlens/collector/mongodb` does what the SDK does: [On your MongoDB](https://kkkermit.github.io/Shardlens/self-hosting/mongodb/).
-It needs Node.js 24.11 or newer and MongoDB 7.0 or newer.
+It needs Node.js 22.12 or newer, as the SDK does, and MongoDB 7.0 or newer (the server: Atlas runs 8.0).
 
 ## Run it with Docker
 
@@ -42,8 +42,7 @@ number into a dashboard of your own:
 ## Embedded mode
 
 This package also runs the whole collector inside a small bot's own process, on an in-process PostgreSQL
-([PGlite](https://pglite.dev/)) stored in one folder. No Docker and no database server. It needs Node.js 24.11 or
-newer.
+([PGlite](https://pglite.dev/)) stored in one folder. No Docker and no database server.
 
 ```sh
 npm install @shardlens/collector @electric-sql/pglite @shardlens/discordjs

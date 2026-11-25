@@ -11,10 +11,10 @@ import { Aside, TabItem, Tabs } from '@astrojs/starlight/components';
 
 | What       | Version                                                           |
 | ---------- | ----------------------------------------------------------------- |
-| Node.js    | 22.12 or later (24 LTS recommended; 24.11 for embedded mode)      |
+| Node.js    | 22.12 or later (24 LTS recommended), for the SDK and for the collector inside the bot |
 | discord.js | 14.12 or later, and 15                                            |
 | Intents    | `Guilds` only. No privileged intents.                             |
-| Collector  | Any server with Docker, or Railway or Render. PostgreSQL 16 or 17 |
+| Collector  | Inside the bot, on its MongoDB 7.0 or later (the server; Atlas runs 8.0). Or any server with Docker, Railway or Render, on PostgreSQL 16 or 17 |
 
 The SDK ships ESM and CommonJS builds with type definitions, so it works with `import` and `require`, TypeScript and
 plain JavaScript.

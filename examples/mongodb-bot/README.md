@@ -1,7 +1,7 @@
 # mongodb-bot
 
 A discord.js bot that keeps its Shardlens data in its own MongoDB. Nothing else runs: the collector runs inside the
-bot, on the database in `MONGODB_URI`, in collections prefixed `shardlens_`. It needs Node.js 24.11 or newer and
+bot, on the database in `MONGODB_URI`, in collections prefixed `shardlens_`. It needs Node.js 22.12 or newer and
 MongoDB 7.0 or newer (Atlas's free tier works).
 
 ```sh
