@@ -11,8 +11,9 @@ import OptionsTable from '../../../components/OptionsTable.astro';
 import configuration from '../../../../snippets/configuration.ts?raw';
 import shutdown from '../../../../snippets/shutdown.ts?raw';
 
-`createShardlens(client, options)` attaches Shardlens to a discord.js client. Call it before `client.login()`. Sending
-to a collector needs only `endpoint` and `apiKey`; with [exporters only](../../self-hosting/exporter-only/), leave both
+`createShardlens(client, options)` attaches Shardlens to a discord.js client. Call it before `client.login()`. On your
+bot's MongoDB it needs only `mongodb` ([On your MongoDB](../../self-hosting/mongodb/)); sending to a collector on a
+server needs only `endpoint` and `apiKey`; with [exporters only](../../self-hosting/exporter-only/), leave them all
 out.
 
 <Code code={configuration} lang="ts" title="bot.ts" />
@@ -31,6 +32,13 @@ This table is generated from the SDK's source, so it always matches the version 
 
 Audit mode has to be switched on in the collector as well, and it changes what you have to tell your users. Read the
 [audit mode guide](../../guides/audit-mode/) first.
+
+### Errors your bot throws on purpose
+
+<ConfigOption name="isExpectedError" />
+
+A bot that throws its own error class for a user's mistake (a bad argument it then explains) would otherwise see every
+such run as a failure. Return `true` for that class, and failure rates show bugs only.
 
 ### Option values
 

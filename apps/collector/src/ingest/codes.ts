@@ -14,13 +14,16 @@ export const KIND = {
 } as const;
 
 /** Kinds that are commands rather than components, modals or autocomplete: what the `interactions` metric counts. */
-export const COMMAND_KINDS_SQL = `(${[
+export const COMMAND_KINDS: readonly number[] = [
   KIND.chat_input,
   KIND.user_context,
   KIND.message_context,
   KIND.primary_entry_point,
   KIND.message_command,
-].join(', ')})`;
+];
+
+/** {@link COMMAND_KINDS} as an SQL list. */
+export const COMMAND_KINDS_SQL = `(${COMMAND_KINDS.join(', ')})`;
 
 /**
  * For figures only Discord interactions have (response deadline, defer and ephemeral rates, entitlements): leaves out

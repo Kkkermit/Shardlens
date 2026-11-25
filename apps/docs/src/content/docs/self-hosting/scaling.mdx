@@ -41,6 +41,14 @@ Ingest is stateless, so you can run several collectors behind a load balancer ag
 Set `SHARDLENS_TRUST_PROXY` to the number of proxies in front (`1` for one load balancer), so rate limits see client
 addresses.
 
+## On MongoDB
+
+On [your bot's MongoDB](../mongodb/) the collector runs in every process of the bot, so it scales with the bot: each
+process stores its own events, and only the background jobs run in one process at a time. What limits it is the
+database. Atlas's free tier (512 MB, 100 operations a second) fits a bot with tens of thousands of commands a day;
+past that, move to a paid tier, keep single events for fewer days, or use the collector on PostgreSQL, which can also
+mirror to ClickHouse.
+
 ## PostgreSQL
 
 Raw events are stored in daily partitions and dropped whole when they expire, so deletes are cheap. Charts read from

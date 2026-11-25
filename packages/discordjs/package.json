@@ -61,7 +61,13 @@
     "@shardlens/core": "workspace:^"
   },
   "peerDependencies": {
+    "@shardlens/collector": "workspace:^",
     "discord.js": "^14.12.0 || ^15.0.0-0"
+  },
+  "peerDependenciesMeta": {
+    "@shardlens/collector": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "catalog:",

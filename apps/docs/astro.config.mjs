@@ -53,12 +53,12 @@ export default defineConfig({
         starlightLlmsTxt({
           projectName: 'Shardlens',
           description:
-            'Shardlens is self-hosted, privacy-first analytics and health monitoring for discord.js bots: an SDK inside the bot (`@shardlens/discordjs`) sends events to a collector and dashboard the bot owner runs. User IDs are hashed inside the bot, message content is never collected, and only the `Guilds` intent is needed.',
+            'Shardlens is self-hosted, privacy-first analytics and health monitoring for discord.js bots: an SDK inside the bot (`@shardlens/discordjs`) records events, and a collector stores them and serves the dashboard. On a bot that uses MongoDB, the collector runs inside the bot on that same database (`mongodb: process.env.MONGODB_URI`), with nothing else to run; otherwise it runs on a server, on PostgreSQL. User IDs are hashed inside the bot, message content is never collected, and only the `Guilds` intent is needed.',
           details: [
-            `To add Shardlens to a bot, follow the step-by-step agent prompt at ${docsUrl('/install.md')}. It is self-contained.`,
+            `To add Shardlens to a bot, follow the step-by-step agent prompt at ${docsUrl('/install.md')}. It is self-contained. Each other package has one too, at ${docsUrl('/prompts/<package>.md')}: collector, client, http, exporter-prometheus, exporter-otel and cli.`,
             '',
-            '- Packages: `@shardlens/discordjs` (gateway bots, discord.js 14 and 15), `@shardlens/http` (HTTP-interaction bots), `@shardlens/client` (reads the collector from your own dashboard or scripts), `@shardlens/exporter-prometheus`, `@shardlens/exporter-otel`, `shardlens` (CLI), `@shardlens/collector` (collector and embedded mode).',
-            '- Requirements: Node.js 22.12 or newer for the SDK; Docker and PostgreSQL 16 or 17 for the collector.',
+            '- Packages: `@shardlens/discordjs` (gateway bots, discord.js 14 and 15), `@shardlens/collector` (the collector: in the bot on its MongoDB, in Docker, or embedded), `@shardlens/http` (HTTP-interaction bots), `@shardlens/client` (reads the collector from your own dashboard or scripts), `@shardlens/exporter-prometheus`, `@shardlens/exporter-otel`, `shardlens` (CLI: `dashboard`, `init`, `doctor`, `keys`, `privacy`).',
+            '- Requirements: Node.js 22.12 or newer; on MongoDB, the server 7.0 or newer (Atlas included); otherwise Docker and PostgreSQL 16 or 17 for the collector.',
             '- Never suggest privileged intents, per-user views or sending message content: Shardlens has none by design.',
           ].join('\n'),
           promote: ['getting-started/**', 'guides/**', 'concepts/**'],

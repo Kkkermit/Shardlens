@@ -12,6 +12,7 @@ import {
   compact,
   errorClass,
   errorCode,
+  type Logger,
   ShardlensClient,
   sanitiseCustomProps,
   uuidv7,
@@ -41,7 +42,8 @@ import {
 } from './guilds.js';
 import { InteractionTracker } from './interactions.js';
 import { describeMessageCommand, type MessageCommandInfo, type MessageCommandRun } from './message-commands.js';
-import type { MetricGroup, ShardlensOptions } from './options.js';
+import { MongoDBCollector } from './mongodb.js';
+import type { MetricGroup, MongoDBOptions, ShardlensOptions } from './options.js';
 import { installRestHooks, type RestHooks } from './rest.js';
 import { appInfo, commandRegistry, defaultInstance, detectSource, gaugeWindow, ownsShardZero } from './runtime.js';
 import { FileSpool } from './spool.js';
@@ -51,7 +53,7 @@ import { clampedInt, LruMap, SDK_NAME, SDK_VERSION, SNOWFLAKE } from './util.js'
 // strict layouts `@shardlens/core` can't be resolved from the bot's own code.
 export type { CustomEvents, ShardlensExporter } from '@shardlens/core';
 export type { MessageCommandInfo, MessageCommandRun } from './message-commands.js';
-export type { MetricGroup, ShardlensOptions } from './options.js';
+export type { MetricGroup, MongoDBOptions, ShardlensOptions } from './options.js';
 export { createPrivacyCommand, type PrivacyCommand, type PrivacyCommandOptions } from './privacy-command.js';
 export { normaliseRoute } from './util.js';
 
@@ -169,6 +171,38 @@ export function createShardlens(client: Client, options: ShardlensOptions): Shar
   return attach(client, typeof options === 'object' && options !== null ? options : {});
 }
 
+/** A logger that leaves out core's "nothing configured" warning: the `mongodb` option has already said why. */
+function withoutUnconfigured(logger: Logger): Logger {
+  return {
+    warn: (message) => {
+      if (!message.startsWith('Shardlens: no endpoint, apiKey or exporters')) logger.warn(message);
+    },
+    ...(logger.info ? { info: (message: string) => logger.info?.(message) } : {}),
+    ...(logger.debug ? { debug: (message: string) => logger.debug?.(message) } : {}),
+  };
+}
+
+/** The `mongodb` option, checked: `undefined` when it isn't set or can't be used (with a warning saying why). */
+function mongoDBSettings(
+  options: ShardlensOptions,
+  warn: (key: string, message: string) => void,
+): MongoDBOptions | undefined {
+  if (!('mongodb' in options)) return undefined;
+  const value = options.mongodb;
+  const settings = typeof value === 'string' ? { uri: value } : value;
+  if (typeof settings?.uri !== 'string' || !/^mongodb(?:\+srv)?:\/\//i.test(settings.uri.trim())) {
+    warn(
+      'mongodb',
+      'Shardlens: mongodb must be a mongodb:// or mongodb+srv:// connection string (is the setting it comes from set?); nothing is recorded.',
+    );
+    return undefined;
+  }
+  if (options.endpoint !== undefined || options.apiKey !== undefined) {
+    warn('mongodb', 'Shardlens: mongodb is set, so endpoint and apiKey are ignored. Use one or the other.');
+  }
+  return { ...settings, uri: settings.uri.trim() };
+}
+
 function attach(client: Client, options: ShardlensOptions): Shardlens {
   const warned = new Set<string>();
   const warn = (key: string, message: string) => {
@@ -200,11 +234,16 @@ function attach(client: Client, options: ShardlensOptions): Shardlens {
     warn('spool', "Shardlens: spool must be { dir: './shardlens-spool' }; events are kept in memory only.");
   }
 
+  const inBot = mongoDBSettings(options, warn);
+  const collector = inBot ? new MongoDBCollector(client, inBot, options.mode, options.logger ?? console) : undefined;
+
   // Core counts what it could not spool (`spool_full`) but can't see what the spool later evicts at its size cap.
   let spoolEvicted = 0;
   const transport = new ShardlensClient<EventInput>({
-    endpoint: options.endpoint,
-    apiKey: options.apiKey,
+    // In-bot, requests are answered in this process: the URL and key only pass core's checks, and the collector
+    // signs requests in with its own ingest key.
+    endpoint: collector ? 'http://localhost' : options.endpoint,
+    apiKey: collector ? 'slk_ingest_in_process' : options.apiKey,
     exporters: options.exporters,
     spool:
       typeof spoolDir === 'string'
@@ -223,8 +262,13 @@ function attach(client: Client, options: ShardlensOptions): Shardlens {
     ...(options.maxQueueSize !== undefined ? { maxQueueSize: options.maxQueueSize } : {}),
     ...(options.sampleRate !== undefined ? { sampleRate: options.sampleRate } : {}),
     ...(options.dryRun !== undefined ? { dryRun: options.dryRun } : {}),
-    ...(options.logger !== undefined ? { logger: options.logger } : {}),
-    ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
+    ...(collector ? { collectorName: 'MongoDB' } : {}),
+    ...('mongodb' in options && !collector
+      ? { logger: withoutUnconfigured(options.logger ?? console) }
+      : options.logger !== undefined
+        ? { logger: options.logger }
+        : {}),
+    ...(collector ? { fetch: collector.fetch } : options.fetch !== undefined ? { fetch: options.fetch } : {}),
   });
 
   const count = (name: string, error?: unknown) => transport.count(name, error);
@@ -471,8 +515,21 @@ function attach(client: Client, options: ShardlensOptions): Shardlens {
   every(APP_INFO_INTERVAL_MS, 'appInfo', sendAppInfo);
   every(REGISTRY_INTERVAL_MS, 'commandRegistry', sendRegistry);
 
-  const trackMessageCommand = (message: Message, run: MessageCommandRun): void => {
+  /** Whether the bot said this error is one it throws on purpose (`isExpectedError`), which isn't a failure. */
+  const expectedError = (error: unknown): boolean => {
+    if (typeof options.isExpectedError !== 'function') return false;
     try {
+      return options.isExpectedError(error) === true;
+    } catch (failure) {
+      count('isExpectedError', failure);
+      return false;
+    }
+  };
+
+  const trackMessageCommand = (message: Message, given: MessageCommandRun): void => {
+    try {
+      const { error, ...rest } = given;
+      const run: MessageCommandRun = error !== undefined && !expectedError(error) ? given : rest;
       const userId = message.author.id;
       if (!tracker || optedOut.has(userId)) return;
       const event = describeMessageCommand(message, run, { ...options, mode }, shardCount());
@@ -494,9 +551,10 @@ function attach(client: Client, options: ShardlensOptions): Shardlens {
     }
   };
   /** `thrown` is set when the handler threw, even if what it threw was `undefined`. */
-  const handlerEnd = (name: string, interaction: unknown, ms: unknown, thrown?: { error: unknown }) => {
+  const handlerEnd = (name: string, interaction: unknown, ms: unknown, threw?: { error: unknown }) => {
     try {
       if (!isInteraction(interaction)) return;
+      const thrown = threw && !expectedError(threw.error) ? threw : undefined;
       const code = thrown && errorCode(thrown.error);
       tracker?.handlerFinished(
         interaction,
@@ -522,6 +580,7 @@ function attach(client: Client, options: ShardlensOptions): Shardlens {
       count('shutdown', error);
     }
     await transport.shutdown(opts);
+    await collector?.close().catch((error: unknown) => count('shutdown', error));
   }
 
   return {

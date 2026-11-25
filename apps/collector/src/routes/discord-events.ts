@@ -2,8 +2,6 @@ import { createHash } from 'node:crypto';
 import { Snowflake } from '@shardlens/schema';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { insertRows } from '../db.js';
-import { ENTITLEMENT_COLUMNS } from '../ingest/write.js';
 import { auditCipher } from '../security/crypto.js';
 import { makeDiscordVerifier } from '../security/ed25519.js';
 import { hashUserId } from '../security/userhash.js';
@@ -72,9 +70,10 @@ export async function discordEventRoutes(app: FastifyInstance, deps: Deps): Prom
     done(null, body),
   );
 
-  /** Stores one delivery. The `webhook.<type>` counters are rolled up from this table. */
+  /** Stores one delivery. The `webhook.<type>` counters are rolled up from these. */
   const recordDelivery = (
     item: Delivery,
+    type: string,
     at: Date,
     fields: {
       integrationType?: number | null;
@@ -84,24 +83,17 @@ export async function discordEventRoutes(app: FastifyInstance, deps: Deps): Prom
       scopes?: string[] | null;
     },
   ) =>
-    insertRows(
-      deps.db,
-      'webhook_events',
-      ['id', 'ts', 'app_id', 'type', 'integration_type', 'user_hash', 'actor_enc', 'guild_id', 'scopes'],
-      [
-        [
-          deliveryId(at.getTime(), item.raw),
-          at,
-          deps.config.appId,
-          item.body.event?.type,
-          fields.integrationType ?? null,
-          fields.userHash ?? null,
-          fields.actor ?? null,
-          fields.guildId ?? null,
-          fields.scopes ?? null,
-        ],
-      ],
-    );
+    deps.store.webhookEvents.record({
+      id: deliveryId(at.getTime(), item.raw),
+      ts: at,
+      appId: deps.config.appId,
+      type,
+      integrationType: fields.integrationType ?? null,
+      userHash: fields.userHash ?? null,
+      actor: fields.actor ?? null,
+      guildId: fields.guildId ?? null,
+      scopes: fields.scopes ?? null,
+    });
 
   const processDelivery = async (item: Delivery) => {
     const event = item.body.event;
@@ -114,12 +106,12 @@ export async function discordEventRoutes(app: FastifyInstance, deps: Deps): Prom
     if (event.type === 'APPLICATION_AUTHORIZED' || event.type === 'APPLICATION_DEAUTHORIZED') {
       const user = User.safeParse(data.user);
       const guild = Snowflake.safeParse((data.guild as { id?: unknown } | undefined)?.id);
-      const hash = user.success ? await hashUserId(deps.db, appId, user.data.id, at) : undefined;
-      const mode = await deps.db.query<{ mode: string }>('SELECT mode FROM apps WHERE app_id = $1', [appId]);
-      await recordDelivery(item, at, {
+      const hash = user.success ? await hashUserId(deps.store, appId, user.data.id, at) : undefined;
+      const mode = (await deps.store.apps.get(appId))?.mode;
+      await recordDelivery(item, event.type, at, {
         integrationType: typeof data.integration_type === 'number' ? data.integration_type : null,
         userHash: hash?.bytes,
-        actor: audit && mode.rows[0]?.mode === 'audit' && user.success ? audit.encrypt(user.data.id) : null,
+        actor: audit && mode === 'audit' && user.success ? audit.encrypt(user.data.id) : null,
         guildId: guild.success ? guild.data : null,
         scopes: Array.isArray(data.scopes) ? data.scopes.filter((s) => typeof s === 'string').slice(0, 20) : null,
       });
@@ -131,23 +123,20 @@ export async function discordEventRoutes(app: FastifyInstance, deps: Deps): Prom
       if (!e.success) return;
       const action =
         event.type === 'ENTITLEMENT_CREATE' ? 'create' : event.type === 'ENTITLEMENT_DELETE' ? 'delete' : 'update';
-      const hash = e.data.user_id ? await hashUserId(deps.db, appId, e.data.user_id, at) : undefined;
-      await insertRows(deps.db, 'entitlements', ENTITLEMENT_COLUMNS, [
-        [
-          appId,
-          at,
-          action,
-          e.data.sku_id,
-          e.data.type,
-          e.data.guild_id ? 'guild' : 'user',
-          hash?.bytes ?? null,
-          e.data.guild_id ?? null,
-          e.data.starts_at ? new Date(e.data.starts_at) : null,
-          e.data.ends_at ? new Date(e.data.ends_at) : null,
-          'webhook',
-        ],
-      ]);
-      await recordDelivery(item, at, { userHash: hash?.bytes, guildId: e.data.guild_id });
+      const hash = e.data.user_id ? await hashUserId(deps.store, appId, e.data.user_id, at) : undefined;
+      await deps.store.webhookEvents.recordEntitlement({
+        appId,
+        ts: at,
+        action,
+        skuId: e.data.sku_id,
+        entitlementType: e.data.type,
+        owner: e.data.guild_id ? 'guild' : 'user',
+        userHash: hash?.bytes ?? null,
+        guildId: e.data.guild_id ?? null,
+        startsAt: e.data.starts_at ? new Date(e.data.starts_at) : null,
+        endsAt: e.data.ends_at ? new Date(e.data.ends_at) : null,
+      });
+      await recordDelivery(item, event.type, at, { userHash: hash?.bytes, guildId: e.data.guild_id });
     }
   };
 

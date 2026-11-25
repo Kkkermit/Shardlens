@@ -3,16 +3,13 @@ import { readFileSync } from 'node:fs';
 import { uuidv7 } from '@shardlens/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createPool, transaction } from '../src/db.js';
-import { runRollups, runUniques } from '../src/jobs/rollups.js';
 import {
-  activeSalts,
   dropExpiredPartitions,
   ensurePartitions,
   ensurePartitionsPatiently,
-  ensureSalt,
-  UPCOMING_SALT_MS,
-} from '../src/storage/maintenance.js';
-import { APP_ID, type Harness, startHarness } from './harness.js';
+} from '../src/storage/postgres/partitions.js';
+import { activeSalts, ensureSalt, UPCOMING_SALT_MS } from '../src/storage/salts.js';
+import { APP_ID, type Harness, onPostgres, startHarness } from './harness.js';
 
 const MINUTE = 60_000;
 const DAY = 86_400_000;
@@ -44,13 +41,13 @@ async function rolledUp(name: string, bucket: number): Promise<number> {
   return res.rows[0]?.n ?? 0;
 }
 
-describe('rollup runs', () => {
+describe.runIf(onPostgres)('rollup runs', () => {
   it('rolls up an event that arrived just under 2 minutes late, too young to be marked dirty', async () => {
     const arrived = Date.now();
     const ts = arrived - 115_000;
     await custom('almost_late', ts);
     // The next run, even one that starts a while after the event arrived.
-    await runRollups(h.db, new Date(arrived + 90_000));
+    await h.store.jobs.runRollups(new Date(arrived + 90_000));
     expect(await rolledUp('almost_late', minuteOf(ts))).toBe(1);
   });
 
@@ -59,7 +56,7 @@ describe('rollup runs', () => {
     const ts = previousRun - 100_000;
     await custom('behind', ts);
     // The scheduler was busy: this run starts ten minutes after the previous one.
-    await runRollups(h.db, new Date(previousRun + 10 * MINUTE), { since: new Date(previousRun) });
+    await h.store.jobs.runRollups(new Date(previousRun + 10 * MINUTE), { since: new Date(previousRun) });
     expect(await rolledUp('behind', minuteOf(ts))).toBe(1);
   });
 
@@ -84,13 +81,13 @@ describe('rollup runs', () => {
     const blocker = await h.db.connect();
     await blocker.query('BEGIN');
     await blocker.query('LOCK TABLE rollup_1d IN EXCLUSIVE MODE');
-    const run = runRollups(h.db);
+    const run = h.store.jobs.runRollups();
     await new Promise((resolve) => setTimeout(resolve, 1_000));
     await late(2_000);
     await blocker.query('COMMIT');
     blocker.release();
     await run;
-    await runRollups(h.db);
+    await h.store.jobs.runRollups();
     expect(await rolledUp('raced', bucket)).toBe(2);
   });
 
@@ -112,7 +109,7 @@ describe('rollup runs', () => {
     }
     await custom('beside_poison', ts);
     try {
-      const { skipped } = await runRollups(h.db);
+      const { skipped } = await h.store.jobs.runRollups();
       expect(skipped.length).toBeGreaterThan(0);
       expect(await rolledUp('beside_poison', minuteOf(ts))).toBe(1);
       const rest = await h.db.query<{ hist: number[] }>(
@@ -125,7 +122,7 @@ describe('rollup runs', () => {
   });
 });
 
-describe('partitions', () => {
+describe.runIf(onPostgres)('partitions', () => {
   it('lets collectors starting together on one database create the same partitions', async () => {
     const pools = [1, 2, 3].map(() => createPool(h.config.databaseUrl, 1));
     const ahead = new Date(Date.now() + 400 * DAY);
@@ -176,7 +173,7 @@ describe('partitions', () => {
   });
 });
 
-describe('unique users', () => {
+describe.runIf(onPostgres)('unique users', () => {
   const users = (n: number) => Array.from({ length: n }, () => randomBytes(16));
   const seen = async (period: string, day: string, hashes: Buffer[]) => {
     for (const hash of hashes) {
@@ -195,13 +192,13 @@ describe('unique users', () => {
     ).rows[0];
 
   it('counts a week only when it lies inside one salt period, and never rewrites a final count', async () => {
-    await ensureSalt(h.db, APP_ID, '2026-11');
-    await ensureSalt(h.db, APP_ID, '2026-12');
+    await ensureSalt(h.store, APP_ID, '2026-11');
+    await ensureSalt(h.store, APP_ID, '2026-12');
     // 9–15 November is inside November. 30 November – 6 December spans two salts, so its users can't be combined.
     await seen('2026-11', '2026-11-10', users(4));
     await seen('2026-11', '2026-11-30', users(10));
     await seen('2026-12', '2026-12-01', users(3));
-    await runUniques(h.db, APP_ID);
+    await h.store.jobs.runUniques(APP_ID);
     expect(await weekRow('2026-11-09')).toEqual({ users: 4 });
     expect(await weekRow('2026-11-30')).toBeUndefined();
 
@@ -213,10 +210,10 @@ describe('unique users', () => {
           [APP_ID],
         )
       ).rows[0];
-    await runUniques(h.db, APP_ID, '2026-11', true);
+    await h.store.jobs.runUniques(APP_ID, '2026-11', true);
     expect(await month()).toEqual({ users: 14, final: true });
     await h.db.query("DELETE FROM uniques WHERE app_id = $1 AND period = '2026-11' AND day = '2026-11-30'", [APP_ID]);
-    await runUniques(h.db, APP_ID);
+    await h.store.jobs.runUniques(APP_ID);
     expect(await month()).toEqual({ users: 14, final: true });
   });
 });
@@ -224,15 +221,15 @@ describe('unique users', () => {
 describe('salts', () => {
   it("hands out the next period's salt in the last minutes of a period, after the others", async () => {
     const end = Date.UTC(2026, 11, 1);
-    const near = await activeSalts(h.db, APP_ID, 'month', new Date(end - 2 * MINUTE));
+    const near = await activeSalts(h.store, APP_ID, 'month', new Date(end - 2 * MINUTE));
     expect(near[0]?.period).toBe('2026-11');
     expect(near.at(-1)?.period).toBe('2026-12');
-    const earlier = await activeSalts(h.db, APP_ID, 'month', new Date(end - UPCOMING_SALT_MS - MINUTE));
+    const earlier = await activeSalts(h.store, APP_ID, 'month', new Date(end - UPCOMING_SALT_MS - MINUTE));
     expect(earlier.map((s) => s.period)).not.toContain('2026-12');
   });
 });
 
-describe('upgrading from rollups cut in the server time zone', () => {
+describe.runIf(onPostgres)('upgrading from rollups cut in the server time zone', () => {
   const rows = async (table: 'rollup_1h' | 'rollup_1d') =>
     (
       await h.db.query<{ bucket: Date; count: number }>(

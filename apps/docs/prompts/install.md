@@ -6,11 +6,11 @@ You are adding Shardlens to the discord.js bot in this repository. Everything yo
 
 Shardlens is self-hosted, privacy-first analytics and health monitoring for discord.js bots (MIT).
 
-- It has two parts: an **SDK** inside the bot (`@shardlens/discordjs`, what you are installing) and a **collector** with a dashboard that the bot's owner runs separately, or inside the bot in embedded mode. The SDK sends batches of events to the collector over HTTPS.
-- The dashboard is the owner's choice, and the SDK is the same for all three: the Shardlens dashboard (the default), a dashboard they already have (it reads every number through `@shardlens/client`), or none. If I haven't said which I want, assume the Shardlens dashboard and ask me at the end; don't build anything for the other two unless I ask.
+- It has two parts: an **SDK** inside the bot (`@shardlens/discordjs`, what you are installing) and a **collector** that stores events and serves the dashboard. If the bot already uses MongoDB, the collector runs inside the bot on that same database (the SDK's `mongodb` option): nothing else to run, and this is what you set up. Otherwise the owner runs the collector on a server (or inside the bot in embedded mode), and the SDK sends it batches of events over HTTPS.
+- The dashboard is the owner's choice, and the SDK is the same for all three: the Shardlens dashboard (the default), a dashboard they already have (it reads every number through `@shardlens/client`), or none. If I haven't said which I want, assume the Shardlens dashboard; with a collector, ask me at the end (on MongoDB, don't ask). Don't build anything for the other two unless I ask.
 - The SDK records interactions (command name, outcome, response time), prefix commands the bot reports, servers joined and left, REST and shard health. It never records message content, and user IDs are hashed inside the bot before anything is sent.
 - It listens through public discord.js events only. It does not change how the bot behaves, never throws into the bot, and needs no Gateway intent beyond `Guilds`.
-- Requirements: discord.js 14.12 or newer, or 15; Node.js 22.12 or newer (24.11 for embedded mode). It ships ESM and CommonJS builds with types.
+- Requirements: discord.js 14.12 or newer, or 15; Node.js 22.12 or newer (the same for every setup, the collector inside the bot included). On MongoDB, the server must be 7.0 or newer (Atlas runs 8.0); the bot's own driver or mongoose version doesn't matter. It ships ESM and CommonJS builds with types.
 
 Repository: https://github.com/Kkkermit/Shardlens · Docs: https://kkkermit.github.io/Shardlens/
 
@@ -24,21 +24,30 @@ Repository: https://github.com/Kkkermit/Shardlens · Docs: https://kkkermit.gith
 - Whether the bot has prefix (message) commands: a `messageCreate` listener that checks a prefix or a mention, or a framework's message commands. Note whether the prefix comes from a database, whether there are aliases, and whether slash and prefix commands share the same command code.
 - Whether that code already catches command errors itself (a `try`/`catch` that replies "something went wrong").
 - How environment variables and settings are loaded (a `.env` file, a config file, a validation schema), and whether the bot already handles `SIGINT`/`SIGTERM`.
+- Whether the bot uses MongoDB (`mongodb` or `mongoose` in its dependencies), and the name of the setting that holds its connection string (`MONGODB_URI`, `MONGO_URL`, `DATABASE_URL`, a field of a config file, …). Never print its value. If it does, set Shardlens up on that database: the MongoDB variant below, whatever the bot's Node.js version, as long as it is 22.12 or newer. You can't check the MongoDB server's version from here: assume it is 7.0 or newer, and mention it at the end.
 
 Stop and tell me, instead of continuing, if:
 
-- discord.js is older than 14.12 or Node.js is older than 22.12 (don't upgrade them yourself);
+- discord.js is older than 14.12 or Node.js is older than 22.12 (don't upgrade them yourself). If the project declares no Node.js version anywhere, carry on and tell me at the end that it needs 22.12 or newer;
 - the bot has no gateway `Client` and receives interactions over HTTP (Cloudflare Workers, Deno, Bun, or `@discordjs/core` with an Interactions Endpoint URL). That bot needs `@shardlens/http` instead: https://kkkermit.github.io/Shardlens/guides/http-bots/
 
 ## 2. Install the SDK
 
-Install `@shardlens/discordjs` with the project's own package manager. Don't add any other dependency (embedded mode, below, adds two more, and my own dashboard adds `@shardlens/client`, only if I asked for them).
+Install `@shardlens/discordjs` with the project's own package manager, and on MongoDB `@shardlens/collector` too. Don't add any other dependency (embedded mode, below, adds two more, and my own dashboard adds `@shardlens/client`, only if I asked for them). If the project commits a lockfile, commit the updated one. If it has none, delete the `package-lock.json` npm writes (or install with `--no-package-lock`). npm rewrites `package.json` in its own layout: put back any formatting of the project's that it changed.
 
 If the registry answers that the package doesn't exist, stop and tell me: Shardlens may not be published yet. Never install it from a tarball, a fork or a similarly named package.
 
 ## 3. Create Shardlens next to the client
 
-In the file that constructs the `Client`, after the client exists and before `client.login()`:
+In the file that constructs the `Client`, after the client exists and before `client.login()`. **On MongoDB**, pass the connection string the bot already reads, from the same place it reads it (here `MONGODB_URI`; use the project's own name, never a hard-coded string):
+
+```ts
+import { createShardlens } from '@shardlens/discordjs';
+
+const lens = createShardlens(client, { mongodb: process.env.MONGODB_URI });
+```
+
+Shardlens adds its own collections (prefixed `shardlens_`) and never touches the bot's. It connects with its own client: don't pass it the bot's mongoose or MongoDB connection object, and don't change how the bot connects. Pass the connection string as it is: Shardlens keeps its collections in the database the string names, or in one called `shardlens` when it names none. If the bot picks its own database with a separate setting (mongoose's `dbName`, a `MONGO_DB_NAME`), pass that too, as `mongodb: { uri, database }`, so Shardlens uses the database the bot's user can certainly write to; don't build a URL for it. The SDK takes the application ID from the logged-in client: no setting is needed for it. If the project validates its settings (zod, a config module), read the string from there, as the bot does. **With a collector** instead (no MongoDB):
 
 ```ts
 import { createShardlens } from '@shardlens/discordjs';
@@ -51,32 +60,22 @@ const lens = createShardlens(client, {
 
 In CommonJS, use `const { createShardlens } = require('@shardlens/discordjs');`.
 
-- Call it exactly once per process.
+- Call it exactly once per process. On MongoDB that is still once per process: every process of a sharded bot writes to the same database, and they share keys and background jobs by themselves.
+- With a dependency-injection container or service registry, register `lens` there like the client, created right after it (not lazily on first use) and before `client.login()`, and hand it to the dispatchers the way they get their other services.
 - **`ShardingManager`:** put it in the shard file (the one that constructs the `Client`), never in the manager file.
 - **discord-hybrid-sharding:** put it in the cluster file, after `client.cluster = new ClusterClient(client)` has been set. Never in the `ClusterManager` file.
 - **Internal sharding** (`shards: 'auto'`) and single-process bots need nothing special.
 - Make `lens` reachable from wherever interactions and messages are handled, the same way the project already shares things (an export, a container). If it has no such pattern, put it on the client (`client.lens = createShardlens(…)`; in TypeScript add `lens: Shardlens` to the project's existing `declare module 'discord.js' { interface Client { … } }`, or add that declaration), so every handler reaches it as `interaction.client.lens` or `message.client.lens`.
-- If the project already has its version at hand (a constant, or a `package.json` it already reads), pass it as `release`. When the bot is started through an npm script, `process.env.npm_package_version` holds it too. Don't add a JSON import the project's build doesn't already allow.
-- If either variable is unset, the SDK logs one warning and records nothing; `lens.wrap()` and every other call still work and do nothing. The bot must still start, so don't add your own checks and don't throw.
+- Pass the bot's version as `release` if the project already has it at hand (a constant, or a `package.json` it already imports). Otherwise pass `release: process.env.npm_package_version`, read the way the project reads other environment values: npm sets it when the bot is started with `npm start` or another npm script, shard and cluster processes inherit it, and it is simply left out when the bot is started with plain `node`. Don't add a JSON import the project's build doesn't already allow.
+- If its setting is unset (the connection string on MongoDB; the URL or the key with a collector), the SDK logs one warning in each process and records nothing; `lens.wrap()` and every other call still work and do nothing. The bot must still start, so don't add your own checks and don't throw. On MongoDB the SDK also never throws when the database is down: events wait in memory and arrive when it is back.
 
 ## 4. Wrap the interaction handler
 
 `lens.wrap(handler)` takes a function whose first argument is the interaction and returns a function with the same arguments. It records how long the handler took and any error it threw, then re-throws the error unchanged, so the project's own error handling still runs.
 
-Wrap at the single place interactions are dispatched, not in every command file, and call the wrapped function exactly where and how the original was called: inside the same `try`, awaited only if the original was awaited. If the listener is already `async`, wrap the whole listener; if it isn't (it calls the handler without `await`), wrap the function it calls instead, because an `async` listener's failures go to the client's `error` event:
+Wrap where the project calls its handlers, not in every command file: the place matched commands are called, and likewise where it calls autocomplete, button, select menu and modal handlers if it dispatches those to code of its own. If the listener lives in an event file that a loader calls, wrap inside the event file. Call each wrapped function exactly where and how the original was called: inside the same `try`, awaited only if the original was awaited.
 
-```ts
-import { Events } from 'discord.js';
-
-client.on(
-  Events.InteractionCreate,
-  lens.wrap(async (interaction) => {
-    // the existing handler body, unchanged
-  }),
-);
-```
-
-`wrap` only sees an error that leaves the function it wraps. If the project already catches command errors (a `try`/`catch` around the command call, to reply "something went wrong"), wrapping the whole listener records nothing as failed. Wrap the call inside the `try` instead, and leave the project's `catch` as it is:
+`wrap` only sees an error that leaves the function it wraps, so first look at how the project handles errors. **Most bots catch command errors themselves** (a `try`/`catch` around the command call, to reply "something went wrong"): wrap the call inside the `try`, and leave the project's `catch` as it is:
 
 ```ts
 import { type ChatInputCommandInteraction, Events } from 'discord.js';
@@ -94,7 +93,27 @@ client.on(Events.InteractionCreate, async (interaction) => {
 });
 ```
 
+**If nothing catches them** and the listener is `async`, wrap the whole listener. If it isn't `async` (it calls the handler without `await`), wrap the function it calls instead, because an `async` listener's failures go to the client's `error` event:
+
+```ts
+import { Events } from 'discord.js';
+
+client.on(
+  Events.InteractionCreate,
+  lens.wrap(async (interaction) => {
+    // the existing handler body, unchanged
+  }),
+);
+```
+
 Creating the wrapper on each call, as here, is cheap. With `lens` on the client it reads `interaction.client.lens.wrap(…)`, which also works when `lens` is created after the listeners are registered (in embedded mode, below).
+
+- If one listener handles several kinds of interaction with a `try` each, wrap the call inside each `try`. Wrapped calls may sit inside one another (a wrapped router calling a wrapped command, a framework's wrap around yours): the outermost is timed and the first error any of them throws is kept, so nesting is harmless.
+- When the handler's parameter type already fits, pass it as it is: `lens.wrap(handleComponent)(interaction)`. Otherwise use an arrow, and keep any extra arguments the project passes (`(i) => command.execute(i, client)`).
+- In TypeScript, a check on a property (`if (!command.autocomplete) return;`) doesn't narrow inside the arrow, while a check on a local constant (`if (command.type === 'slash')`) does. Use `(i) => command.autocomplete!(i)` there; a bare `const run = command.autocomplete` would lose `this`.
+- A branch that handles an interaction inline, with no function of its own, can stay as it is: it is still recorded, only without handler time.
+- Every error that leaves the wrapped function counts as a failed run. If the bot throws some on purpose, for a user's mistake that its error handler then explains (a `UserError` or `ValidationError` class), pass `isExpectedError: (error) => error instanceof UserError` (the project's own class) to `createShardlens`: those runs then count as runs, not failures, and the error still reaches the bot's `catch`.
+- Checks that refuse a command before it runs (permissions, cooldowns, guild-only) stay outside the wrapped call: those runs are recorded, without a handler time or a failure. If such checks live inside each command's own code, leave them there; refused runs then count as successful runs. Don't move them.
 
 Interactions are recorded even without `wrap`; wrapping adds handler time and handler errors. If one function runs both slash and prefix commands, wrapping it is still right: `wrap` records the interactions it is given and runs anything else untouched.
 
@@ -199,9 +218,9 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 }
 ```
 
-`shutdown()` gives up after 2 seconds and never throws. Calling it a second time waits for the same flush.
+`shutdown()` gives up after 2 seconds and never throws, so it needs no `try` of its own: put it just before the client is destroyed, outside any `try` that step has. If the project registers shutdown hooks that run in reverse order, register Shardlens's after the one that destroys the client, so it runs first; that the hook runner wraps each hook in a `try` is fine. Calling it a second time waits for the same flush. On MongoDB it also closes Shardlens's own database connection; the bot's stays as it was.
 
-**With `ShardingManager` or discord-hybrid-sharding**, that handler goes in the shard or cluster file. A signal sent to the manager alone (`docker stop`, systemd, a host's restart) never reaches those processes: they keep running, and are killed without flushing when the container or service stops. So also add this to the manager file, before `spawn()`, or to its existing signal handler. For `ShardingManager`:
+**With `ShardingManager` or discord-hybrid-sharding**, that handler goes in the shard or cluster file. A signal sent to the manager alone (`docker stop`, systemd, a host's restart) never reaches those processes: they keep running, and are killed without flushing when the container or service stops. So also add this to the manager file, before `spawn()`. If the manager already has a signal handler that stops each shard or cluster and waits for it to exit, it is enough: leave it as it is (`shard.kill()` and discord-hybrid-sharding's `cluster.kill()` both send SIGTERM, which the shard or cluster's own handler catches). For `ShardingManager`:
 
 ```ts
 import { once } from 'node:events';
@@ -239,6 +258,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
         const child = cluster.thread instanceof Child ? cluster.thread.process : null;
         if (!child || child.exitCode !== null) return undefined;
         cluster.kill({ force: true, reason: signal });
+        // After kill(), which removes the child's listeners: one added before it would never hear the exit.
         return once(child, 'exit');
       }),
     );
@@ -247,9 +267,11 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 }
 ```
 
-## 6. Document the two settings
+## 6. Document the setup
 
-Skip this step in embedded mode, which uses neither setting.
+**On MongoDB** there is no new setting. Add one line about Shardlens to the README's setup section if there is one, for example: "Analytics: [Shardlens](https://kkkermit.github.io/Shardlens/), stored in this bot's MongoDB (collections prefixed `shardlens_`). Run `npx shardlens dashboard` to see them." In embedded mode, skip this step.
+
+**With a collector:**
 
 Add `SHARDLENS_URL=` and `SHARDLENS_INGEST_KEY=` (empty) to `.env.example` or wherever the project documents its environment. If the project validates its environment (zod, envalid, a config file), declare both as **optional strings and nothing more**: no format checks, no "both or neither" rule, no failure. The SDK checks them itself, logs one warning and records nothing when they are wrong. Add one line about Shardlens to the README's setup section if there is one.
 
@@ -319,11 +341,10 @@ const failing = await shardlens.top({
 - Who ran what is separate. Only if I asked for audit mode: `shardlens.activity.log({ guild, command, user, outcome: 'failed', before })` (newest first, 50 rows a page; pass a page's `nextBefore` as `before` for the next) and `shardlens.activity.topUsers('7d')` read it, with `SHARDLENS_ACTIVITY_KEY` (an activity key, `slk_activity_…`) as the client's `apiKey`, on pages only my own staff can open. Never put a user ID in a URL a browser's address bar shows, and add no page that profiles one user beyond that exact-ID lookup.
 - Tell me to set the collector up with `npx shardlens init … --dashboard own` (add `--identify-users` for who ran what): it turns the Shardlens dashboard off and writes `dashboard.env` with these settings. Guide: https://kkkermit.github.io/Shardlens/guides/your-own-dashboard/
 
-**Embedded mode**, for a small bot on one host with no separate collector: the collector and its dashboard run inside the bot process, with their data in one folder.
+**Embedded mode**, for a small bot on one host with no separate collector and no MongoDB (a bot on MongoDB uses the MongoDB variant instead): the collector and its dashboard run inside the bot process, with their data in one folder.
 
 - It runs in one process. If the bot uses `ShardingManager` or discord-hybrid-sharding, stop and tell me: those need a standalone collector. Internal sharding is fine.
-- It needs Node.js 24.11 or newer. If the project targets an older Node.js, stop and tell me.
-- Install `@shardlens/collector` and `@electric-sql/pglite` as well as the SDK. In CommonJS, `require('@shardlens/collector/embedded')` works on Node.js 24.
+- Install `@shardlens/collector` and `@electric-sql/pglite` as well as the SDK. In CommonJS, `require('@shardlens/collector/embedded')` works (Node.js 22.12 and later load ES modules with `require`).
 - It needs the application ID (from the Developer Portal). Use the setting the project already has for it (often `CLIENT_ID`, `APPLICATION_ID` or a `clientId` in its config); only if it has none, add `DISCORD_APP_ID` next to the bot's other settings.
 - The dashboard listens on port 8080 of this machine. Pick another port if the project already uses 8080.
 - If I said I want my own dashboard or none, pass `dashboard: false`: the collector then serves its API only, and `collector.readKey` is the key `@shardlens/client` needs (with `endpoint: collector.url`).
@@ -374,21 +395,23 @@ const collector = await startEmbeddedCollector({
 }).catch(() => undefined);
 ```
 
-**Other options** of `createShardlens`: `environment` (default `'production'`), `dryRun` (print events instead of sending them), `disable` (turn off groups: `'interactions'`, `'guilds'`, `'rest'`, `'gateway'`, `'process'`, `'premium'`, `'app'`), `optedOut` and `onOptOutChange` (persist opt-outs), `spool: { dir }` (keep events on disk through long collector outages), `exporters` (Prometheus or OpenTelemetry), `sampleRate` (very large bots), `refreshGuildCounts` (keep member counts current). Every option is documented in the package's type definitions (`node_modules/@shardlens/discordjs/dist/index.d.ts`).
+**Other options** of `createShardlens`: `environment` (default `'production'`), `dryRun` (print events instead of sending them), `disable` (turn off groups: `'interactions'`, `'guilds'`, `'rest'`, `'gateway'`, `'process'`, `'premium'`, `'app'`), `optedOut` and `onOptOutChange` (persist opt-outs), `isExpectedError` (errors that aren't failures, step 4), `logger` (send the SDK's few warnings through the bot's own logger instead of `console`), `spool: { dir }` (keep events on disk through long collector outages), `exporters` (Prometheus or OpenTelemetry), `sampleRate` (very large bots), `refreshGuildCounts` (keep member counts current). Every option is documented in the package's type definitions (`node_modules/@shardlens/discordjs/dist/index.d.ts`).
 
 ## Check your work
 
 - Run the project's own type-check, lint, build and test scripts, and fix anything you broke.
-- If `SHARDLENS_URL` and `SHARDLENS_INGEST_KEY` are set in my environment or the bot's `.env`, run `npx shardlens doctor` from the bot's folder and show me its output. It checks Node.js, discord.js, the collector and the key. Never print the key.
+- With a collector: if `SHARDLENS_URL` and `SHARDLENS_INGEST_KEY` are set in my environment or the bot's `.env`, run `npx shardlens doctor` from the bot's folder and show me its output. It checks Node.js, discord.js, the collector and the key. Never print the key.
+- On MongoDB there is nothing more to check until the bot runs: `doctor` is for a collector on a server.
 - Don't start the bot yourself unless I ask.
 
 ## Tell me when you're done
 
 - Which files you changed, and what each change does.
 - What I still need to do:
-  1. With a standalone collector: run one with `npx shardlens init --domain <my domain> --app-id <my application ID>`, then `docker compose up -d` in the folder it creates. Ask me which dashboard I want if I haven't said: the Shardlens dashboard (nothing to add), my own (`--dashboard own`) or none (`--dashboard none`); https://kkkermit.github.io/Shardlens/getting-started/choose-your-setup/ compares them. It prints nothing secret; the bot's two settings are in the generated `bot.env`. Guide: https://kkkermit.github.io/Shardlens/getting-started/quick-start/ Then set `SHARDLENS_URL` and `SHARDLENS_INGEST_KEY` where the bot runs.
-  2. In embedded mode instead: set the application ID if you added a setting for it, start the bot, and open the dashboard with the read key (say where it is).
-  3. To see what would be sent before any of that, pass `dryRun: true` once and run a command in the bot.
+  1. On MongoDB: start the bot and run a command, then run `npx shardlens dashboard` in the bot's folder and open the link it prints (npx fetches the small `shardlens` CLI; it runs the collector the bot installed). It finds the connection string in `.env` or the environment by itself under `MONGODB_URI`, `MONGO_URI`, `MONGODB_URL`, `MONGO_URL`, `MONGODB_CONNECTION_STRING`, `MONGO_CONNECTION_STRING`, `DATABASE_URL`, `DB_URI` or `DB_URL`; for any other name, give me the command with `--env <the bot's name for it>`, never one with the connection string in it. If you passed `database`, add `--database <that database>`. Don't ask me which dashboard I want: on MongoDB it is the Shardlens dashboard, and a dashboard of my own is in the guide: https://kkkermit.github.io/Shardlens/self-hosting/mongodb/
+  2. With a standalone collector: run one with `npx shardlens init --domain <my domain> --app-id <my application ID>` (the application ID is the bot's client ID, which the project may already have as `CLIENT_ID` or `APPLICATION_ID`), then `docker compose up -d` in the folder it creates. Ask me which dashboard I want if I haven't said: the Shardlens dashboard (nothing to add), my own (`--dashboard own`) or none (`--dashboard none`); https://kkkermit.github.io/Shardlens/getting-started/choose-your-setup/ compares them. It prints nothing secret; the bot's two settings are in the generated `bot.env`. Guide: https://kkkermit.github.io/Shardlens/getting-started/quick-start/ Then set `SHARDLENS_URL` and `SHARDLENS_INGEST_KEY` where the bot runs.
+  3. In embedded mode instead: set the application ID if you added a setting for it, start the bot, and open the dashboard with the read key (say where it is).
+  4. To see what would be sent before any of that, pass `dryRun: true` once and run a command in the bot.
 - Anything you skipped or weren't sure about.
 
 ## If you need more

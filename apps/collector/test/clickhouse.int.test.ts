@@ -1,7 +1,6 @@
 import { uuidv7 } from '@shardlens/core';
 import { ClickHouseContainer, type StartedClickHouseContainer } from '@testcontainers/clickhouse';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { runRollups } from '../src/jobs/rollups.js';
 import { runQuery } from '../src/query/run.js';
 import { QuerySpec } from '../src/query/spec.js';
 import { ClickHouseStore } from '../src/storage/clickhouse.js';
@@ -24,7 +23,7 @@ const pgRange = () => ({
   to: new Date(Date.now() + 3_600_000).toISOString(),
 });
 const run = (spec: object, withClickHouse: boolean) =>
-  runQuery(h.db, APP_ID, QuerySpec.parse(spec), new Date(), withClickHouse ? store : undefined) as Promise<
+  runQuery(h.store, APP_ID, QuerySpec.parse(spec), new Date(), withClickHouse ? store : undefined) as Promise<
     Record<string, unknown>
   >;
 
@@ -80,7 +79,7 @@ beforeAll(async () => {
   const retry = await ingest(h.app, envelope(events));
   expect(retry.json()).toMatchObject({ accepted: 0, duplicates: events.length });
   await store.flush();
-  await runRollups(h.db, new Date(Date.now() + 120_000));
+  await h.store.jobs.runRollups(new Date(Date.now() + 120_000));
 }, 300_000);
 
 afterAll(async () => {
@@ -184,7 +183,7 @@ describe('ClickHouse analytics store (preview)', () => {
     );
     expect(res.json()).toMatchObject({ accepted: 1, rejected: [] });
     await store.flush();
-    await runRollups(h.db, new Date(Date.now() + 120_000));
+    await h.store.jobs.runRollups(new Date(Date.now() + 120_000));
     const spec = {
       kind: 'top',
       metric: 'interactions',

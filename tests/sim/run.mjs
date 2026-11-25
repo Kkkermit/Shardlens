@@ -1,5 +1,5 @@
 // `pnpm sim [bot…]`: Shardlens installed the way bot owners get it. Packs the workspace's published packages,
-// installs them with npm into four bots that coding agents set up (bots/), starts the databases those use in Docker,
+// installs them with npm into eight bots that coding agents set up (bots/), starts the databases those use in Docker,
 // runs each bot against a fake Discord, checks every count against what was sent and searches everything the install
 // stored or logged for leaks. Exits non-zero on any failure. Needs Docker; see README.md.
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -68,6 +68,17 @@ try {
     install(collectorDir, packages, setupLog);
   }
 
+  // `shardlens dashboard`, as npx would run it, for the bots on their own MongoDB.
+  const cliDir = join(work, 'cli');
+  if (bots.some((bot) => BOTS[bot].mongodb)) {
+    mkdirSync(cliDir);
+    writeFileSync(
+      join(cliDir, 'package.json'),
+      JSON.stringify({ name: 'cli', private: true, dependencies: { shardlens: '*' } }),
+    );
+    install(cliDir, packages, setupLog);
+  }
+
   const needed = [...new Set(bots.flatMap((bot) => BOTS[bot].databases))];
   let databases = {};
   if (needed.length > 0) {
@@ -82,12 +93,20 @@ try {
     const result = { bot, failures: [] };
     try {
       const collectorMain = join(collectorDir, 'node_modules/@shardlens/collector/dist/main.js');
-      const { failures, events, needles } = await drive(bot, { dir, logs, databases, collectorMain, panel });
+      const cliMain = join(cliDir, 'node_modules/shardlens/dist/index.js');
+      const { failures, events, needles } = await drive(bot, {
+        dir,
+        logs,
+        databases,
+        collectorMain,
+        panel,
+        cliMain,
+      });
       const leaks = await leakCheck(bot, { dir, logs, needles });
       result.failures.push(...failures, ...leaks.found.map((leak) => `leak: ${leak}`));
       if (leaks.rows === 0) result.failures.push('the copy holds no events');
       result.summary =
-        `${events} events sent, the copy holds ${leaks.rows}, ` +
+        `${events} events sent, ${leaks.rows === undefined ? 'no copy' : `the copy holds ${leaks.rows}`}, ` +
         `${leaks.needles} secrets and identities searched for in ${Math.round(leaks.chars / 1024)} KiB`;
     } catch (error) {
       result.failures.push(error.message);

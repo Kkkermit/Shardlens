@@ -3,7 +3,7 @@ title: Shardlens
 description: Self-hosted, privacy-first analytics and health monitoring for discord.js bots.
 template: splash
 hero:
-  tagline: Product analytics and bot health for discord.js, self-hosted in one command. No privileged intents. User IDs never leave your bot.
+  tagline: Product analytics and bot health for discord.js, in the MongoDB your bot already uses or on a server of yours. No privileged intents. User IDs never leave your bot.
   actions:
     - text: Quick start
       link: getting-started/quick-start/
@@ -19,8 +19,9 @@ import { Image } from 'astro:assets';
 import overview from '../../assets/overview.png';
 
 <CardGrid>
-  <Card title="Three lines in your bot" icon="rocket">
-    `createShardlens(client, { endpoint, apiKey })`. Works with the `Guilds` intent alone, on discord.js 14.12 or later and 15.
+  <Card title="One line in your bot" icon="rocket">
+    `createShardlens(client, { mongodb: process.env.MONGODB_URI })`, then `npx shardlens dashboard`. Works with the
+    `Guilds` intent alone, on discord.js 14.12 or later and 15.
   </Card>
   <Card title="Private by construction" icon="approve-check">
     User IDs are hashed inside your bot with a salt that rotates and is then destroyed. Message content is never
@@ -31,7 +32,8 @@ import overview from '../../assets/overview.png';
     health.
   </Card>
   <Card title="Yours, self-hosted" icon="seti:docker">
-    `docker compose up` gives you the collector, PostgreSQL and the dashboard behind HTTPS. MIT-licensed.
+    Nothing to run on your bot's own MongoDB, or `docker compose up` for the collector, PostgreSQL and the dashboard
+    behind HTTPS. MIT-licensed.
   </Card>
 </CardGrid>
 
@@ -41,5 +43,6 @@ import overview from '../../assets/overview.png';
   loading="eager"
 />
 
-<LinkCard title="Quick start" description="Run the collector, add three lines to your bot, open the dashboard." href="getting-started/quick-start/" />
+<LinkCard title="Quick start" description="Install two packages, add one line to your bot, open the dashboard." href="getting-started/quick-start/" />
+<LinkCard title="Packages" description="What each package is for, with a prompt to copy for your coding agent." href="getting-started/packages/" />
 <LinkCard title="What is collected" description="Every field, generated from the wire format, with its purpose and retention." href="concepts/data-collected/" />

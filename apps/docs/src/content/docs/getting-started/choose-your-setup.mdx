@@ -1,28 +1,48 @@
 ---
 title: Choose your setup
-description: Use the Shardlens dashboard, a dashboard of your own, or none. Every number can be read through the package either way.
+description: Keep the data in your bot's MongoDB, in the bot, or on a server, and read it in the Shardlens dashboard, your own or none.
 sidebar:
   order: 1.5
 ---
 
 import { Aside, Code } from '@astrojs/starlight/components';
 import script from '../../../../snippets/no-dashboard-script.ts?raw';
+import CopyPrompt from '../../../components/CopyPrompt.astro';
+import collector from '../../../../prompts/collector.md?raw';
 
-The SDK in your bot is the same in every setup: it sends events to a collector, which stores and counts them. What you
-choose is where you look at the numbers. You can change your mind later without losing anything.
+Two choices: where the data lives, and where you look at the numbers. You can change either later.
+
+A coding agent can choose for you: this prompt picks the setup that fits your bot and walks through it.
+
+<CopyPrompt prompt={collector} path="prompts/collector.md" what="choosing and setting up the collector" />
+
+## Where the data lives
+
+| Your bot                                   | Use                                                    | You run                              |
+| ------------------------------------------ | ------------------------------------------------------ | ------------------------------------ |
+| Already uses MongoDB (Atlas or your own)   | [On your MongoDB](../../self-hosting/mongodb/): `mongodb: process.env.MONGODB_URI` | Nothing: it runs inside the bot |
+| Has no database, runs on one process       | [Embedded mode](../../self-hosting/embedded/), on PGlite in a folder | Nothing: it runs inside the bot |
+| Has no MongoDB, or runs in several places  | [The collector on a server](../../self-hosting/docker-compose/), on PostgreSQL | A server with Docker and a domain |
+| Only needs Prometheus or OpenTelemetry     | [Exporters only](../../self-hosting/exporter-only/)    | Nothing                              |
+
+The SDK and the dashboard are the same in every case. On MongoDB, `npx shardlens dashboard` opens the dashboard on
+your machine; the rest of this page is about the collector on a server, where `init` makes the choice below.
+
+## Where you look at the numbers
 
 | You want                    | Set it up with                                 | You read the numbers                                         |
 | --------------------------- | ---------------------------------------------- | ------------------------------------------------------------ |
 | The Shardlens dashboard     | `npx shardlens init …`                         | At your collector's address, in a browser                    |
 | A dashboard you already have | `npx shardlens init … --dashboard own`        | In your own pages, through [`@shardlens/client`](../../guides/your-own-dashboard/) |
 | No dashboard                | `npx shardlens init … --dashboard none`        | From scripts, in Discord, in your own database or in Grafana |
-| No collector at all         | Nothing to run                                 | In Prometheus or OpenTelemetry only ([exporter only](../../self-hosting/exporter-only/)) |
 
-`…` stands for `--domain stats.example.com --app-id 123456789012345678`, as in the [quick start](../quick-start/).
+`…` stands for `--domain stats.example.com --app-id 123456789012345678`, as in the
+[quick start](../quick-start/#without-mongodb-run-the-collector-on-a-server).
 
 ## The Shardlens dashboard
 
-The default. The collector serves the dashboard at its own address: follow the [quick start](../quick-start/).
+The default. The collector serves the dashboard at its own address: follow the
+[quick start](../quick-start/#without-mongodb-run-the-collector-on-a-server).
 
 ## A dashboard you already have
 

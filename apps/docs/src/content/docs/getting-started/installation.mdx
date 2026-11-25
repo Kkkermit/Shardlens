@@ -11,10 +11,10 @@ import { Aside, TabItem, Tabs } from '@astrojs/starlight/components';
 
 | What       | Version                                                           |
 | ---------- | ----------------------------------------------------------------- |
-| Node.js    | 22.12 or later (24 LTS recommended; 24.11 for embedded mode)      |
+| Node.js    | 22.12 or later (24 LTS recommended), for the SDK and for the collector inside the bot |
 | discord.js | 14.12 or later, and 15                                            |
 | Intents    | `Guilds` only. No privileged intents.                             |
-| Collector  | Any server with Docker, or Railway or Render. PostgreSQL 16 or 17 |
+| Collector  | Inside the bot, on its MongoDB 7.0 or later (the server; Atlas runs 8.0). Or any server with Docker, Railway or Render, on PostgreSQL 16 or 17 |
 
 The SDK ships ESM and CommonJS builds with type definitions, so it works with `import` and `require`, TypeScript and
 plain JavaScript.
@@ -24,22 +24,26 @@ plain JavaScript.
 <Tabs syncKey="pkg">
   <TabItem label="pnpm">
     ```sh
-    pnpm add @shardlens/discordjs
+    pnpm add @shardlens/discordjs @shardlens/collector   # on your bot's MongoDB
+    pnpm add @shardlens/discordjs                        # with a collector on a server
     ```
   </TabItem>
   <TabItem label="npm">
     ```sh
-    npm install @shardlens/discordjs
+    npm install @shardlens/discordjs @shardlens/collector   # on your bot's MongoDB
+    npm install @shardlens/discordjs                        # with a collector on a server
     ```
   </TabItem>
   <TabItem label="yarn">
     ```sh
-    yarn add @shardlens/discordjs
+    yarn add @shardlens/discordjs @shardlens/collector   # on your bot's MongoDB
+    yarn add @shardlens/discordjs                        # with a collector on a server
     ```
   </TabItem>
   <TabItem label="bun">
     ```sh
-    bun add @shardlens/discordjs
+    bun add @shardlens/discordjs @shardlens/collector   # on your bot's MongoDB
+    bun add @shardlens/discordjs                        # with a collector on a server
     ```
   </TabItem>
 </Tabs>
@@ -52,11 +56,17 @@ client whose responses Shardlens can't read, so it needs 14.12 or later.
 | Package                | What it is                                                                                    |
 | ---------------------- | --------------------------------------------------------------------------------------------- |
 | `@shardlens/discordjs` | The discord.js adapter. This is the one you install.                                          |
+| `@shardlens/collector` | The collector. Install it beside the SDK to keep everything in your bot's MongoDB.            |
 | `@shardlens/core`      | Zero-dependency core used by the adapter: queue, salts, hashing, batching, retries, redaction. |
 | `@shardlens/schema`    | The wire format (zod), JSON Schema, and the metric and data-collected registers.             |
-| `shardlens`            | The [CLI](../../reference/cli/): `init`, `keys`, `privacy`, `doctor`.                          |
+| `shardlens`            | The [CLI](../../reference/cli/): `dashboard`, `init`, `keys`, `privacy`, `doctor`.             |
+
+Every package, with a prompt to copy for your coding agent, is on the [packages page](../packages/).
 
 ## Check your setup
+
+On your bot's MongoDB, start the bot, run a command and open `npx shardlens dashboard` in its folder. With a collector
+on a server:
 
 ```sh
 npx shardlens doctor --url https://stats.example.com --key slk_ingest_…

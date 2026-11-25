@@ -25,13 +25,9 @@ export async function allowedUser(
   userId: string,
 ): Promise<'ok' | 'not_a_team_member' | 'bot_not_reported'> {
   if (deps.config.extraAdmins.includes(userId)) return 'ok';
-  const res = await deps.db.query<{ ok: boolean }>(
-    'SELECT $2::bigint = ANY(dashboard_user_ids) AS ok FROM app_info WHERE app_id = $1',
-    [appId, userId],
-  );
-  const row = res.rows[0];
-  if (!row) return 'bot_not_reported';
-  return row.ok ? 'ok' : 'not_a_team_member';
+  const onTeam = await deps.store.apps.isDashboardUser(appId, userId);
+  if (onTeam === undefined) return 'bot_not_reported';
+  return onTeam ? 'ok' : 'not_a_team_member';
 }
 
 export async function authRoutes(app: FastifyInstance, deps: Deps): Promise<void> {
@@ -96,11 +92,8 @@ export async function authRoutes(app: FastifyInstance, deps: Deps): Promise<void
       req.log.warn('Discord sign-in refused: not the application owner, a team member or an extra admin');
       return fail(reply, allowed);
     }
-    await createSession(deps.db, reply, { appId: deps.config.appId, userId, method: 'discord' }, secure);
-    await deps.db.query("INSERT INTO admin_audit (app_id, user_id, action) VALUES ($1, $2, 'login')", [
-      deps.config.appId,
-      userId,
-    ]);
+    await createSession(deps.store, reply, { appId: deps.config.appId, userId, method: 'discord' }, secure);
+    await deps.store.adminAudit.record(deps.config.appId, userId, 'login');
     return reply.redirect('/');
   });
 
@@ -110,23 +103,34 @@ export async function authRoutes(app: FastifyInstance, deps: Deps): Promise<void
     const auth = await deps.keys.verify(typeof key === 'string' ? key.trim() : undefined, 'read');
     if (!auth) return reply.code(401).send({ error: 'invalid_key' });
     await createSession(
-      deps.db,
+      deps.store,
       reply,
       { appId: auth.appId, userId: null, method: 'read_key', keyId: auth.keyId },
       secure,
     );
-    await deps.db.query("INSERT INTO admin_audit (app_id, action) VALUES ($1, 'login_read_key')", [auth.appId]);
+    await deps.store.adminAudit.record(auth.appId, null, 'login_read_key');
     return { ok: true };
   });
 
+  const links = deps.signInLinks;
+  if (links) {
+    app.get('/auth/link/:token', authLimit, async (req, reply) => {
+      const { token } = req.params as { token: string };
+      if (!links.redeem(token)) return reply.redirect('/?error=link_expired');
+      await createSession(deps.store, reply, { appId: deps.config.appId, userId: null, method: 'link' }, secure);
+      await deps.store.adminAudit.record(deps.config.appId, null, 'login_link');
+      return reply.redirect('/');
+    });
+  }
+
   app.post('/auth/logout', async (req, reply) => {
     if (!hasCsrfHeader(req)) return reply.code(403).send({ error: 'csrf' });
-    await destroySession(deps.db, req, reply);
+    await destroySession(deps.store, req, reply);
     return { ok: true };
   });
 
   app.get('/auth/me', async (req) => {
-    const session = await readSession(deps.db, req);
+    const session = await readSession(deps.store, req);
     // A public demo lets visitors read without signing in; admin pages still need a Discord sign-in.
     const demo = deps.config.demo;
     return {

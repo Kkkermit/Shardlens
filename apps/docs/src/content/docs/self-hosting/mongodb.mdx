@@ -1,0 +1,176 @@
+---
+title: On your MongoDB
+description: Keep everything in the MongoDB your bot already uses, with nothing else to run. Same dashboard, every feature.
+sidebar:
+  order: 0.5
+---
+
+import { Aside, Code, TabItem, Tabs } from '@astrojs/starlight/components';
+import mongodb from '../../../../snippets/mongodb.ts?raw';
+import mongodbDashboard from '../../../../snippets/mongodb-dashboard.ts?raw';
+import CopyPrompt from '../../../components/CopyPrompt.astro';
+import install from '../../../../prompts/install.md?raw';
+
+If your bot already uses MongoDB, Shardlens can keep everything there. The collector runs inside your bot, on the
+connection string your bot already has: no server, Docker, domain, PostgreSQL or keys to look after. The dashboard,
+alerts, reports, privacy model and every number are the same as with the [standalone collector](../docker-compose/).
+
+It works with MongoDB Atlas (its free tier included), a replica set or a single server of your own, on MongoDB 7.0 or
+later.
+
+## Set it up
+
+The install prompt sets this up for you in a coding agent, on your bot's MongoDB when it has one:
+
+<CopyPrompt prompt={install} path="install.md" what="adding Shardlens to your bot on its MongoDB" />
+
+<Tabs syncKey="pkg">
+  <TabItem label="npm">`npm install @shardlens/discordjs @shardlens/collector`</TabItem>
+  <TabItem label="pnpm">`pnpm add @shardlens/discordjs @shardlens/collector`</TabItem>
+</Tabs>
+
+<Code code={mongodb} lang="ts" title="bot.ts" mark={7} />
+
+When the bot has logged in, Shardlens connects to your database, creates its collections and their indexes on the
+first start, and from then on stores events as they arrive. It needs Node.js 22.12 or later, as the SDK does.
+
+Nothing about your bot's own data changes. Shardlens's collections all start with `shardlens_`, in the database the
+connection string names (`mongodb+srv://…/mybot` uses `mybot`), or in a database called `shardlens` when it names
+none. If your bot picks its database with a separate setting (mongoose's `dbName`, say), or its database user may use
+one database only, pass it too: `mongodb: { uri: process.env.MONGODB_URI, database: 'mybot' }`, and
+`npx shardlens dashboard --database mybot`. Shardlens opens at most 5 connections per process (10 while it serves the
+dashboard), beside your bot's own; a `maxPoolSize` in the connection string sets another limit.
+
+### Sharded bots
+
+Each process of the bot (`ShardingManager`, clusters, discord-hybrid-sharding) runs `createShardlens` as it does
+already, and each writes its own events to the same database. They share one set of keys, and the background jobs
+(rollups, unique users, retention, alerts, reports) run in one process at a time: if that one stops, another takes over
+within a minute or two.
+
+### When MongoDB is down
+
+Your bot keeps running. Events wait in memory (up to `maxQueueSize`, 10,000 by default, or on disk with `spool`) and
+are stored once the database answers again; a short blip passes unnoticed, and a longer outage logs one line each way:
+
+```text
+Shardlens: can't reach MongoDB (HTTP 500). Retrying; events wait in memory.
+Shardlens: connected to MongoDB.
+```
+
+## Open the dashboard
+
+In your bot's folder, on your computer or the bot's host:
+
+```sh
+npx shardlens dashboard
+```
+
+```text
+Shardlens dashboard for application 123456789012345678, from the MongoDB in MONGODB_URI.
+
+  Open http://localhost:8080/auth/link/Yq1…
+  (signs you in once, within 15 minutes; only this machine can open it)
+
+Press Ctrl+C to stop.
+```
+
+It looks for the connection string in the environment, then in the `.env` beside it, under the usual names
+(`MONGODB_URI`, `MONGO_URI`, `MONGODB_URL`, `MONGO_URL`, `DATABASE_URL` and a few more), and serves the dashboard on
+`127.0.0.1`. The link signs you in as the bot's owner, settings included: whoever can run this already holds the
+database. Each link works once; start the command again for a new one. `--port`, `--uri` and `--app-id` (for several
+bots sharing one database) are in the [CLI reference](../../reference/cli/#dashboard).
+
+<Aside type="note">
+  `npx shardlens dashboard` runs the collector from the `@shardlens/collector` installed in your bot's folder, so run
+  it there. While it runs it is one more process on the database: it can run the background jobs too.
+</Aside>
+
+## Keep the dashboard running
+
+To open the dashboard any time without a terminal, serve it from the bot:
+
+<Code code={mongodbDashboard} lang="ts" title="bot.ts" />
+
+The bot then logs a one-time sign-in link each time it starts. With several processes, the first to start serves the
+dashboard and the others leave the port alone.
+
+By default it listens on `127.0.0.1`, so only the bot's machine can open it. To open it from elsewhere, put it behind
+HTTPS: a reverse proxy, or your host's own (most bot hosts have one), set `host: '0.0.0.0'` and `publicUrl` to the
+address people open, and add [Discord sign-in](../docker-compose/#discord-sign-in) with
+`dashboard: { discord: { clientId, clientSecret } }` so the owner and team can sign in without a link.
+
+Or run the collector image anywhere you like ([Railway](../railway/), [Render](../render/), a small server), with
+`DATABASE_URL` set to the same connection string:
+
+```sh
+DATABASE_URL=mongodb+srv://bot:…@cluster0.example.mongodb.net/mybot
+SHARDLENS_PUBLIC_URL=https://stats.example.com
+SHARDLENS_APP_ID=123456789012345678
+SHARDLENS_READ_KEY=slk_read_…   # or DISCORD_CLIENT_ID and DISCORD_CLIENT_SECRET for Discord sign-in
+```
+
+On MongoDB the collector needs neither `SHARDLENS_SESSION_SECRET` nor `SHARDLENS_SETTINGS_KEY`: it uses the ones the
+bot generated in the database. The bot keeps writing its own events, so the image only serves the dashboard, alerts,
+reports and [webhook events](../../guides/webhook-events/).
+
+### A dashboard of your own
+
+To show the numbers in a dashboard or admin panel you already have, run the collector image as above, with the
+dashboard off (`SHARDLENS_DASHBOARD=off`) if you want none of its pages, and a read key in `SHARDLENS_READ_KEY`
+(`npx shardlens keys --scope read` makes one). Your panel's server then reads every number with
+[`@shardlens/client`](../../guides/your-own-dashboard/), from the image's address and that key.
+
+## Where things are kept
+
+| Collection                                   | What it holds                                                        |
+| -------------------------------------------- | -------------------------------------------------------------------- |
+| `shardlens_interactions` and other events    | Single events (commands, REST calls, rate limits, custom events, …), kept 35 days by default |
+| `shardlens_rollup_1m`, `_1h`, `_1d`          | Counts by minute (14 days), hour (13 months) and day (for good): what long-range charts read |
+| `shardlens_guilds`, `shardlens_guild_events` | The servers the bot is in, and joins and removals                    |
+| `shardlens_uniques`, `shardlens_unique_counts` | Unique-user counts, from hashed users                              |
+| `shardlens_salts`                            | The salts users are hashed with, deleted when their period ends      |
+| `shardlens_secrets`                          | The keys and secrets generated on the first start                    |
+| `shardlens_settings`, `_alert_rules`, `_reports`, `_api_keys`, `_sessions`, … | What you set in the dashboard |
+
+Change how long single events are kept in **Settings → Data retention** (7 to 90 days). Unused collections cost
+nothing. To remove Shardlens, stop the bot and drop the collections that start with `shardlens_`.
+
+## Privacy and secrets
+
+The [privacy model](../../concepts/privacy-model/) is the same. User IDs are hashed inside your bot with the current
+period's salt before anything is stored, and each salt is deleted seven days after its period ends, with that
+period's unique-user rows. From then on nobody can link a hash to a user, the owner included. There is no per-user view.
+
+`shardlens_secrets` holds the bot's keys, the session secret and the settings key that encrypts the webhook URLs of
+alerts and reports. Anyone who can read your database can read them, and with them use the dashboard. That is no more
+than the database itself already gives them. To keep the settings key apart, set `SHARDLENS_SETTINGS_KEY` in the
+environment of every process (or `mongodb: { settingsKey }`): it wins over the stored one.
+
+[Audit mode](../../guides/audit-mode/) needs an audit key, which is never kept in MongoDB: pass it from your
+environment with `mongodb: { uri, auditKey: process.env.SHARDLENS_AUDIT_KEY }` and `mode: 'audit'`.
+
+## Size and the Atlas free tier
+
+The free tier allows 512 MB of storage and 100 operations a second.
+
+- **Operations** are far off for most bots. Each process writes a batch about every 5 seconds, a few operations whatever
+  the number of events in it; the background jobs add a few a minute, and live tiles cost nothing while no dashboard
+  is open.
+- **Storage** is what fills, mostly with single events, which go after the days set in **Settings → Data retention**.
+  A slash command takes about 360 bytes uncompressed (about 150 on disk), with its share of the unique-user counts and
+  rollups on top. At the default 35 days that is room for roughly 30,000 commands a day; at 14 days, about 75,000.
+  Counts by hour and day stay small for years.
+
+Past that, keep single events for fewer days, or move to a paid tier.
+
+## Compared with the other setups
+
+- **The [standalone collector](../docker-compose/)** runs on PostgreSQL on a server of yours, takes events from bots
+  anywhere over HTTPS, and can mirror to [ClickHouse](../scaling/) for very large bots.
+- **[Embedded mode](../embedded/)** runs the collector in the bot on PGlite, a PostgreSQL in a folder: one process
+  only, no database server.
+- **On MongoDB** runs the collector in every process of the bot, on your database. There is no ClickHouse mirror and
+  no [event sinks](../your-own-database/) here: the data is already in your database.
+
+Moving data between MongoDB and PostgreSQL isn't automated.

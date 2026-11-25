@@ -1,12 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import { openApiDocument } from '../openapi.js';
-import { badgeValue } from '../query/reports.js';
 import { runQuery } from '../query/run.js';
 import { QuerySpec } from '../query/spec.js';
 import { bearerToken } from '../security/auth.js';
 import { clientKey, type Deps } from '../server.js';
-import { activeSalts } from '../storage/maintenance.js';
-import type { SaltPeriod } from '../storage/periods.js';
+import { activeSalts } from '../storage/salts.js';
 import { requireReader } from './guard.js';
 
 /** How often a live stream sends a heartbeat. `@shardlens/client` gives up on a stream that is quiet for three. */
@@ -16,26 +14,19 @@ export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void>
   app.get('/v1/config', { config: { rateLimit: { max: 120, timeWindow: '1 minute' } } }, async (req, reply) => {
     const auth = await deps.keys.verify(bearerToken(req), 'ingest');
     if (!auth) return reply.code(401).send({ error: 'unauthorized' });
-    const appRow = await deps.db.query<{ mode: 'privacy' | 'audit'; salt_period: SaltPeriod }>(
-      'SELECT mode, salt_period FROM apps WHERE app_id = $1',
-      [auth.appId],
-    );
-    const a = appRow.rows[0];
+    const a = await deps.store.apps.get(auth.appId);
     if (!a) return reply.code(404).send({ error: 'unknown_app' });
-    const sampling = await deps.db.query<{ value: Record<string, number> }>(
-      "SELECT value FROM settings WHERE app_id = $1 AND key = 'sampling'",
-      [auth.appId],
-    );
-    const salts = await activeSalts(deps.db, auth.appId, a.salt_period);
+    const sampling = await deps.store.settings.get(auth.appId, 'sampling');
+    const salts = await activeSalts(deps.store, auth.appId, a.saltPeriod);
     reply.header('cache-control', 'no-store');
     return {
       v: 1,
       appId: auth.appId,
       mode: a.mode,
-      saltPeriod: a.salt_period,
+      saltPeriod: a.saltPeriod,
       salts: salts.map((s) => ({ period: s.period, salt: s.secret.toString('base64url') })),
-      sampling: sampling.rows[0]?.value ?? {},
-      serverTime: new Date().toISOString(),
+      sampling: sampling ?? {},
+      serverTime: new Date(deps.store.now()).toISOString(),
     };
   });
 
@@ -43,20 +34,14 @@ export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void>
     const appId = await requireReader(deps, req, reply);
     if (!appId) return;
     const spec = QuerySpec.parse(req.body);
-    return runQuery(deps.db, appId, spec, new Date(), deps.analytics);
+    return runQuery(deps.store, appId, spec, new Date(), deps.analytics);
   });
 
   app.get('/v1/meta', async (req, reply) => {
     const appId = await requireReader(deps, req, reply);
     if (!appId) return;
-    const res = await deps.db.query(
-      `SELECT a.app_id::text AS "appId", coalesce(nullif(a.name, ''), i.name, 'Your bot') AS name, a.mode,
-              a.salt_period AS "saltPeriod", a.timezone, a.raw_retention_days AS "rawRetentionDays"
-         FROM apps a LEFT JOIN app_info i USING (app_id) WHERE a.app_id = $1`,
-      [appId],
-    );
     return {
-      ...res.rows[0],
+      ...(await deps.store.apps.meta(appId)),
       auditKeyConfigured: deps.config.auditKey !== undefined,
       discordLogin: deps.config.discord !== undefined,
       webhookEventsConfigured: deps.config.discordPublicKey !== undefined,
@@ -88,32 +73,18 @@ export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void>
       'x-accel-buffering': 'no',
     });
     res.write('retry: 5000\n\n');
+    const unwatch = deps.live.watch();
 
     let slow: Record<string, unknown> = {};
     let slowAt = 0;
     const refreshSlow = async () => {
-      const [p95, shards, servers] = await Promise.all([
-        deps.db.query<{ p95: number | null }>(
-          `SELECT shardlens_hist_quantile(shardlens_hist_sum(shardlens_hist_one(ack_ms, weight)), 0.95)::float8 AS p95
-             FROM interactions WHERE app_id = $1 AND ts > now() - interval '5 minutes'`,
-          [appId],
-        ),
-        deps.db.query<{ shard: number; ping: number; fresh: boolean }>(
-          `SELECT DISTINCT ON (shard) shard, value::float8 AS ping, ts > now() - interval '2 minutes' AS fresh
-             FROM gauges WHERE app_id = $1 AND name = 'shard.ping_ms' AND ts > now() - interval '1 hour'
-            ORDER BY shard, ts DESC`,
-          [appId],
-        ),
-        deps.db.query<{ n: number }>('SELECT count(*)::int AS n FROM guilds WHERE app_id = $1 AND left_at IS NULL', [
-          appId,
-        ]),
-      ]);
+      const { p95Ms5m, shards, servers } = await deps.store.live.recent(appId);
       slow = {
-        p95Ms5m: p95.rows[0]?.p95 ?? null,
-        shards: shards.rows,
-        activeShards: shards.rows.filter((s) => s.fresh).length,
-        staleShards: shards.rows.filter((s) => !s.fresh).map((s) => s.shard),
-        servers: servers.rows[0]?.n ?? 0,
+        p95Ms5m,
+        shards,
+        activeShards: shards.filter((s) => s.fresh).length,
+        staleShards: shards.filter((s) => !s.fresh).map((s) => s.shard),
+        servers,
       };
       slowAt = Date.now();
     };
@@ -153,6 +124,7 @@ export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void>
     streams.add(end);
     req.raw.on('close', () => {
       streams.delete(end);
+      unwatch();
       closed = true;
       clearInterval(timer);
       clearInterval(heartbeat);
@@ -174,15 +146,12 @@ export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void>
     const metric = raw.replace(/\.svg$/, '');
     const label = BADGE_LABELS[metric];
     if (!label) return reply.code(404).send({ error: 'not_found' });
-    const enabled = await deps.db.query<{ on: boolean }>(
-      "SELECT value ? $2 AS on FROM settings WHERE app_id = $1 AND key = 'badges'",
-      [deps.config.appId, metric],
-    );
-    if (!enabled.rows[0]?.on) return reply.code(404).send({ error: 'badge_disabled' });
+    const enabled = await deps.store.settings.get(deps.config.appId, 'badges');
+    if (!enabled?.includes(metric)) return reply.code(404).send({ error: 'badge_disabled' });
     const cached = badgeCache.get(metric);
     let svg = cached && Date.now() - cached.at < 600_000 ? cached.svg : undefined;
     if (!svg) {
-      const value = await badgeValue(deps.db, deps.config.appId, metric);
+      const value = await deps.store.query.badge(deps.config.appId, metric);
       svg = badgeSvg(
         label,
         value === null ? 'n/a' : new Intl.NumberFormat('en', { notation: 'compact' }).format(value),
@@ -204,7 +173,7 @@ export async function apiRoutes(app: FastifyInstance, deps: Deps): Promise<void>
   app.get('/healthz', async () => ({ ok: true }));
   app.get('/readyz', async (_req, reply) => {
     try {
-      await deps.db.query('SELECT 1 FROM pgmigrations LIMIT 1');
+      await deps.store.ready();
       return { ok: true };
     } catch {
       return reply.code(503).send({ ok: false });

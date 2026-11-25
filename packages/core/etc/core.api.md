@@ -45,6 +45,7 @@ export function bucketUpperMs(i: number): number;
 // @public (undocumented)
 export interface ClientOptions {
     apiKey?: string | undefined;
+    collectorName?: string;
     dryRun?: boolean;
     endpoint?: string | undefined;
     environment?: string;

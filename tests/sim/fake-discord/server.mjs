@@ -403,6 +403,7 @@ const routes = [
     },
   ],
   ['POST', /^\/channels\/\d+\/typing$/, () => [204]],
+  ['PUT', /^\/guilds\/\d+\/bans\/\d+$/, () => [204]],
   [
     'POST',
     /^\/users\/@me\/channels$/,

@@ -1,8 +1,17 @@
 import { readFileSync } from 'node:fs';
 import { uuidv7 } from '@shardlens/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { runRollups } from '../src/jobs/rollups.js';
-import { APP_ID, envelope, type Harness, ingest, interaction, query, sdkHasher, startHarness } from './harness.js';
+import {
+  APP_ID,
+  envelope,
+  type Harness,
+  ingest,
+  interaction,
+  onPostgres,
+  query,
+  sdkHasher,
+  startHarness,
+} from './harness.js';
 
 const HOUR = 3_600_000;
 const GUILD_A = '112233445566778899';
@@ -55,7 +64,7 @@ beforeAll(async () => {
   const res = await ingest(h.app, envelope(events));
   expect(res.statusCode).toBe(202);
   expect(res.json()).toMatchObject({ rejected: [] });
-  await runRollups(h.db, new Date());
+  await h.store.jobs.runRollups(new Date());
 }, 120_000);
 
 afterAll(async () => {
@@ -146,12 +155,16 @@ describe('cohort builder', () => {
 
 describe('interactions.by_guild', () => {
   it('keeps the server out of the interactions rollup and in its own metric', async () => {
-    const rows = await h.db.query<{ metric: string; dims: Record<string, unknown> }>(
-      "SELECT metric, dims FROM rollup_1h WHERE app_id = $1 AND metric LIKE 'interactions%'",
-      [APP_ID],
-    );
-    const plain = rows.rows.filter((r) => r.metric === 'interactions');
-    const byGuild = rows.rows.filter((r) => r.metric === 'interactions.by_guild');
+    const rows = onPostgres
+      ? (
+          await h.db.query<{ metric: string; dims: Record<string, unknown> }>(
+            "SELECT metric, dims FROM rollup_1h WHERE app_id = $1 AND metric LIKE 'interactions%'",
+            [APP_ID],
+          )
+        ).rows
+      : await h.mongo.c.rollup1h.find({ appId: APP_ID, metric: /^interactions/ }).toArray();
+    const plain = rows.filter((r) => r.metric === 'interactions');
+    const byGuild = rows.filter((r) => r.metric === 'interactions.by_guild');
     expect(plain.length).toBeGreaterThan(0);
     expect(plain.every((r) => !('guild' in r.dims))).toBe(true);
     expect(new Set(byGuild.map((r) => r.dims.guild))).toEqual(new Set([GUILD_A, GUILD_B]));
@@ -192,7 +205,7 @@ describe('interactions.by_guild', () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it('migration 003 converts old rollups that still carry the server', async () => {
+  it.runIf(onPostgres)('migration 003 converts old rollups that still carry the server', async () => {
     const bucket = new Date(Math.floor((Date.now() - 400 * 86_400_000) / 86_400_000) * 86_400_000);
     const old = (guild: string, count: number) => ({
       kind: 1,

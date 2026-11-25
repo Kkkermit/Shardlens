@@ -4,8 +4,17 @@ import { spawnSync } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const PASSWORD = 'sim';
+/** Shaped like an Atlas password, so the leak check finds a connection string that was logged. */
+export const MONGO_PASSWORD = 'Mn9vQe2LsimPw7x';
 // Container names start with this, so two runs on one machine (with their own SIM_PORTS) don't remove each other's.
 const PREFIX = process.env.SIM_CONTAINERS ?? 'shardlens-sim';
+
+function mongoAuth() {
+  return ['-u', 'sim', '-p', MONGO_PASSWORD, '--authenticationDatabase', 'admin'];
+}
+
+/** A connection string for one database on the sim's MongoDB, from `startDatabases`'s base URL. */
+export const mongoDatabaseUrl = (base, database) => `${base}/${database}?authSource=admin`;
 
 const CONTAINERS = {
   postgres: {
@@ -26,13 +35,14 @@ const CONTAINERS = {
     ready: ['mysql', '-h127.0.0.1', '-uroot', '-e', 'SELECT 1'],
     url: (port) => `mysql://root:${PASSWORD}@127.0.0.1:${port}`,
   },
+  // With a user, like Atlas: a connection string always holds a password that must never be logged or stored.
   mongo: {
     name: `${PREFIX}-mongo`,
     image: 'mongo:8.0',
     port: 27017,
-    env: {},
-    ready: ['mongosh', '--quiet', '--eval', 'db.runCommand({ ping: 1 }).ok'],
-    url: (port) => `mongodb://127.0.0.1:${port}`,
+    env: { MONGO_INITDB_ROOT_USERNAME: 'sim', MONGO_INITDB_ROOT_PASSWORD: MONGO_PASSWORD },
+    ready: ['mongosh', '--quiet', ...mongoAuth(), '--eval', 'db.runCommand({ ping: 1 }).ok'],
+    url: (port) => `mongodb://sim:${MONGO_PASSWORD}@127.0.0.1:${port}`,
   },
 };
 
@@ -53,14 +63,29 @@ export async function startDatabases(names, ports) {
     const r = docker(['run', '-d', '--name', container, '-p', `127.0.0.1:${ports[name]}:${port}`, ...vars, image]);
     if (r.status !== 0) throw new Error(`docker run ${image} failed: ${r.error ?? r.stderr}`);
   }
-  for (const name of names) {
-    const until = Date.now() + 180_000;
-    while (docker(['exec', '-e', `MYSQL_PWD=${PASSWORD}`, CONTAINERS[name].name, ...CONTAINERS[name].ready]).status) {
-      if (Date.now() > until) throw new Error(`${CONTAINERS[name].name} did not become ready`);
-      await sleep(1_000);
-    }
-  }
+  for (const name of names) await ready(name);
   return Object.fromEntries(names.map((name) => [name, CONTAINERS[name].url(ports[name])]));
+}
+
+async function ready(name) {
+  const until = Date.now() + 180_000;
+  while (docker(['exec', '-e', `MYSQL_PWD=${PASSWORD}`, CONTAINERS[name].name, ...CONTAINERS[name].ready]).status) {
+    if (Date.now() > until) throw new Error(`${CONTAINERS[name].name} did not become ready`);
+    await sleep(1_000);
+  }
+}
+
+/** A database outage: stops the container, keeping its data, as a restart or a network cut would. */
+export function stopDatabase(name) {
+  const r = docker(['stop', '-t', '5', CONTAINERS[name].name]);
+  if (r.status !== 0) throw new Error(`docker stop ${CONTAINERS[name].name} failed: ${r.error ?? r.stderr}`);
+}
+
+/** Ends the outage: starts the container again and resolves once it answers. */
+export async function restartDatabase(name) {
+  const r = docker(['start', CONTAINERS[name].name]);
+  if (r.status !== 0) throw new Error(`docker start ${CONTAINERS[name].name} failed: ${r.error ?? r.stderr}`);
+  await ready(name);
 }
 
 /** Removes the sim's containers (only those, by exact name) and their volumes. Missing ones are fine. */
@@ -68,13 +93,22 @@ export function removeDatabases() {
   docker(['rm', '-f', '-v', ...Object.values(CONTAINERS).map((c) => c.name)]);
 }
 
-export const mongosh = (database, script) => exec('mongo', ['mongosh', '--quiet', database, '--eval', script]);
+export const mongosh = (database, script) =>
+  exec('mongo', ['mongosh', '--quiet', ...mongoAuth(), database, '--eval', script]);
 
 /** Everything a database holds, as text. */
 export function dump(db, database) {
   if (db === 'postgres') return exec('postgres', ['pg_dump', '-U', 'shardlens', database]);
   if (db === 'mysql') return exec('mysql', ['mysqldump', '-uroot', '--no-tablespaces', database]);
   return mongosh(database, 'db.getCollectionNames().forEach((c) => print(c, EJSON.stringify(db[c].find().toArray())))');
+}
+
+/** What Shardlens keeps in a bot's own MongoDB (its `shardlens_` collections), as text: not the bot's own data. */
+export function dumpShardlens(database) {
+  return mongosh(
+    database,
+    "db.getCollectionNames().filter((c) => c.startsWith('shardlens_')).forEach((c) => print(c, EJSON.stringify(db[c].find().toArray())))",
+  );
 }
 
 /** Events in a copy (the event sink's default table or collection). */

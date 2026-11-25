@@ -41,6 +41,6 @@ Grafana dashboard in `deploy/grafana` works with either.
 
 - [Exporter-only mode](https://kkkermit.github.io/Shardlens/self-hosting/exporter-only/) ·
   [documentation](https://kkkermit.github.io/Shardlens/)
-- Using an AI coding agent? Point it at [`llms.txt`](https://kkkermit.github.io/Shardlens/llms.txt), the docs as plain
-  text.
+- Using an AI coding agent? Point it at [`exporter-otel.md`](https://kkkermit.github.io/Shardlens/prompts/exporter-otel.md), a self-contained prompt for adding this package,
+  or [`llms.txt`](https://kkkermit.github.io/Shardlens/llms.txt), the docs as plain text.
 - [Source and issues](https://github.com/Kkkermit/Shardlens) · MIT licence · not affiliated with Discord

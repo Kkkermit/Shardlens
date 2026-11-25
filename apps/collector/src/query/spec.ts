@@ -191,4 +191,6 @@ export const QuerySpec = z.discriminatedUnion('kind', [
 ]);
 
 export type QuerySpec = z.output<typeof QuerySpec>;
+/** The spec of one query kind. */
+export type Spec<K extends QuerySpec['kind']> = Extract<QuerySpec, { kind: K }>;
 export type Filter = z.output<typeof Filter>;

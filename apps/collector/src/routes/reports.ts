@@ -2,11 +2,11 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { isDiscordWebhookUrl, maskStoredWebhook } from '../discord-webhook.js';
 import { dashboardUrl } from '../env.js';
-import { REPORT_SCHEDULES, type ReportSchedule, sendReportNow } from '../jobs/reports.js';
+import { REPORT_SCHEDULES, sendReportNow } from '../jobs/reports.js';
 import { auditCipher } from '../security/crypto.js';
 import type { Deps } from '../server.js';
 import { EnabledBody, IdParam } from './admin.js';
-import { adminAudit, requireAdmin } from './guard.js';
+import { requireAdmin } from './guard.js';
 
 const MAX_REPORTS = 10;
 
@@ -32,36 +32,20 @@ export async function reportRoutes(app: FastifyInstance, deps: Deps): Promise<vo
   app.get('/v1/reports', async (req, reply) => {
     const admin = await requireAdmin(deps, req, reply);
     if (!admin) return;
-    const rows = await deps.db.query<{
-      id: string;
-      name: string;
-      schedule: ReportSchedule;
-      hour: number;
-      weekday: number;
-      webhook_enc: Buffer;
-      enabled: boolean;
-      last_sent: Date | null;
-      last_error: string | null;
-    }>(
-      `SELECT id::text, name, schedule, hour, weekday, webhook_enc, enabled, last_sent, last_error
-         FROM reports WHERE app_id = $1 ORDER BY id`,
-      [admin.appId],
-    );
-    const zone = await deps.db.query<{ timezone: string }>('SELECT timezone FROM apps WHERE app_id = $1', [
-      admin.appId,
-    ]);
+    const reports = await deps.store.reports.list(admin.appId);
+    const appRecord = await deps.store.apps.get(admin.appId);
     return {
-      timezone: zone.rows[0]?.timezone ?? 'UTC',
-      reports: rows.rows.map((r) => ({
+      timezone: appRecord?.timezone ?? 'UTC',
+      reports: reports.map((r) => ({
         id: r.id,
         name: r.name,
         schedule: r.schedule,
         hour: r.hour,
         weekday: r.weekday,
-        webhook: maskStoredWebhook(cipher, r.webhook_enc),
+        webhook: maskStoredWebhook(cipher, r.webhook),
         enabled: r.enabled,
-        lastSent: r.last_sent,
-        lastError: r.last_error,
+        lastSent: r.lastSent,
+        lastError: r.lastError,
       })),
     };
   });
@@ -70,22 +54,18 @@ export async function reportRoutes(app: FastifyInstance, deps: Deps): Promise<vo
     const admin = await requireAdmin(deps, req, reply, { mutate: true });
     if (!admin) return;
     const body = ReportBody.parse(req.body ?? {});
-    const existing = await deps.db.query<{ n: number }>('SELECT count(*)::int AS n FROM reports WHERE app_id = $1', [
-      admin.appId,
-    ]);
-    if ((existing.rows[0]?.n ?? 0) >= MAX_REPORTS) {
+    if ((await deps.store.reports.count(admin.appId)) >= MAX_REPORTS) {
       return reply.code(400).send({ error: 'too_many_reports', message: `At most ${MAX_REPORTS} reports.` });
     }
-    const res = await deps.db.query<{ id: string }>(
-      `INSERT INTO reports (app_id, name, schedule, hour, weekday, webhook_enc)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id::text`,
-      [admin.appId, body.name, body.schedule, body.hour, body.weekday, cipher.encrypt(body.webhookUrl)],
-    );
-    await adminAudit(deps, admin.appId, admin.userId, 'report_create', {
-      id: res.rows[0]?.id,
+    const id = await deps.store.reports.create(admin.appId, {
+      name: body.name,
       schedule: body.schedule,
+      hour: body.hour,
+      weekday: body.weekday,
+      webhook: cipher.encrypt(body.webhookUrl),
     });
-    return reply.code(201).send({ id: res.rows[0]?.id });
+    await deps.store.adminAudit.record(admin.appId, admin.userId, 'report_create', { id, schedule: body.schedule });
+    return reply.code(201).send({ id });
   });
 
   app.patch('/v1/reports/:id', async (req, reply) => {
@@ -93,12 +73,9 @@ export async function reportRoutes(app: FastifyInstance, deps: Deps): Promise<vo
     if (!admin) return;
     const { id } = IdParam.parse(req.params);
     const { enabled } = EnabledBody.parse(req.body ?? {});
-    const res = await deps.db.query('UPDATE reports SET enabled = $3 WHERE app_id = $1 AND id = $2', [
-      admin.appId,
-      id,
-      enabled,
-    ]);
-    if (!res.rowCount) return reply.code(404).send({ error: 'not_found' });
+    if (!(await deps.store.reports.setEnabled(admin.appId, id, enabled))) {
+      return reply.code(404).send({ error: 'not_found' });
+    }
     return { ok: true };
   });
 
@@ -106,9 +83,8 @@ export async function reportRoutes(app: FastifyInstance, deps: Deps): Promise<vo
     const admin = await requireAdmin(deps, req, reply, { mutate: true });
     if (!admin) return;
     const { id } = IdParam.parse(req.params);
-    const res = await deps.db.query('DELETE FROM reports WHERE app_id = $1 AND id = $2', [admin.appId, id]);
-    if (!res.rowCount) return reply.code(404).send({ error: 'not_found' });
-    await adminAudit(deps, admin.appId, admin.userId, 'report_delete', { id });
+    if (!(await deps.store.reports.delete(admin.appId, id))) return reply.code(404).send({ error: 'not_found' });
+    await deps.store.adminAudit.record(admin.appId, admin.userId, 'report_delete', { id });
     return { ok: true };
   });
 
@@ -119,7 +95,7 @@ export async function reportRoutes(app: FastifyInstance, deps: Deps): Promise<vo
       const admin = await requireAdmin(deps, req, reply, { mutate: true });
       if (!admin) return;
       const { id } = IdParam.parse(req.params);
-      const result = await sendReportNow(deps.db, admin.appId, id, {
+      const result = await sendReportNow(deps.store, admin.appId, id, {
         settingsKey: deps.config.settingsKey,
         dashboardUrl: dashboardUrl(deps.config),
       });

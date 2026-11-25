@@ -1,16 +1,35 @@
 ---
 title: Backups
-description: Backing up and restoring the collector's PostgreSQL database.
+description: Backing up and restoring what the collector keeps, on MongoDB or PostgreSQL.
 sidebar:
   order: 2
 ---
 
 import { Aside, Steps } from '@astrojs/starlight/components';
 
-Everything Shardlens stores is in PostgreSQL. Back it up with `pg_dump`, keep `.env` safe separately, and test a
-restore now and then.
+Everything Shardlens stores is in its database. On PostgreSQL, back it up with `pg_dump` and keep `.env` safe
+separately; on MongoDB, with `mongodump` or your host's own backups. Test a restore now and then.
 
-## Daily backup
+## On MongoDB
+
+Shardlens's collections all start with `shardlens_`, in the database the connection string names. If your database
+already has backups (Atlas's, or your own `mongodump`), they hold Shardlens too. To back up Shardlens alone:
+
+```sh
+mongodump --uri "$MONGODB_URI" --nsInclude 'mybot.shardlens_*' --gzip --archive="shardlens-$(date +%F).gz"
+```
+
+and to restore it, with the bot stopped:
+
+```sh
+mongorestore --uri "$MONGODB_URI" --nsInclude 'mybot.shardlens_*' --drop --gzip --archive=shardlens-2026-11-24.gz
+```
+
+The dump includes `shardlens_secrets`: the app's keys and the settings key that decrypts alert and report webhooks.
+Store it as you would the database itself. The audit key is never in the database: keep a copy of
+`SHARDLENS_AUDIT_KEY` beside your backups if you use [audit mode](../../guides/audit-mode/).
+
+## Daily backup on PostgreSQL
 
 From the folder with `docker-compose.yml`:
 

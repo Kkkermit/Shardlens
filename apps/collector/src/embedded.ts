@@ -21,6 +21,7 @@ import { startCollector } from './app.js';
 import type { Config } from './env.js';
 import { applyMigrations } from './migrate.js';
 import { PG_COMPATIBLE_PARSERS, pgliteDb } from './storage/pglite.js';
+import { PostgresStore } from './storage/postgres/store.js';
 import { SINK_URL, type SinkSettings } from './storage/sink.js';
 
 export type { EventSink, SinkSettings, StoredEvent } from './storage/sink.js';
@@ -195,8 +196,8 @@ export async function startEmbeddedCollector(options: EmbeddedCollectorOptions):
       logLevel: options.logLevel ?? 'warn',
       sink: options.sink,
     };
-    const collector = await startCollector(config, db, migrationsApplied);
-    const listening = new URL(collector.address);
+    const collector = await startCollector(config, new PostgresStore(db), migrationsApplied);
+    const listening = new URL(collector.address ?? `http://${host}:${port}`);
     // The SDK talks to the loopback address even when the dashboard listens more widely.
     const url = `http://127.0.0.1:${listening.port}`;
     let closed: Promise<void> | undefined;

@@ -12,7 +12,6 @@ import {
 import { uuidv7 } from '@shardlens/core';
 import { afterAll, beforeAll, describe, expect, expectTypeOf, it } from 'vitest';
 import { z } from 'zod';
-import { backfillRollups, runUniques } from '../src/jobs/rollups.js';
 import {
   APP_ID,
   envelope,
@@ -654,16 +653,11 @@ async function seed() {
   expect(delivered.statusCode).toBe(204);
 
   // What Settings would hold: a required permission the bot lacks in these servers, and a price for the SKU.
-  await h.db.query('INSERT INTO settings (app_id, key, value) VALUES ($1, $2, $3), ($1, $4, $5)', [
-    APP_ID,
-    'required_permissions',
-    JSON.stringify('8192'),
-    'sku_prices',
-    JSON.stringify({ [SKU]: { amount: 4.99, currency: 'USD' } }),
-  ]);
+  await h.store.settings.set(APP_ID, 'required_permissions', '8192');
+  await h.store.settings.set(APP_ID, 'sku_prices', { [SKU]: { amount: 4.99, currency: 'USD' } });
 
-  await backfillRollups(h.db, new Date(t0 - HOUR), new Date(now + MINUTE));
-  await runUniques(h.db);
+  await h.store.jobs.backfillRollups(new Date(t0 - HOUR), new Date(now + MINUTE));
+  await h.store.jobs.runUniques();
 }
 
 beforeAll(async () => {

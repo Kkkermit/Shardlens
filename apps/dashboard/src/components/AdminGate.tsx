@@ -1,10 +1,10 @@
 import { useMe } from '../api';
 import { PageHead, Panel } from './ui';
 
-/** Admin pages need a Discord sign-in (owner or team member). */
+/** Admin pages need a Discord sign-in (owner or team member), or a one-time sign-in link. */
 export function useAdminGate() {
   const me = useMe();
-  return { loading: me.isLoading, allowed: me.data?.method === 'discord' };
+  return { loading: me.isLoading, allowed: me.data?.method === 'discord' || me.data?.method === 'link' };
 }
 
 export function NeedsDiscord(props: { title: string }) {

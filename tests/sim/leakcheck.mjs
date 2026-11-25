@@ -1,12 +1,12 @@
 // Searches everything a simulated install stored or logged for what must never be there: raw user IDs, usernames,
 // display names, avatars, the bot token, interaction tokens and text users typed.
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'node:url';
 import { BOTS } from './bots.mjs';
-import { copyRows, dump } from './databases.mjs';
+import { copyRows, dump, dumpShardlens, MONGO_PASSWORD } from './databases.mjs';
 
 const asText = (rows) =>
   JSON.stringify(rows, (_k, v) =>
@@ -48,9 +48,10 @@ function dumpSqlite(file) {
 
 /** Resolves with what was found where, how much was searched, and how many events the install's copy holds. */
 export async function leakCheck(bot, { dir, logs, needles: { token, users, interactionTokens } }) {
-  const { embedded, copy } = BOTS[bot];
+  const { embedded, copy, mongodb } = BOTS[bot];
   const needles = [
     ['the bot token', token],
+    ['the MongoDB password', MONGO_PASSWORD],
     ...users.flatMap((u) => [
       [`the user ID of ${u.username}`, u.id],
       [`the username ${u.username}`, u.username],
@@ -67,12 +68,15 @@ export async function leakCheck(bot, { dir, logs, needles: { token, users, inter
     sources['the collector database'] = await dumpPglite(dir, embedded.dir);
   } else {
     sources['the collector log'] = readFileSync(join(logs, `${bot}-collector.log`), 'utf8');
-    sources['the collector database'] = dump('postgres', 'shardlens');
+    // On MongoDB, what Shardlens keeps beside the bot's own collections (which may hold user IDs of the bot's own).
+    sources['the collector database'] = mongodb ? dumpShardlens(mongodb.database) : dump('postgres', 'shardlens');
   }
+  const dashboardLog = join(logs, `${bot}-dashboard.log`);
+  if (existsSync(dashboardLog)) sources['the shardlens dashboard log'] = readFileSync(dashboardLog, 'utf8');
   let rows;
-  if (copy.sqlite) {
+  if (copy?.sqlite) {
     ({ text: sources['the copy'], rows } = dumpSqlite(join(dir, copy.sqlite)));
-  } else {
+  } else if (copy) {
     const [db, database] = Object.entries(copy)[0];
     sources['the copy'] = dump(db, database);
     rows = copyRows(db, database);

@@ -240,6 +240,28 @@ describe('ShardlensClient', () => {
     expect(lines.join(' ')).not.toContain('slk_ingest_test');
   });
 
+  it('names the collector as it is told to, for one that answers in the same process', async () => {
+    let down = true;
+    const collector = fakeCollector();
+    const lines: string[] = [];
+    makeClient({
+      fetch: ((input, init) =>
+        down ? Promise.reject(new Error('connect ECONNREFUSED')) : collector.fetch(input, init)) as typeof fetch,
+      collectorName: 'MongoDB',
+      logger: { warn: (m) => lines.push(`warn ${m}`), info: (m) => lines.push(`info ${m}`) },
+      random: () => 0,
+    });
+    vi.useFakeTimers();
+    await vi.advanceTimersByTimeAsync(10_000);
+    down = false;
+    await vi.advanceTimersByTimeAsync(120_000);
+    vi.useRealTimers();
+    expect(lines).toEqual([
+      "warn Shardlens: can't reach MongoDB (connect ECONNREFUSED). Retrying; events wait in memory.",
+      'info Shardlens: connected to MongoDB.',
+    ]);
+  });
+
   it('says so at most once every 5 minutes while the collector flaps', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     const replies: Reply[] = [];

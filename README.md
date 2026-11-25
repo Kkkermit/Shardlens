@@ -7,7 +7,7 @@
 **Know what your Discord bot is doing, without spying on the people who use it.**
 
 Self-hosted analytics and health monitoring for discord.js bots.<br />
-Three lines to install. No privileged intents. User IDs never leave your bot.
+One line to install, on your bot's own MongoDB. No privileged intents. User IDs never leave your bot.
 
 [![CI](https://github.com/Kkkermit/Shardlens/actions/workflows/ci.yml/badge.svg)](https://github.com/Kkkermit/Shardlens/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@shardlens/discordjs?label=%40shardlens%2Fdiscordjs&color=2a78d6)](https://www.npmjs.com/package/@shardlens/discordjs)
@@ -32,45 +32,49 @@ Three lines to install. No privileged intents. User IDs never leave your bot.
   often they fail, and whether you are answering inside Discord's 3-second deadline.
 - **Private by design, not by policy.** User IDs are hashed inside your bot with a salt that rotates and is then
   destroyed. Message content is never collected. There is no per-user view to build.
-- **Yours.** One `docker compose up` on your own server. No account, no telemetry, no vendor. MIT throughout.
+- **Yours.** In the MongoDB your bot already uses, or one `docker compose up` on your own server. No account, no
+  telemetry, no vendor. MIT throughout.
 - **Never hurts your bot.** Bounded memory, no I/O in event listeners, every SDK error caught and counted. Under 50
   microseconds per interaction.
 
 ## Quick start
 
-**1. Run the collector** on any server with Docker and a domain pointing at it:
+**On the MongoDB your bot already uses** (Atlas, its free tier included, or your own): nothing else to run.
 
 ```sh
-npx shardlens init --domain stats.example.com --app-id 123456789012345678
-cd shardlens && docker compose up -d  # Caddy (HTTPS) → collector and dashboard → PostgreSQL
+npm install @shardlens/discordjs @shardlens/collector
 ```
-
-`init` writes the Compose file, a `.env` with generated secrets and keys, and a `bot.env` with the two settings your
-bot needs. No server? [Embedded mode](https://kkkermit.github.io/Shardlens/self-hosting/embedded/) runs the collector
-inside your bot instead.
-
-**2. Add three lines to your bot** (`npm install @shardlens/discordjs`). Only the `Guilds` intent is needed:
 
 ```ts
 import { Client, GatewayIntentBits } from 'discord.js';
 import { createShardlens } from '@shardlens/discordjs';
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
-createShardlens(client, {
-  endpoint: process.env.SHARDLENS_URL, // https://stats.example.com
-  apiKey: process.env.SHARDLENS_INGEST_KEY, // slk_ingest_…
-});
+createShardlens(client, { mongodb: process.env.MONGODB_URI }); // collections prefixed shardlens_
 await client.login(process.env.DISCORD_TOKEN);
 ```
 
-**3. Open the dashboard** at your domain and sign in with your read key (`SHARDLENS_READ_KEY` in `.env`), or with
-Discord (the app owner and team) once you have set that up. `npx shardlens doctor` checks the bot's side.
+Start the bot, run a command, then open the dashboard from the bot's folder:
 
-**Already have a dashboard, or want none?** The dashboard is optional. `npx shardlens init … --dashboard own` runs
-the collector as an API, and [`@shardlens/client`](packages/client) reads every number (and, in audit mode, who ran
-what) into your own pages; `--dashboard none` runs it with no dashboard at all, for scripts, Discord reports, your own
-database or Grafana. [Choose your setup](https://kkkermit.github.io/Shardlens/getting-started/choose-your-setup/)
-compares them.
+```sh
+npx shardlens dashboard   # finds MONGODB_URI in your .env and prints a one-time sign-in link
+```
+
+Every process of a sharded bot writes to the same database, and the dashboard can also be served from the bot or a
+small host: [On your MongoDB](https://kkkermit.github.io/Shardlens/self-hosting/mongodb/). Only the `Guilds` intent
+is needed.
+
+**No MongoDB?** Run the collector on a server with Docker and a domain, on PostgreSQL:
+
+```sh
+npx shardlens init --domain stats.example.com --app-id 123456789012345678
+cd shardlens && docker compose up -d  # Caddy (HTTPS) → collector and dashboard → PostgreSQL
+```
+
+and give the bot `createShardlens(client, { endpoint: process.env.SHARDLENS_URL, apiKey: process.env.SHARDLENS_INGEST_KEY })`
+with the two settings `init` wrote to `bot.env`. The dashboard is at your domain.
+[Choose your setup](https://kkkermit.github.io/Shardlens/getting-started/choose-your-setup/) compares every option,
+including a dashboard of your own through [`@shardlens/client`](packages/client), or none.
 
 That's it. Add `lens.wrap(handler)` to record handler time and errors, `lens.wrapMessageCommand(name, handler)` for
 prefix commands, `lens.track('ticket_opened', { … })` for your own events, and `lens.shutdown()` to flush on exit.
@@ -83,7 +87,9 @@ Using Claude Code, Cursor, Copilot or Codex? Open your bot's repository and past
 Add Shardlens to this bot by following https://kkkermit.github.io/Shardlens/install.md
 ```
 
-The [prompt](apps/docs/prompts/install.md) is self-contained: it tells the agent how to find your client, what to do
+Each other package has a prompt of its own, with a copy button, on the
+[packages page](https://kkkermit.github.io/Shardlens/getting-started/packages/). The
+[install prompt](apps/docs/prompts/install.md) is self-contained: it tells the agent how to find your client, what to do
 for `ShardingManager`, internal sharding and discord-hybrid-sharding, how to wrap your handler and flush on shutdown,
 and what it must not touch (intents, audit mode, your keys). Its code samples are type-checked against the real
 packages in CI. The docs are also published as plain text for agents
@@ -115,15 +121,17 @@ packages in CI. The docs are also published as plain text for agents
 - **HTTP-interaction bots** on Cloudflare Workers, Deno and Bun with [`@shardlens/http`](packages/http).
 - **Your monitoring:** [Prometheus](packages/exporter-prometheus) and [OpenTelemetry](packages/exporter-otel)
   exporters with a ready-made Grafana dashboard, with or without a collector.
-- **Small bots:** [embedded mode](https://kkkermit.github.io/Shardlens/self-hosting/embedded/) runs the collector
-  inside your bot's own process. No Docker, no database server.
+- **Your MongoDB:** [keep everything there](https://kkkermit.github.io/Shardlens/self-hosting/mongodb/), with the
+  collector running inside your bot. Atlas's free tier included.
+- **Small bots without a database:** [embedded mode](https://kkkermit.github.io/Shardlens/self-hosting/embedded/) runs
+  the collector inside your bot's own process, on PGlite in a folder.
 - **Your own database:** [copy every event](https://kkkermit.github.io/Shardlens/self-hosting/your-own-database/) into
-  the MongoDB, MySQL, MariaDB, PostgreSQL or SQLite your bot already uses.
+  the MongoDB, MySQL, MariaDB, PostgreSQL or SQLite your bot already uses, beside a collector on PostgreSQL.
 - **Platforms:** one-file templates for [Railway](https://kkkermit.github.io/Shardlens/self-hosting/railway/) and
   [Render](https://kkkermit.github.io/Shardlens/self-hosting/render/) in [`deploy/`](deploy).
 
 Runnable [`examples/`](examples) cover a minimal bot, both sharding managers, audit mode and a Cloudflare Worker.
-`pnpm sim` installs the packed packages into four differently built bots and runs them against a fake Discord, so
+`pnpm sim` installs the packed packages into eight differently built bots and runs them against a fake Discord, so
 every release is checked the way you would use it.
 
 ## How it compares

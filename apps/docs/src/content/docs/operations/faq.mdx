@@ -16,6 +16,12 @@ The SDK adds under 50 µs of CPU per interaction and stays under 15 MB of memory
 benchmark in CI fails the build if that regresses. Listeners never do I/O; sending happens in the background every 5
 seconds.
 
+## Do I need a server?
+
+Not if your bot uses MongoDB: Shardlens keeps everything there and runs inside your bot
+([on your MongoDB](../../self-hosting/mongodb/)). Without MongoDB, the collector runs on a server with Docker, or inside
+a small single-process bot in [embedded mode](../../self-hosting/embedded/).
+
 ## What happens when the collector is down?
 
 The SDK keeps events in its bounded queue and retries with backoff. For a bot that was already running, a five-minute
@@ -23,7 +29,10 @@ outage loses nothing (this is tested). For longer outages, the least important e
 are counted, unless you turn on the [disk spool](../../getting-started/configuration/#disk-spool), which keeps them on
 disk (100 MB by default) across outages and restarts and sends them once the collector is back.
 
-A bot that **starts** while the collector is down is different: it has not yet been given the salt it hashes user IDs
+On MongoDB the same holds when the database is down: a short blip passes unnoticed, and a 45-second outage lost
+nothing in testing.
+
+A bot that **starts** while the collector (or its MongoDB) is down is different: it has not yet been given the salt it hashes user IDs
 with, and it will not send an ID unhashed. It holds up to 1,000 events for 60 seconds, then drops them and says so
 once in its log (`stats().dropped.salt_missing` counts them). Recording starts as soon as the collector answers.
 
@@ -68,7 +77,8 @@ difference; the Growth page shows the drift.
 
 ## Is it free?
 
-Yes. Shardlens is MIT-licensed. You pay only for the server you run the collector on.
+Yes. Shardlens is MIT-licensed. On your bot's MongoDB there is nothing more to pay for (Atlas's free tier fits a bot
+with tens of thousands of commands a day); otherwise you pay only for the server you run the collector on.
 
 ## Is this affiliated with Discord?
 

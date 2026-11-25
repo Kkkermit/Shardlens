@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
+import { dashboard } from './dashboard.js';
 import { doctor } from './doctor.js';
 import { readEnvFile } from './env-file.js';
 import { type DashboardChoice, init, isDashboardChoice, UsageError } from './init.js';
@@ -35,6 +36,16 @@ Commands
               --webhook-events          you receive Discord webhook events
               --retention <days>        raw-data retention, 7 to 90 (default 35)
               --audit-retention <days>  audit retention, 1 to 90 (default 30)
+  dashboard Open the dashboard of a bot that keeps its data in its own MongoDB (the mongodb option), on this
+            machine, signed in by a one-time link. Run it in your bot's folder
+              --env <name>              the setting that holds the MongoDB connection string, from the
+                                        environment or the .env here (default: the first of MONGODB_URI,
+                                        MONGO_URI, MONGODB_URL, MONGO_URL, DATABASE_URL and similar names
+                                        that holds one)
+              --uri <uri>               the connection string itself (it stays in your shell history)
+              --database <name>         the database, when the bot's mongodb option names one with database
+              --app-id <id>             your Discord application ID, when several bots share the database
+              --port <port>             the port to serve it on (default 8080)
   doctor    Check Node.js, discord.js, the collector and your ingest key
               --url <url>               the collector (default SHARDLENS_URL)
               --key <key>               an ingest key (default SHARDLENS_INGEST_KEY)
@@ -62,6 +73,10 @@ const OPTIONS = {
   'audit-retention': { type: 'string' },
   url: { type: 'string' },
   key: { type: 'string' },
+  uri: { type: 'string' },
+  env: { type: 'string' },
+  database: { type: 'string' },
+  port: { type: 'string' },
   help: { type: 'boolean', short: 'h' },
   version: { type: 'boolean', short: 'v' },
 } as const;
@@ -74,6 +89,7 @@ const COMMANDS: Record<string, readonly string[]> = {
   keys: ['scope'],
   privacy: ['audit', 'ids-only', 'option-values', 'webhook-events', 'retention', 'audit-retention'],
   doctor: ['url', 'key'],
+  dashboard: ['uri', 'env', 'database', 'app-id', 'port'],
 };
 
 /** Prints a command-line mistake and returns its exit code. */
@@ -122,6 +138,8 @@ export async function run(argv: string[]): Promise<number> {
         return keysCommand(values.scope);
       case 'privacy':
         return privacyCommand(values);
+      case 'dashboard':
+        return await dashboardCommand(values);
       default:
         return await doctorCommand(values);
     }
@@ -135,7 +153,14 @@ export async function run(argv: string[]): Promise<number> {
 
 async function initCommand(values: Values): Promise<number> {
   const missing = (['domain', 'app-id'] as const).filter((name) => !values[name]).map((name) => `--${name}`);
-  if (missing.length > 0) return usage(`init needs ${list(missing)}.`);
+  if (missing.length > 0) {
+    // A bare `init` is often someone looking for the start: with MongoDB there is no server to set up.
+    const hint =
+      missing.length === 2
+        ? `\nBot on MongoDB? It needs no init: createShardlens(client, { mongodb: process.env.MONGODB_URI }), then npx shardlens dashboard (${DOCS}/self-hosting/mongodb/).`
+        : '';
+    return usage(`init needs ${list(missing)}.${hint}`);
+  }
   const dashboard = values.dashboard;
   if (dashboard !== undefined && !isDashboardChoice(dashboard)) {
     return usage('--dashboard must be shardlens, own or none.');
@@ -184,6 +209,33 @@ const LOOK: Record<DashboardChoice, (url: string) => string> = {
      @shardlens/client and SHARDLENS_READ_KEY, or copy every event into your own database with
      SHARDLENS_SINK_URL: ${DOCS}/getting-started/choose-your-setup/`,
 };
+
+async function dashboardCommand(values: Values): Promise<number> {
+  const port = values.port === undefined ? undefined : Number(values.port);
+  if (port !== undefined && !(Number.isInteger(port) && port >= 1 && port <= 65_535)) {
+    return usage('--port must be a port number, 1 to 65535.');
+  }
+  if (values['app-id'] !== undefined && !/^\d{17,20}$/.test(values['app-id'])) {
+    return usage('--app-id must be your Discord application ID.');
+  }
+  if (values.env !== undefined && !/^[A-Za-z_]\w*$/.test(values.env)) {
+    return usage('--env takes the name of a setting, such as MY_DATABASE.');
+  }
+  return dashboard({
+    uri: values.uri,
+    envName: values.env,
+    database: values.database,
+    appId: values['app-id'],
+    port,
+    cwd: process.cwd(),
+    env: process.env,
+    until: new Promise((resolve) => {
+      process.once('SIGINT', resolve);
+      process.once('SIGTERM', resolve);
+    }),
+    print: (line) => console.log(line),
+  });
+}
 
 function keysCommand(scope = 'ingest'): number {
   if (scope !== 'ingest' && scope !== 'read' && scope !== 'activity') {

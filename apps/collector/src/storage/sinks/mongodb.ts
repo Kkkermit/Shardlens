@@ -1,4 +1,5 @@
 import { type Collection, MongoClient } from 'mongodb';
+import { databaseName } from '../mongodb/connect.js';
 import type { EventSink, StoredEvent } from '../sink.js';
 
 interface Doc {
@@ -30,10 +31,7 @@ export class MongoSink implements EventSink {
 
   constructor(url: string, table: string) {
     this.#client = new MongoClient(url, { serverSelectionTimeoutMS: 10_000, appName: 'shardlens-collector' });
-    // The database named in the URL (`mongodb://host/mydb`), or `shardlens`. Parsed by hand: a URL with several hosts
-    // (`mongodb://a:27017,b:27017/mydb`) is not a WHATWG URL.
-    const named = /^mongodb(?:\+srv)?:\/\/[^/?]*\/([^?]*)/i.exec(url)?.[1];
-    this.#database = named ? decodeURIComponent(named) : 'shardlens';
+    this.#database = databaseName(url);
     this.#table = table;
   }
 

@@ -155,6 +155,8 @@ const LOGIN_ERRORS: Record<string, string> = {
     'The bot has not connected to Shardlens yet, so its owner and team are not known. Start the bot, or sign in with a read key.',
   invalid_state: 'The sign-in link expired. Please try again.',
   discord_error: 'Discord sign-in failed. Please try again.',
+  link_expired:
+    'That sign-in link was already used, or is more than 15 minutes old. Run npx shardlens dashboard again, or restart the bot that serves the dashboard, for a new one.',
 };
 
 /** The message for an `?error=` code from the sign-in redirect. Only known codes: the URL is anyone's to write. */

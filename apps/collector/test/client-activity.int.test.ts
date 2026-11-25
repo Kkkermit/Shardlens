@@ -54,7 +54,7 @@ async function refusal(call: Promise<unknown>): Promise<ShardlensClientError> {
 
 beforeAll(async () => {
   h = await startHarness({ auditKey: Buffer.alloc(32, 9).toString('base64') });
-  await seedKey(h.db, APP_ID, ACTIVITY_KEY, 'my dashboard');
+  await seedKey(h.store, APP_ID, ACTIVITY_KEY, 'my dashboard');
   await h.app.listen({ port: 0, host: '127.0.0.1' });
   url = `http://127.0.0.1:${(h.app.server.address() as AddressInfo).port}`;
 });
@@ -78,7 +78,7 @@ describe('the activity log through @shardlens/client', () => {
   });
 
   it('reads who ran what with an activity key: filtered, page by page, and counted', async () => {
-    await h.db.query("UPDATE apps SET mode = 'audit' WHERE app_id = $1", [APP_ID]);
+    await h.store.apps.setMode(APP_ID, 'audit');
     const { hasher, period } = await sdkHasher(h.app);
     const now = Date.now();
     const run = async (userId: string, username: string, secondsAgo: number, overrides: Record<string, unknown>) =>

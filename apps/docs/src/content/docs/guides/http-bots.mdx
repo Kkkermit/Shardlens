@@ -7,10 +7,14 @@ sidebar:
 
 import { Aside, Code, TabItem, Tabs } from '@astrojs/starlight/components';
 import worker from '../../../../snippets/http-worker.ts?raw';
+import CopyPrompt from '../../../components/CopyPrompt.astro';
+import http from '../../../../prompts/http.md?raw';
 
 Bots that receive interactions over HTTP (an **Interactions Endpoint URL**) instead of the gateway use
 `@shardlens/http`. It runs on Cloudflare Workers, Deno, Bun and Node (for example with `@discordjs/core`), using
 Web-standard APIs only.
+
+<CopyPrompt prompt={http} path="prompts/http.md" what="adding Shardlens to an HTTP-interaction bot" />
 
 <Tabs syncKey="pkg">
   <TabItem label="pnpm">

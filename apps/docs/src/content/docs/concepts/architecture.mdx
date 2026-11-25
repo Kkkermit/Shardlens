@@ -1,6 +1,6 @@
 ---
 title: Architecture
-description: How the SDK, the collector, PostgreSQL and the dashboard fit together.
+description: How the SDK, the collector, its database (MongoDB or PostgreSQL) and the dashboard fit together.
 sidebar:
   order: 1
 ---
@@ -19,15 +19,22 @@ import { Aside } from '@astrojs/starlight/components';
  │                         • HMAC user hashing  │                 │
  │                         • bounded queue, gzip│── hashed ──┐    │
  └──────────────────────────────────────────────┘  batches   ▼    ▼
-                                    ┌──────────── Collector (Docker or embedded) ────────┐
+                                    ┌──── Collector (in the bot, Docker or embedded) ────┐
                                     │  Ingest API · Webhook receiver · Background jobs   │
                                     │  Query + live API · Dashboard (React)              │
                                     └──────────────────────────┬─────────────────────────┘
-                                                               │ SQL
-                                                        ┌──────▼──────┐
-                                                        │ PostgreSQL  │
-                                                        └─────────────┘
+                                                               │ Store interface
+                                                  ┌────────────┴────────────┐
+                                           ┌──────▼──────┐           ┌──────▼──────┐
+                                           │  MongoDB    │           │ PostgreSQL  │
+                                           │ (the bot's) │           │ (or PGlite) │
+                                           └─────────────┘           └─────────────┘
 ```
+
+The collector is the same program in every setup. On [your bot's MongoDB](../../self-hosting/mongodb/) it runs inside
+each bot process and the SDK hands it batches in process, with no network in between; on a server it runs in Docker
+and the SDK sends batches over HTTPS. Everything above the store (validation, sign-in, the HTTP API, jobs, the
+dashboard) is shared, and both stores answer every query the same way: the test suites run against both.
 
 ## In your bot
 
@@ -36,7 +43,8 @@ and pushes it onto a bounded queue: no I/O and no waiting on the hot path. The u
 recorded, with the salt of the period the event falls in (HMAC-SHA-256), so in privacy mode a raw ID never waits in the
 queue or leaves the process. Every 5 seconds (or sooner when the queue fills) the SDK:
 
-1. Packs up to 500 events into a batch, gzips it with `CompressionStream` and sends it with the ingest key.
+1. Packs up to 500 events into a batch, gzips it with `CompressionStream` and sends it with the ingest key (to the
+   collector in the same process, on MongoDB).
 2. Keeps the batch on failure and retries with jittered backoff (1 to 60 seconds).
 
 When the queue is full, the least important events are dropped first: gauges, then REST windows, then custom events,
@@ -52,18 +60,20 @@ and interactions and server changes last. Every drop is counted and reported in 
 - **Ingest** checks the key, decompresses with a size cap (1 MB compressed, 5 MB decompressed), validates each event
   with zod and stores it. Retried batches are recognised by event ID and stored once.
 - **Webhook receiver** verifies Discord's Ed25519 signature, answers `204` immediately and processes afterwards.
-- **Background jobs** run on one collector at a time (an advisory lock elects the leader): minute, hour and day
-  rollups every minute, unique users per salt period every 5 minutes, salt creation and destruction, partition
-  creation and retention, alerts every minute and scheduled reports.
-- **Query API** answers typed queries. Each query kind maps to a fixed, parameterised SQL template; there is no
-  free-form SQL and no grouping by user.
-- **Live API** streams live tiles over Server-Sent Events, fed by `LISTEN/NOTIFY` so it works across collectors.
+- **Background jobs** run on one collector at a time (on PostgreSQL an advisory lock elects the leader, on MongoDB a
+  lease): minute, hour and day rollups every minute, unique users per salt period every 5 minutes, salt creation and
+  destruction, partition creation and retention, alerts every minute and scheduled reports.
+- **Query API** answers typed queries. Each query kind maps to a fixed, parameterised SQL template, or to fixed
+  aggregation pipelines on MongoDB; there is no free-form query and no grouping by user.
+- **Live API** streams live tiles over Server-Sent Events, shared across collectors through `LISTEN/NOTIFY` on
+  PostgreSQL and through a small collection on MongoDB, read only while a dashboard is open.
 - **Dashboard** is a static React app served by the collector with a strict Content Security Policy.
 
-## In PostgreSQL
+## In the database
 
-Raw events go into daily partitions that are dropped whole when they expire (after 35 days by default, 7 to 90 in
-Settings). Charts read from rollups, all in UTC buckets. Every minute the job leader recomputes the last few minutes,
+On PostgreSQL, raw events go into daily partitions that are dropped whole when they expire; on MongoDB, into one
+collection per kind of event, prefixed `shardlens_`, deleted by the daily job. Either way they are kept 35 days by
+default (7 to 90 in Settings). Charts read from rollups, all in UTC buckets. Every minute the job leader recomputes the last few minutes,
 and the minutes late events landed in, then the hours and days they belong to, so every chart is about a minute behind:
 
 | What                           | Source        | Kept      | Freshness      |
@@ -79,6 +89,7 @@ and the minutes late events landed in, then the hours and days they belong to, s
 
 | Mode              | What runs                                                         | Status    |
 | ----------------- | ----------------------------------------------------------------- | --------- |
+| On MongoDB        | The collector inside each bot process, on the bot's own MongoDB; `npx shardlens dashboard` or the image for the dashboard | Available |
 | Standard          | Caddy → collector (API and dashboard) → PostgreSQL               | Available |
 | Scaled            | Several collectors behind a load balancer, one PostgreSQL        | Available |
 | Embedded          | Collector inside the bot process on in-process PostgreSQL (PGlite) | Available |

@@ -52,16 +52,17 @@ Shardlens works and why. Add an ADR when you change one of those decisions.
   dashboards and scripts; zero dependencies, Web APIs only. Its types are written by hand: the collector's
   `test/client-types.test.ts` and `test/client.int.test.ts` fail when a query spec or an answer changes without them
 - `packages/exporter-prometheus`, `packages/exporter-otel`: metrics exporters; instruments come from `EXPORTER_METRICS` in core
-- `apps/collector`: Fastify + PostgreSQL: ingest, config, query, live (SSE), auth, settings/keys/alerts, audit, privacy erase,
+- `apps/collector`: Fastify on PostgreSQL or MongoDB: ingest, config, query, live (SSE), auth, settings/keys/alerts, audit, privacy erase,
   Discord webhook events, badges; jobs (rollups, uniques, salts, retention, alerts); `dist/cli/seed.js` demo data;
   `./embedded` export (PGlite, ADR 0012); optional ClickHouse analytics store (`storage/clickhouse.ts`); the
   dashboard pages are optional (`SHARDLENS_DASHBOARD=off`) and activity keys read the audit log for other dashboards
-  (ADR 0020)
+  (ADR 0020). Every read and write goes through the `Store` interface (`storage/store.ts`, ADR 0021): the SQL is in
+  `storage/postgres/`, the MongoDB engine in `storage/mongodb/` (ADR 0022), and `./mongodb` runs it inside a bot
 - `apps/dashboard`: React dashboard served by the collector (Playwright + axe e2e in `e2e/`)
 - `apps/docs`: Starlight docs site; code samples in `snippets/` are type-checked; data, metrics, options, SDK and HTTP API pages are generated;
   `prompts/install.md` is the prompt people paste into a coding agent (served at `/install.md`, its samples are
   type-checked by `scripts/check-prompt.mjs`); `llms.txt`, `llms-small.txt` and `llms-full.txt` are generated for agents
-- `examples/`: `basic-bot` (minimal), `sharded-bot` (ShardingManager and internal), `hybrid-sharding`, `audit-mode`,
+- `examples/`: `basic-bot` (minimal), `mongodb-bot` (on its own MongoDB), `sharded-bot` (ShardingManager and internal), `hybrid-sharding`, `audit-mode`,
   `cloudflare-worker`
 - `tests/load`: k6 ingest load test (`.github/workflows/load.yml`)
 - `deploy/`: docker-compose (production, dev, ClickHouse override), Caddyfile, `.env.example`, Railway and Render

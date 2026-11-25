@@ -3,27 +3,99 @@ import { gzipSync } from 'node:zlib';
 import { UserHasher, uuidv7 } from '@shardlens/core';
 import { PostgreSqlContainer } from '@testcontainers/postgresql';
 import type { FastifyInstance } from 'fastify';
+import { GenericContainer, Wait } from 'testcontainers';
 import { createPool, type Db, migrate } from '../src/db.js';
 import type { Config } from '../src/env.js';
 import { LiveHub } from '../src/live.js';
 import { KeyStore, seedKey } from '../src/security/auth.js';
+import type { SignInLinks } from '../src/security/sign-in-links.js';
 import { buildServer } from '../src/server.js';
 import type { ClickHouseStore } from '../src/storage/clickhouse.js';
-import { ensurePartitions } from '../src/storage/maintenance.js';
+import { type Mongo, openMongo } from '../src/storage/mongodb/connect.js';
+import { MongoStore } from '../src/storage/mongodb/store.js';
+import { PostgresStore } from '../src/storage/postgres/store.js';
+import type { Store } from '../src/storage/store.js';
 
 export const APP_ID = '1234567890123456789';
 export const INGEST_KEY = `slk_ingest_${'A'.repeat(43)}`;
 export const READ_KEY = `slk_read_${'B'.repeat(43)}`;
 
+/** A store for the suites to run against, on a fresh database. */
+interface StoreUnderTest {
+  store: Store;
+  /** Its connection URL (`Config.databaseUrl`). */
+  databaseUrl: string;
+  /** The PostgreSQL pool behind the store, when it has one. */
+  db?: Db | undefined;
+  /** The MongoDB connection behind the store, when it has one. */
+  mongo?: Mongo | undefined;
+  /** Stops the store and its database. */
+  close(): Promise<void>;
+}
+
+/** Builds a store on a database of its own, migrated and empty. */
+export type StoreFactory = () => Promise<StoreUnderTest>;
+
+/** PostgreSQL in a container (16 by default: the oldest supported), migrated. */
+export const postgresStore: StoreFactory = async () => {
+  const image = process.env.SHARDLENS_TEST_PG_IMAGE ?? 'postgres:16-alpine';
+  const container = await new PostgreSqlContainer(image).start();
+  const url = container.getConnectionUri();
+  await migrate(url);
+  const db = createPool(url, 8);
+  return {
+    store: new PostgresStore(db),
+    databaseUrl: url,
+    db,
+    async close() {
+      await db.end();
+      await container.stop();
+    },
+  };
+};
+
+/**
+ * A standalone MongoDB server in a container (7.0 by default: the oldest supported), not a replica set: MongoStore
+ * must need neither transactions nor change streams.
+ */
+export const mongoStore: StoreFactory = async () => {
+  const image = process.env.SHARDLENS_TEST_MONGO_IMAGE ?? 'mongo:7.0';
+  const container = await new GenericContainer(image)
+    .withExposedPorts(27017)
+    .withWaitStrategy(Wait.forLogMessage(/Waiting for connections/))
+    .start();
+  const url = `mongodb://${container.getHost()}:${container.getMappedPort(27017)}/shardlens_test`;
+  const m = await openMongo(url);
+  return {
+    store: new MongoStore(m),
+    databaseUrl: url,
+    mongo: m,
+    async close() {
+      await m.client.close();
+      await container.stop();
+    },
+  };
+};
+
+/** The store the suites run on: MongoDB with `SHARDLENS_TEST_STORE=mongodb` (`pnpm test:int:mongodb`), else PostgreSQL. */
+export const onPostgres = process.env.SHARDLENS_TEST_STORE !== 'mongodb';
+
 export interface Harness {
-  db: Db;
+  store: Store;
+  /**
+   * The PostgreSQL pool behind `store`, for tests that set up or check rows directly. Those tests are PostgreSQL's
+   * own (`it.runIf(onPostgres)`): with another store, reading this throws.
+   */
+  readonly db: Db;
+  /** As `db`, the MongoDB collections behind `store`: with another store, reading this throws. */
+  readonly mongo: Mongo;
   app: FastifyInstance;
   live: LiveHub;
   config: Config;
   close(): Promise<void>;
 }
 
-/** Postgres in a container (16 by default: the oldest supported), migrated, with one app and two keys. */
+/** A collector on a fresh store (as `onPostgres` says, unless `store` does), with one app and two keys. */
 export async function startHarness(
   opts: {
     discordPublicKey?: string;
@@ -31,19 +103,18 @@ export async function startHarness(
     demo?: boolean;
     analytics?: ClickHouseStore;
     extraAdmins?: string[];
+    store?: StoreFactory;
+    signInLinks?: SignInLinks;
   } = {},
 ): Promise<Harness> {
-  const image = process.env.SHARDLENS_TEST_PG_IMAGE ?? 'postgres:16-alpine';
-  const container = await new PostgreSqlContainer(image).start();
-  const url = container.getConnectionUri();
-  await migrate(url);
-  const db = createPool(url, 8);
-  await db.query('INSERT INTO apps (app_id) VALUES ($1) ON CONFLICT DO NOTHING', [APP_ID]);
-  await seedKey(db, APP_ID, INGEST_KEY, 'test ingest');
-  await seedKey(db, APP_ID, READ_KEY, 'test read');
-  await ensurePartitions(db);
+  const backing = await (opts.store ?? (onPostgres ? postgresStore : mongoStore))();
+  const { store } = backing;
+  await store.apps.register(APP_ID);
+  await seedKey(store, APP_ID, INGEST_KEY, 'test ingest');
+  await seedKey(store, APP_ID, READ_KEY, 'test read');
+  await store.prepare();
   const config: Config = {
-    databaseUrl: url,
+    databaseUrl: backing.databaseUrl,
     publicUrl: new URL('https://stats.example.com'),
     appId: APP_ID,
     sessionSecret: 'x'.repeat(48),
@@ -62,20 +133,34 @@ export async function startHarness(
     host: '127.0.0.1',
     logLevel: process.env.SHARDLENS_TEST_LOG ?? 'silent',
   };
-  const live = new LiveHub(db);
+  const live = new LiveHub(store.live.channel());
   await live.start();
-  const app = await buildServer({ config, db, keys: new KeyStore(db), live, analytics: opts.analytics });
+  const app = await buildServer({
+    config,
+    store,
+    keys: new KeyStore(store),
+    live,
+    analytics: opts.analytics,
+    signInLinks: opts.signInLinks,
+  });
   await app.ready();
   return {
-    db,
+    store,
+    get db() {
+      if (!backing.db) throw new Error('This test needs PostgreSQL: it reads or writes rows directly.');
+      return backing.db;
+    },
+    get mongo() {
+      if (!backing.mongo) throw new Error('This test needs MongoDB: it reads or writes documents directly.');
+      return backing.mongo;
+    },
     app,
     live,
     config,
     async close() {
       await app.close();
       await live.stop();
-      await db.end();
-      await container.stop();
+      await backing.close();
     },
   };
 }
@@ -185,14 +270,18 @@ export function snowflakeOnShard(shard: number, count: number, seq: number): str
 
 /** Creates a dashboard session directly (as if the user signed in) and returns the cookie value. */
 export async function testSession(
-  db: Db,
+  store: Store,
   method: 'discord' | 'read_key',
   userId: string | null = '987654321098765432',
 ) {
   const token = randomBytes(32).toString('base64url');
-  await db.query(
-    "INSERT INTO sessions (id_sha256, user_id, app_id, method, expires_at) VALUES ($1, $2, $3, $4, now() + interval '1 hour')",
-    [createHash('sha256').update(token).digest(), userId, APP_ID, method],
-  );
+  await store.sessions.create({
+    idSha256: createHash('sha256').update(token).digest(),
+    appId: APP_ID,
+    userId,
+    method,
+    keyId: null,
+    expiresAt: new Date(Date.now() + 3_600_000),
+  });
   return token;
 }

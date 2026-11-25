@@ -8,7 +8,8 @@ import { TimeZoneName } from '../query/spec.js';
 import { auditCipher } from '../security/crypto.js';
 import { newApiKey } from '../security/keys.js';
 import type { Deps } from '../server.js';
-import { adminAudit, requireAdmin } from './guard.js';
+import type { AppRecord, SettingKey, SettingValues } from '../storage/store.js';
+import { requireAdmin } from './guard.js';
 
 const BADGES = ['servers', 'users-monthly', 'commands-daily'] as const;
 
@@ -85,7 +86,7 @@ export const IdParam = z.object({ id: z.string().regex(/^\d{1,18}$/) });
 /** Turns an alert or a report on or off. */
 export const EnabledBody = z.object({ enabled: z.boolean() }).strict();
 
-const SETTING_KEYS: Record<string, string> = {
+const SETTING_KEYS: Record<string, SettingKey> = {
   auditRetentionDays: 'audit_retention_days',
   requiredPermissions: 'required_permissions',
   skuPrices: 'sku_prices',
@@ -94,28 +95,18 @@ const SETTING_KEYS: Record<string, string> = {
 };
 
 async function readSettings(deps: Deps, appId: string) {
-  const app = await deps.db.query<{
-    timezone: string;
-    raw_retention_days: number;
-    mode: string;
-    salt_period: string;
-  }>('SELECT timezone, raw_retention_days, mode, salt_period FROM apps WHERE app_id = $1', [appId]);
-  const rows = await deps.db.query<{ key: string; value: unknown }>(
-    'SELECT key, value FROM settings WHERE app_id = $1',
-    [appId],
-  );
-  const s = Object.fromEntries(rows.rows.map((r) => [r.key, r.value]));
-  const a = app.rows[0];
+  const a = await deps.store.apps.get(appId);
+  const s = await deps.store.settings.all(appId);
   return {
     timezone: a?.timezone ?? 'UTC',
-    rawRetentionDays: a?.raw_retention_days ?? 35,
-    auditRetentionDays: (s.audit_retention_days as number | undefined) ?? 30,
+    rawRetentionDays: a?.rawRetentionDays ?? 35,
+    auditRetentionDays: s.audit_retention_days ?? 30,
     mode: a?.mode ?? 'privacy',
-    saltPeriod: a?.salt_period ?? 'month',
-    requiredPermissions: (s.required_permissions as string | undefined) ?? null,
-    skuPrices: (s.sku_prices as Record<string, { amount: number; currency: string }> | undefined) ?? {},
-    sampling: (s.sampling as Record<string, number> | undefined) ?? {},
-    badges: (s.badges as string[] | undefined) ?? [],
+    saltPeriod: a?.saltPeriod ?? 'month',
+    requiredPermissions: s.required_permissions ?? null,
+    skuPrices: s.sku_prices ?? {},
+    sampling: s.sampling ?? {},
+    badges: s.badges ?? [],
     auditKeyConfigured: deps.config.auditKey !== undefined,
     modeSetByEnvironment: deps.config.mode !== undefined,
   };
@@ -145,52 +136,34 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
         .code(400)
         .send({ error: 'audit_key_missing', message: 'Set SHARDLENS_AUDIT_KEY on the collector first.' });
     }
-    // Every chart query converts with this zone, so PostgreSQL must know it too, not just this runtime.
+    // Every chart query converts with this zone, so the store must know it too, not just this runtime.
     if (patch.timezone !== undefined) {
-      const known = await deps.db.query('SELECT 1 FROM pg_timezone_names WHERE name = $1', [patch.timezone]);
-      if (!known.rowCount) {
+      if (!(await deps.store.settings.supportsTimeZone(patch.timezone))) {
         return reply
           .code(400)
           .send({ error: 'invalid_request', issues: [{ path: ['timezone'], message: 'unknown time zone' }] });
       }
     }
-    const columns: Record<string, unknown> = {};
-    if (patch.timezone !== undefined) columns.timezone = patch.timezone;
-    if (patch.rawRetentionDays !== undefined) columns.raw_retention_days = patch.rawRetentionDays;
-    if (patch.mode !== undefined) columns.mode = patch.mode;
-    if (patch.saltPeriod !== undefined) columns.salt_period = patch.saltPeriod;
-    const names = Object.keys(columns);
-    if (names.length > 0) {
-      // Column names come from the fixed map above, never from input.
-      const sets = names.map((n, i) => `${n} = $${i + 2}`).join(', ');
-      await deps.db.query(`UPDATE apps SET ${sets} WHERE app_id = $1`, [admin.appId, ...names.map((n) => columns[n])]);
-    }
+    const changes: Partial<AppRecord> = {};
+    if (patch.timezone !== undefined) changes.timezone = patch.timezone;
+    if (patch.rawRetentionDays !== undefined) changes.rawRetentionDays = patch.rawRetentionDays;
+    if (patch.mode !== undefined) changes.mode = patch.mode;
+    if (patch.saltPeriod !== undefined) changes.saltPeriod = patch.saltPeriod;
+    await deps.store.apps.update(admin.appId, changes);
     for (const [field, key] of Object.entries(SETTING_KEYS)) {
       const value = (patch as Record<string, unknown>)[field];
       if (value === undefined) continue;
-      if (value === null) {
-        await deps.db.query('DELETE FROM settings WHERE app_id = $1 AND key = $2', [admin.appId, key]);
-      } else {
-        await deps.db.query(
-          `INSERT INTO settings (app_id, key, value) VALUES ($1, $2, $3)
-           ON CONFLICT (app_id, key) DO UPDATE SET value = EXCLUDED.value`,
-          [admin.appId, key, JSON.stringify(value)],
-        );
-      }
+      if (value === null) await deps.store.settings.delete(admin.appId, key);
+      else await deps.store.settings.set(admin.appId, key, value as SettingValues[SettingKey]);
     }
-    await adminAudit(deps, admin.appId, admin.userId, 'settings_update', { fields: Object.keys(patch) });
+    await deps.store.adminAudit.record(admin.appId, admin.userId, 'settings_update', { fields: Object.keys(patch) });
     return readSettings(deps, admin.appId);
   });
 
   app.get('/v1/keys', async (req, reply) => {
     const admin = await requireAdmin(deps, req, reply);
     if (!admin) return;
-    const res = await deps.db.query(
-      `SELECT id::text, scope, label, created_at AS "createdAt", last_used_at AS "lastUsedAt", revoked_at AS "revokedAt"
-         FROM api_keys WHERE app_id = $1 ORDER BY created_at DESC`,
-      [admin.appId],
-    );
-    return { rows: res.rows };
+    return { rows: await deps.store.keys.list(admin.appId) };
   });
 
   app.post('/v1/keys', async (req, reply) => {
@@ -201,71 +174,52 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
       .strict()
       .parse(req.body ?? {});
     const key = newApiKey(body.scope);
-    const res = await deps.db.query<{ id: string }>(
-      'INSERT INTO api_keys (app_id, scope, sha256, label) VALUES ($1, $2, $3, $4) RETURNING id::text',
-      [admin.appId, body.scope, Buffer.from(key.sha256, 'hex'), body.label],
-    );
-    await adminAudit(deps, admin.appId, admin.userId, 'key_create', {
-      id: res.rows[0]?.id,
+    const id = await deps.store.keys.create({
+      appId: admin.appId,
+      scope: body.scope,
+      sha256: Buffer.from(key.sha256, 'hex'),
+      label: body.label,
+    });
+    await deps.store.adminAudit.record(admin.appId, admin.userId, 'key_create', {
+      id,
       scope: body.scope,
       label: body.label,
     });
     // Shown once; only the SHA-256 is stored.
-    return reply.code(201).send({ id: res.rows[0]?.id, scope: body.scope, label: body.label, key: key.plaintext });
+    return reply.code(201).send({ id, scope: body.scope, label: body.label, key: key.plaintext });
   });
 
   app.delete('/v1/keys/:id', async (req, reply) => {
     const admin = await requireAdmin(deps, req, reply, { mutate: true });
     if (!admin) return;
     const { id } = IdParam.parse(req.params);
-    const res = await deps.db.query(
-      'UPDATE api_keys SET revoked_at = now() WHERE app_id = $1 AND id = $2 AND revoked_at IS NULL',
-      [admin.appId, id],
-    );
+    const revoked = await deps.store.keys.revoke(admin.appId, id);
     deps.keys.clear();
-    if (!res.rowCount) return reply.code(404).send({ error: 'not_found' });
+    if (!revoked) return reply.code(404).send({ error: 'not_found' });
     // "Anything using it stops working immediately": that includes dashboards signed in with it.
-    await deps.db.query('DELETE FROM sessions WHERE key_id = $1', [id]);
-    await adminAudit(deps, admin.appId, admin.userId, 'key_revoke', { id });
+    await deps.store.sessions.deleteForKey(id);
+    await deps.store.adminAudit.record(admin.appId, admin.userId, 'key_revoke', { id });
     return { ok: true };
   });
 
   app.get('/v1/alerts', async (req, reply) => {
     const admin = await requireAdmin(deps, req, reply);
     if (!admin) return;
-    const rules = await deps.db.query<{
-      id: string;
-      name: string;
-      metric: string;
-      comparator: string;
-      threshold: number;
-      window_s: number;
-      webhook_enc: Buffer;
-      enabled: boolean;
-      last_fired: Date | null;
-    }>(
-      'SELECT id::text, name, metric, comparator, threshold, window_s, webhook_enc, enabled, last_fired FROM alert_rules WHERE app_id = $1 ORDER BY id',
-      [admin.appId],
-    );
-    const history = await deps.db.query(
-      `SELECT e.ts, e.rule_id::text AS "ruleId", r.name, e.value, e.delivered, e.error
-         FROM alert_events e JOIN alert_rules r ON r.id = e.rule_id
-        WHERE e.app_id = $1 ORDER BY e.ts DESC LIMIT 50`,
-      [admin.appId],
-    );
+    const rules = await deps.store.alerts.list(admin.appId);
+    const history = await deps.store.alerts.history(admin.appId);
     return {
-      rules: rules.rows.map((r) => ({
+      rules: rules.map((r) => ({
         id: r.id,
         name: r.name,
         metric: r.metric,
         comparator: r.comparator,
         threshold: r.threshold,
-        windowS: r.window_s,
-        webhook: maskStoredWebhook(settingsCipher, r.webhook_enc),
+        windowS: r.windowS,
+        webhook: maskStoredWebhook(settingsCipher, r.webhook),
         enabled: r.enabled,
-        lastFired: r.last_fired,
+        lastFired: r.lastFired,
       })),
-      history: history.rows,
+      history,
     };
   });
 
@@ -273,21 +227,16 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
     const admin = await requireAdmin(deps, req, reply, { mutate: true });
     if (!admin) return;
     const body = AlertBody.parse(req.body ?? {});
-    const res = await deps.db.query<{ id: string }>(
-      `INSERT INTO alert_rules (app_id, name, metric, comparator, threshold, window_s, webhook_enc)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id::text`,
-      [
-        admin.appId,
-        body.name,
-        body.metric,
-        body.comparator,
-        body.threshold,
-        body.windowS,
-        settingsCipher.encrypt(body.webhookUrl),
-      ],
-    );
-    await adminAudit(deps, admin.appId, admin.userId, 'alert_create', { id: res.rows[0]?.id, metric: body.metric });
-    return reply.code(201).send({ id: res.rows[0]?.id });
+    const id = await deps.store.alerts.create(admin.appId, {
+      name: body.name,
+      metric: body.metric,
+      comparator: body.comparator,
+      threshold: body.threshold,
+      windowS: body.windowS,
+      webhook: settingsCipher.encrypt(body.webhookUrl),
+    });
+    await deps.store.adminAudit.record(admin.appId, admin.userId, 'alert_create', { id, metric: body.metric });
+    return reply.code(201).send({ id });
   });
 
   app.patch('/v1/alerts/:id', async (req, reply) => {
@@ -295,12 +244,9 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
     if (!admin) return;
     const { id } = IdParam.parse(req.params);
     const { enabled } = EnabledBody.parse(req.body ?? {});
-    const res = await deps.db.query('UPDATE alert_rules SET enabled = $3 WHERE app_id = $1 AND id = $2', [
-      admin.appId,
-      id,
-      enabled,
-    ]);
-    if (!res.rowCount) return reply.code(404).send({ error: 'not_found' });
+    if (!(await deps.store.alerts.setEnabled(admin.appId, id, enabled))) {
+      return reply.code(404).send({ error: 'not_found' });
+    }
     return { ok: true };
   });
 
@@ -308,9 +254,8 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
     const admin = await requireAdmin(deps, req, reply, { mutate: true });
     if (!admin) return;
     const { id } = IdParam.parse(req.params);
-    const res = await deps.db.query('DELETE FROM alert_rules WHERE app_id = $1 AND id = $2', [admin.appId, id]);
-    if (!res.rowCount) return reply.code(404).send({ error: 'not_found' });
-    await adminAudit(deps, admin.appId, admin.userId, 'alert_delete', { id });
+    if (!(await deps.store.alerts.delete(admin.appId, id))) return reply.code(404).send({ error: 'not_found' });
+    await deps.store.adminAudit.record(admin.appId, admin.userId, 'alert_delete', { id });
     return { ok: true };
   });
 
@@ -321,15 +266,11 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
       const admin = await requireAdmin(deps, req, reply, { mutate: true });
       if (!admin) return;
       const { id } = IdParam.parse(req.params);
-      const rule = await deps.db.query<{ name: string; webhook_enc: Buffer }>(
-        'SELECT name, webhook_enc FROM alert_rules WHERE app_id = $1 AND id = $2',
-        [admin.appId, id],
-      );
-      const row = rule.rows[0];
+      const row = await deps.store.alerts.get(admin.appId, id);
       if (!row) return reply.code(404).send({ error: 'not_found' });
       let url: string;
       try {
-        url = settingsCipher.decrypt(row.webhook_enc);
+        url = settingsCipher.decrypt(row.webhook);
       } catch {
         return reply.code(502).send({ error: 'webhook_failed', message: UNREADABLE_WEBHOOK });
       }

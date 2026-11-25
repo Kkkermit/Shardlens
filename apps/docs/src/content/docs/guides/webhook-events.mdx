@@ -9,7 +9,9 @@ import { Aside, Steps } from '@astrojs/starlight/components';
 
 The gateway tells your bot when it joins a server, but not when someone installs it to their **account** (user
 installs). Discord reports those, and entitlement changes, through webhook events sent to a URL you choose. Shardlens
-receives them on the collector, not in your bot.
+receives them on the collector, not in your bot. Discord needs a public HTTPS address: on
+[your bot's MongoDB](../../self-hosting/mongodb/), run the collector image on the same database for it, or serve the
+bot's dashboard behind HTTPS with `mongodb: { uri, discordPublicKey, dashboard: { … } }`.
 
 ## Set it up
 

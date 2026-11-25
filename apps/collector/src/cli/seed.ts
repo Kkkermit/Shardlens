@@ -4,9 +4,10 @@
  */
 import { periodLabel, ShardlensClient, uuidv7, type WireEvent } from '@shardlens/core';
 import { createPool } from '../db.js';
-import { backfillRollups, runUniques } from '../jobs/rollups.js';
-import { ensureSalt, RETENTION_DAYS } from '../storage/maintenance.js';
 import { previousPeriodLabel } from '../storage/periods.js';
+import { PostgresStore } from '../storage/postgres/store.js';
+import { RETENTION_DAYS } from '../storage/retention.js';
+import { ensureSalt } from '../storage/salts.js';
 
 const env = (name: string, fallback?: string) => {
   const v = process.env[name] ?? fallback;
@@ -128,6 +129,7 @@ const COMMANDS: { name: string; subs: string[]; weight: number; defer: number; e
 
 async function main() {
   const db = createPool(env('DATABASE_URL'));
+  const store = new PostgresStore(db);
   const appId = env('SHARDLENS_APP_ID');
   const now = Date.now();
   const start = now - 30 * DAY;
@@ -136,11 +138,7 @@ async function main() {
   const oldestGauge = now - ((RETENTION_DAYS.gauges as number) - 1) * DAY + 3_600_000;
 
   // Fictional data must never be mixed into a real bot's analytics.
-  const existing = await db.query<{ n: number }>(
-    'SELECT count(*)::int AS n FROM (SELECT 1 FROM interactions WHERE app_id = $1 LIMIT 1) x',
-    [appId],
-  );
-  if ((existing.rows[0]?.n ?? 0) > 0 && !process.argv.includes('--force')) {
+  if (!(await store.demo.isEmpty(appId)) && !process.argv.includes('--force')) {
     console.error(
       'This database already has interactions. The seeder only fills empty demo databases (--force to add anyway).',
     );
@@ -150,20 +148,13 @@ async function main() {
   }
 
   // The demo spans the previous salt period too, so make sure its salt exists (it normally would already).
-  await db.query('INSERT INTO apps (app_id, name) VALUES ($1, $2) ON CONFLICT (app_id) DO NOTHING', [
-    appId,
-    'Demo bot',
-  ]);
-  await ensureSalt(db, appId, periodLabel('month', new Date(now)));
+  await store.apps.register(appId, 'Demo bot');
+  await ensureSalt(store, appId, periodLabel('month', new Date(now)));
   const previous = previousPeriodLabel('month', new Date(now));
-  await ensureSalt(db, appId, previous);
+  await ensureSalt(store, appId, previous);
   // Demo only: last month's salt may already be past its 7-day grace window. Keep it alive for an hour so last
   // month's demo users can be hashed; the salt job then destroys it as usual (finalising its counts).
-  await db.query(
-    `UPDATE salts SET destroy_after = greatest(destroy_after, now() + interval '1 hour')
-      WHERE app_id = $1 AND period = $2 AND secret IS NOT NULL`,
-    [appId, previous],
-  );
+  await store.demo.extendSalt(appId, previous);
 
   const client = new ShardlensClient<WireEvent>({
     endpoint: env('SHARDLENS_URL', 'http://localhost:8080'),
@@ -661,9 +652,9 @@ async function main() {
   const stats = client.stats();
   console.log(`sent ${sent} events; dropped ${JSON.stringify(stats.dropped)}; failed flushes ${stats.failedFlushes}`);
 
-  await backfillRollups(db, new Date(start - 2 * DAY), new Date(now + 60_000), new Date());
-  await db.query('DELETE FROM dirty_buckets');
-  await runUniques(db, appId);
+  await store.jobs.backfillRollups(new Date(start - 2 * DAY), new Date(now + 60_000), new Date());
+  await store.demo.clearLateMarks();
+  await store.jobs.runUniques(appId);
   console.log('rollups and unique counts rebuilt');
   await db.end();
   // Every event here is made to be accepted. One that wasn't is a bug in this script, and the end-to-end tests that

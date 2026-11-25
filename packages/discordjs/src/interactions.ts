@@ -32,7 +32,13 @@ interface ResponseInfo {
   modalCustomId?: string;
 }
 
-type HandlerState = { state: 'running'; start: number } | { state: 'done'; ms?: number; error?: HandlerError };
+/**
+ * `depth` counts wrapped handlers running inside one another (a wrapped listener calling a wrapped command): the
+ * outermost is timed, and the first error any of them reports is kept, even when an outer one catches it.
+ */
+type HandlerState =
+  | { state: 'running'; start: number; depth: number; error?: HandlerError }
+  | { state: 'done'; ms?: number; error?: HandlerError };
 
 interface HandlerError {
   errorClass: string;
@@ -226,15 +232,24 @@ export class InteractionTracker {
   handlerStarted(i: Interaction): void {
     this.observe(i);
     const p = this.#pending.get(i.id);
-    if (p) p.handler = { state: 'running', start: performance.now() };
+    if (!p) return;
+    if (p.handler?.state === 'running') p.handler.depth++;
+    else p.handler = { state: 'running', start: performance.now(), depth: 1 };
   }
 
   /** `ms` may be left out when the handler's start was reported; without either, no handler time is recorded. */
   handlerFinished(i: Interaction, given: number | undefined, error?: HandlerError): void {
     const p = this.#pending.get(i.id);
-    const ms = given ?? (p?.handler?.state === 'running' ? performance.now() - p.handler.start : undefined);
+    const running = p?.handler?.state === 'running' ? p.handler : undefined;
+    if (running && running.depth > 1) {
+      running.depth--;
+      if (error && !running.error) running.error = error;
+      return;
+    }
+    const ms = given ?? (running ? performance.now() - running.start : undefined);
     if (p) {
-      p.handler = { state: 'done', ...(ms !== undefined ? { ms } : {}), ...(error ? { error } : {}) };
+      const first = running?.error ?? error;
+      p.handler = { state: 'done', ...(ms !== undefined ? { ms } : {}), ...(first ? { error: first } : {}) };
       if (p.response) this.#emit(i.id);
       return;
     }
