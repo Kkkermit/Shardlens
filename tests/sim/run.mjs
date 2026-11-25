@@ -1,5 +1,5 @@
 // `pnpm sim [bot…]`: Shardlens installed the way bot owners get it. Packs the workspace's published packages,
-// installs them with npm into four bots that coding agents set up (bots/), starts the databases those use in Docker,
+// installs them with npm into eight bots that coding agents set up (bots/), starts the databases those use in Docker,
 // runs each bot against a fake Discord, checks every count against what was sent and searches everything the install
 // stored or logged for leaks. Exits non-zero on any failure. Needs Docker; see README.md.
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';

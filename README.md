@@ -129,7 +129,7 @@ packages in CI. The docs are also published as plain text for agents
   [Render](https://kkkermit.github.io/Shardlens/self-hosting/render/) in [`deploy/`](deploy).
 
 Runnable [`examples/`](examples) cover a minimal bot, both sharding managers, audit mode and a Cloudflare Worker.
-`pnpm sim` installs the packed packages into four differently built bots and runs them against a fake Discord, so
+`pnpm sim` installs the packed packages into eight differently built bots and runs them against a fake Discord, so
 every release is checked the way you would use it.
 
 ## How it compares
