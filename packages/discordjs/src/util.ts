@@ -1,16 +1,26 @@
 import { redactSecrets } from '@shardlens/core';
 
-/** Map that evicts its oldest entry past `max` entries. */
+/** Map that keeps at most `max` entries, evicting the least recently set. */
 export class LruMap<K, V> extends Map<K, V> {
   readonly max: number;
+  readonly #batch: number;
   constructor(max: number) {
     super();
     this.max = max;
+    this.#batch = Math.max(1, Math.ceil(max / 16));
   }
   override set(key: K, value: V): this {
     if (this.has(key)) this.delete(key);
     super.set(key, value);
-    if (this.size > this.max) this.delete(this.keys().next().value as K);
+    // A sixteenth of `max` at a time: V8 keeps a deleted entry's slot until the map is rehashed, and reaching the
+    // oldest key steps over every such slot, so evicting one entry per insert took time in proportion to `max`.
+    if (this.size > this.max) {
+      let evict = this.size - this.max + this.#batch - 1;
+      for (const oldest of this.keys()) {
+        if (evict-- <= 0) break;
+        this.delete(oldest);
+      }
+    }
     return this;
   }
 }
