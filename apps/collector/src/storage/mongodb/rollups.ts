@@ -1,3 +1,4 @@
+import { BUCKETS } from '@shardlens/core';
 import type { AnyBulkWriteOperation, Collection } from 'mongodb';
 import { type DirtyBucketDoc, dimsKey, type RollupDoc, rollupId } from './collections.js';
 import type { Mongo } from './connect.js';
@@ -115,7 +116,7 @@ function fold(rows: readonly SourceRow[]): RollupDoc[] {
     if (r.min != null) g.min = g.min === null ? Number(r.min) : Math.min(g.min, Number(r.min));
     if (r.max != null) g.max = g.max === null ? Number(r.max) : Math.max(g.max, Number(r.max));
     if (r._id.b != null) {
-      g.hist ??= new Array<number>(40).fill(0);
+      g.hist ??= new Array<number>(BUCKETS).fill(0);
       g.hist[r._id.b] = (g.hist[r._id.b] ?? 0) + Number(r.hw ?? 0);
     }
     if (r.hist) g.hist = r.hist.map(Number);

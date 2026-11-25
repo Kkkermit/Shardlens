@@ -1,14 +1,14 @@
 import { randomBytes } from 'node:crypto';
 import { BUCKETS, bucketOf, periodLabel, uuidv7 } from '@shardlens/core';
 import { Event } from '@shardlens/schema';
-import { Binary, MongoServerError, UUID } from 'mongodb';
+import { Binary, MongoClient, MongoServerError, UUID } from 'mongodb';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { GUILD_EVENT } from '../src/ingest/codes.js';
 import { runSalts } from '../src/jobs/scheduler.js';
-import { LAYOUT_VERSION } from '../src/storage/mongodb/collections.js';
-import type { Mongo } from '../src/storage/mongodb/connect.js';
+import { collections, LAYOUT_VERSION } from '../src/storage/mongodb/collections.js';
+import { databaseName, type Mongo } from '../src/storage/mongodb/connect.js';
 import { nextId } from '../src/storage/mongodb/ids.js';
-import type { MongoStore } from '../src/storage/mongodb/store.js';
+import { MongoStore } from '../src/storage/mongodb/store.js';
 import { ensureSalt } from '../src/storage/salts.js';
 import type { IngestContext, Store } from '../src/storage/store.js';
 import { guildInfo, interaction, mongoStore, snowflakeOnShard } from './harness.js';
@@ -122,6 +122,41 @@ describe('MongoStore', () => {
       const global = await m.c.uniques.countDocuments({ '_id.scope': 'global' });
       expect(global).toBeGreaterThanOrEqual(8);
       expect(await m.c.uniques.countDocuments({ '_id.scope': 'install', '_id.scopeKey': 'guild' })).toBe(global);
+    });
+
+    it('stores the rest of a batch, event by event, when MongoDB refuses one of its documents', async () => {
+      const insertMany = m.c.interactions.insertMany.bind(m.c.interactions);
+      m.c.interactions.insertMany = (async (...args: Parameters<typeof insertMany>) => {
+        if (args[0].some((d) => d.command === 'edge_refused')) {
+          throw new MongoServerError({ message: 'object to insert too large', code: 10334 });
+        }
+        return insertMany(...args);
+      }) as typeof insertMany;
+      try {
+        const events = [
+          interaction(user(1), { command: 'edge_kept' }),
+          interaction(user(1), { command: 'edge_refused' }),
+        ];
+        const items = events.map((e, index) => ({ index, event: Event.parse(e) }));
+        const error = await store.ingest.write(context(), items).catch((e: unknown) => e);
+        expect(store.refusedInput(error)).toBe('10334');
+        const res = await store.ingest.writeEach(context(), items);
+        expect(res).toMatchObject({ accepted: 1, rejected: [{ index: 1, reason: 'refused_by_database' }] });
+        expect(res.stored).toEqual(new Set([events[0]!.id]));
+      } finally {
+        m.c.interactions.insertMany = insertMany;
+      }
+      expect((await m.c.interactions.find().toArray()).map((d) => d.command)).toEqual(['edge_kept']);
+    });
+
+    it('hands the analytics store only the events stored now', async () => {
+      const events = [interaction(user(1)), { id: uuidv7(), ts: Date.now(), type: 'custom', name: 'x', props: {} }];
+      const first = await write(events, { mirror: true });
+      expect(first.mirror?.interactions).toEqual([
+        expect.objectContaining({ id: events[0]!.id, kind: 1, guildId: '112233445566778899', ackMs: 120, weight: 1 }),
+      ]);
+      expect(first.mirror?.custom).toEqual([expect.objectContaining({ name: 'x', userHash: null })]);
+      expect((await write(events, { mirror: true })).mirror).toEqual({ interactions: [], custom: [] });
     });
 
     it('rejects hashes of an unknown salt period, and lowers stored IDs', async () => {
@@ -963,6 +998,81 @@ describe('MongoStore', () => {
       expect((await m.c.sdkHealth.find().toArray()).map((d) => d._id.instance)).toEqual(['alive:2']);
       expect(await m.c.snapshotPending.countDocuments()).toBe(0);
       expect((await m.c.adminAudit.find().toArray()).map((d) => d.action)).toEqual(['new']);
+    });
+  });
+
+  // Atlas's free tier allows 100 operations a second for every process of a bot together.
+  describe('operations', () => {
+    beforeEach(clear);
+
+    /** The commands a store sends while `fn` runs, on a client of its own that reports them. */
+    const sent = async (fn: (s: Store) => Promise<unknown>): Promise<string[]> => {
+      const client = await new MongoClient(backing.databaseUrl, { monitorCommands: true }).connect();
+      const db = client.db(databaseName(backing.databaseUrl));
+      const names: string[] = [];
+      try {
+        await db.command({ ping: 1 });
+        client.on('commandStarted', (e) => {
+          if (e.commandName !== 'endSessions') names.push(e.commandName);
+        });
+        await fn(new MongoStore({ client, db, c: collections(db) }));
+        return names;
+      } finally {
+        await client.close();
+      }
+    };
+    const flush = (n: number) => {
+      const now = Date.now();
+      return [
+        ...Array.from({ length: n }, (_, i) =>
+          interaction(user(i % 7), { guild: i % 2 ? '112233445566778899' : '112233445566778800', ts: now - i * 100 }),
+        ),
+        { id: uuidv7(), ts: now, type: 'custom', name: 'ticket_opened', props: {}, user: user(1) },
+        { id: uuidv7(), ts: now, type: 'gauge_window', gauges: [{ name: 'memory.rss_bytes', value: 1 }] },
+        {
+          id: uuidv7(),
+          ts: now,
+          type: 'rest_window',
+          windowMs: 5000,
+          rows: [
+            {
+              method: 'POST',
+              route: '/interactions/:id/:token/callback',
+              status: 204,
+              count: n,
+              retries: 0,
+              latency: new Array(40).fill(0),
+            },
+          ],
+          invalid: { count401: 0, count403: 0, count429: 0, shared429: 0 },
+        },
+        { id: uuidv7(), ts: now, type: 'sdk_health', queueDepth: 0, dropped: {}, failedFlushes: 0, internalErrors: {} },
+      ];
+    };
+
+    it('writes an SDK flush in one round trip per collection, however many events it holds', async () => {
+      const small = await sent((s) =>
+        s.ingest.write(
+          context(),
+          flush(5).map((e, index) => ({ index, event: Event.parse(e) })),
+        ),
+      );
+      const large = await sent((s) =>
+        s.ingest.write(
+          context(),
+          flush(300).map((e, index) => ({ index, event: Event.parse(e) })),
+        ),
+      );
+      expect(small.sort()).toEqual(['insert', 'insert', 'insert', 'insert', 'insert', 'update', 'update', 'update']);
+      expect(large).toHaveLength(small.length);
+    });
+
+    it('runs a minute of rollups in a few dozen commands', async () => {
+      await write(flush(50));
+      const run = await sent((s) => s.jobs.runRollups(new Date()));
+      expect(run.length).toBeLessThanOrEqual(30);
+      const quiet = await sent((s) => s.jobs.runUniques());
+      expect(quiet.length).toBeLessThanOrEqual(1 + 4 * 2);
     });
   });
 });
