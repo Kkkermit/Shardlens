@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 const envSchema = z.object({
-  NODE_ENV: z.enum(['development', 'production']).default('production'),
+  NODE_ENV: z.enum(['development', 'production', 'test']).default('production'),
   DISCORD_TOKEN: z.string().min(50, 'DISCORD_TOKEN looks too short'),
   DISCORD_CLIENT_ID: z
     .string()
