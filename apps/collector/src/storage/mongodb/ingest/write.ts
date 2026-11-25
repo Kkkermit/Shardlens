@@ -4,6 +4,7 @@ import { Binary, UUID } from 'mongodb';
 import { COMMAND_SCOPE, INSTALL, KIND, MEMBER_TIER, OUTCOME, parseUserHash } from '../../../ingest/codes.js';
 import type { IngestContext, IngestItem, IngestStorage, SealedActor, WriteResult } from '../../store.js';
 import type {
+  AppInfoDoc,
   AuditLogDoc,
   CommandPermissionDoc,
   CustomEventDoc,
@@ -665,7 +666,8 @@ async function applyRegistry(
 
 async function applyAppInfo(m: Mongo, ctx: IngestContext, e: Extract<Event, { type: 'app_info' }>) {
   const ts = new Date(e.ts);
-  const fields = {
+  // Every field, as PostgreSQL's upsert sets every column: one this report has no value for is cleared.
+  const fields: { [K in keyof Omit<AppInfoDoc, '_id'>]-?: AppInfoDoc[K] | null | undefined } = {
     ts,
     name: e.name,
     approxGuilds: e.approximateGuildCount,
@@ -681,12 +683,8 @@ async function applyAppInfo(m: Mongo, ctx: IngestContext, e: Extract<Event, { ty
     sdkVersion: ctx.sdkVersion,
     release: ctx.release,
   };
-  const set: Record<string, unknown> = {};
-  const unset: Record<string, ''> = {};
-  for (const [key, value] of Object.entries(fields)) {
-    if (value == null) unset[key] = '';
-    else set[key] = value;
-  }
+  const set = compact<Omit<AppInfoDoc, '_id'>>({ ...fields });
+  const unset = Object.fromEntries(Object.keys(fields).flatMap((key) => (key in set ? [] : [[key, '' as const]])));
   const newest = await newerOnly(
     m.c.appInfo.updateOne({ _id: ctx.appId, ts: { $lte: ts } }, { $set: set, $unset: unset }, { upsert: true }),
   );
