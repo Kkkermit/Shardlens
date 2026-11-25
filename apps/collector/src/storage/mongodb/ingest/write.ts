@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { Event } from '@shardlens/schema';
-import { Binary, UUID } from 'mongodb';
+import { Binary, type Collection, type Document, type OptionalUnlessRequiredId, UUID } from 'mongodb';
 import { COMMAND_SCOPE, INSTALL, KIND, MEMBER_TIER, OUTCOME, parseUserHash } from '../../../ingest/codes.js';
 import type { IngestContext, IngestItem, IngestStorage, SealedActor, WriteResult } from '../../store.js';
 import type {
@@ -20,9 +20,10 @@ import type {
   UniqueDoc,
 } from '../collections.js';
 import type { Mongo } from '../connect.js';
+import { isDuplicateKey } from '../duplicate-key.js';
 import { uniqueId } from '../uniques.js';
-import { compact, insertNew, isDuplicateKey, refusedInput } from '../writes.js';
-import { applyGuildEvents, recordCommandActivity } from './guilds.js';
+import { compact, insertNew, refusedInput } from '../writes.js';
+import { applyGuildEvents, type GuildEvent, recordCommandActivity } from './guilds.js';
 import { applySnapshot } from './snapshots.js';
 
 /** Minutes older than this when they arrive are marked dirty so the rollup job recomputes them. */
@@ -33,8 +34,7 @@ const minute = (ts: number) => Math.floor(ts / 60_000) * 60_000;
 /** PostgreSQL keeps weights as `real`: rounded the same, sums and histogram weights come out the same. */
 const weight = (w: number) => Math.fround(w);
 
-type GaugeId = GaugeDoc['_id'];
-const gaugeId = (appId: string, name: string, shard: number, instance: string, ts: Date): GaugeId => ({
+const gaugeId = (appId: string, name: string, shard: number, instance: string, ts: Date): GaugeDoc['_id'] => ({
   appId,
   name,
   shard,
@@ -100,7 +100,9 @@ type Ordered = Extract<
       | 'sdk_health';
   }
 >;
-type GuildEvent = Extract<Ordered, { type: 'guild_join' | 'guild_update' | 'guild_leave' | 'guild_availability' }>;
+
+const GUILD_EVENTS = new Set<Ordered['type']>(['guild_join', 'guild_update', 'guild_leave', 'guild_availability']);
+const isGuildEvent = (e: Ordered): e is GuildEvent => GUILD_EVENTS.has(e.type);
 
 /**
  * Writes one validated batch. There is no transaction: each single event is stored once by its UUIDv7 `_id` (a
@@ -458,12 +460,12 @@ async function writeEvents(m: Mongo, ctx: IngestContext, items: readonly IngestI
   }
 
   /** Stores single events: one stored before is a retried event. `onFresh` gets the position of each stored now. */
-  const counted = async <T extends { _id: unknown }>(
-    insert: (docs: T[]) => Promise<Set<number>>,
-    docs: T[],
+  const counted = async <T extends Document>(
+    collection: Collection<T>,
+    docs: OptionalUnlessRequiredId<T>[],
     onFresh?: (i: number) => void,
   ) => {
-    const fresh = await insert(docs);
+    const fresh = await insertNew(collection, docs);
     result.accepted += fresh.size;
     result.duplicates += docs.length - fresh.size;
     if (onFresh) for (const i of fresh) onFresh(i);
@@ -472,30 +474,22 @@ async function writeEvents(m: Mongo, ctx: IngestContext, items: readonly IngestI
   const freshCustom: number[] = [];
 
   const settled = await Promise.allSettled([
-    counted(
-      (d) => insertNew(c.interactions, d),
-      interactions,
-      (i) => {
-        freshInteractions.push(i);
-        result.stored.add(interactionIds[i]!.toLowerCase());
-      },
-    ),
+    counted(c.interactions, interactions, (i) => {
+      freshInteractions.push(i);
+      result.stored.add(interactionIds[i]!.toLowerCase());
+    }),
     upsertUniques(m, [...uniques.values()]),
     insertNew(c.auditLog, audit),
-    counted((d) => insertNew(c.interactionErrors, d), errors),
+    counted(c.interactionErrors, errors),
     insertNew(c.restCalls, restCalls),
-    counted((d) => insertNew(c.restInvalid, d), restInvalid),
-    counted((d) => insertNew(c.rateLimits, d), rateLimits),
-    counted(
-      (d) => insertNew(c.customEvents, d),
-      custom,
-      (i) => freshCustom.push(i),
-    ),
+    counted(c.restInvalid, restInvalid),
+    counted(c.rateLimits, rateLimits),
+    counted(c.customEvents, custom, (i) => freshCustom.push(i)),
     insertNew(c.gauges, gauges),
-    counted((d) => insertNew(c.shardEvents, d), shardEvents),
-    counted((d) => insertNew(c.entitlements, d), entitlements),
-    counted((d) => insertNew(c.subscriptions, d), subscriptions),
-    counted((d) => insertNew(c.commandPermissions, d), permissions),
+    counted(c.shardEvents, shardEvents),
+    counted(c.entitlements, entitlements),
+    counted(c.subscriptions, subscriptions),
+    counted(c.commandPermissions, permissions),
     (async () => {
       await applyOrdered(m, ctx, ordered, result);
       // After joins and leaves: a run after a removal in the same batch doesn't count.
@@ -573,12 +567,7 @@ async function applyOrdered(m: Mongo, ctx: IngestContext, ordered: readonly Orde
     run = [];
   };
   for (const e of ordered) {
-    if (
-      e.type === 'guild_join' ||
-      e.type === 'guild_update' ||
-      e.type === 'guild_leave' ||
-      e.type === 'guild_availability'
-    ) {
+    if (isGuildEvent(e)) {
       run.push(e);
       continue;
     }
@@ -683,7 +672,7 @@ async function applyAppInfo(m: Mongo, ctx: IngestContext, e: Extract<Event, { ty
     sdkVersion: ctx.sdkVersion,
     release: ctx.release,
   };
-  const set = compact<Omit<AppInfoDoc, '_id'>>({ ...fields });
+  const set = compact<Omit<AppInfoDoc, '_id'>>(fields);
   const unset = Object.fromEntries(Object.keys(fields).flatMap((key) => (key in set ? [] : [[key, '' as const]])));
   const newest = await newerOnly(
     m.c.appInfo.updateOne({ _id: ctx.appId, ts: { $lte: ts } }, { $set: set, $unset: unset }, { upsert: true }),

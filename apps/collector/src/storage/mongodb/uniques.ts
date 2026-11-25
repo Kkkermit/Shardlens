@@ -1,8 +1,8 @@
-import { type AnyBulkWriteOperation, type Binary, type Document, MaxKey, MinKey, MongoBulkWriteError } from 'mongodb';
+import { type AnyBulkWriteOperation, type Binary, type Document, MaxKey, MinKey } from 'mongodb';
 import { periodBounds } from '../periods.js';
 import type { UniqueCountDoc, UniqueDoc } from './collections.js';
 import type { Mongo } from './connect.js';
-import { isDuplicateKey } from './writes.js';
+import { isDuplicateKey } from './duplicate-key.js';
 
 const DAY = 86_400_000;
 
@@ -136,7 +136,7 @@ export async function runUniques(m: Mongo, appId?: string, onlyPeriod?: string, 
     try {
       await c.uniqueCounts.bulkWrite(ops, { ordered: false });
     } catch (error) {
-      if (!(error instanceof MongoBulkWriteError) || !isDuplicateKey(error)) throw error;
+      if (!isDuplicateKey(error)) throw error;
     }
   }
 }

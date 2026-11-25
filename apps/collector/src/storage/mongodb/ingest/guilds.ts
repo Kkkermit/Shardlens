@@ -151,6 +151,7 @@ function update(appId: string, info: GuildInfo, now: Date): AnyBulkWriteOperatio
   };
 }
 
+/** The bot left the server at `ts`, unless a leave was applied to it already. */
 export function leave(appId: string, guildId: string, ts: Date, now: Date): AnyBulkWriteOperation<GuildDoc> {
   return {
     updateOne: {
@@ -160,7 +161,7 @@ export function leave(appId: string, guildId: string, ts: Date, now: Date): AnyB
   };
 }
 
-type GuildEvent = Extract<Event, { type: 'guild_join' | 'guild_update' | 'guild_leave' | 'guild_availability' }>;
+export type GuildEvent = Extract<Event, { type: 'guild_join' | 'guild_update' | 'guild_leave' | 'guild_availability' }>;
 
 /**
  * Joins, profiles, leaves and availability changes that came one after another in a batch: their history in one

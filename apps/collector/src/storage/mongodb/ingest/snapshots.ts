@@ -4,7 +4,7 @@ import { type AnyBulkWriteOperation, Long } from 'mongodb';
 import { GUILD_EVENT } from '../../../ingest/codes.js';
 import type { GuildDoc } from '../collections.js';
 import type { Mongo } from '../connect.js';
-import { isDuplicateKey } from '../writes.js';
+import { isDuplicateKey } from '../duplicate-key.js';
 import { guildKey, type Lifecycle, leave, recordHistory, settle } from './guilds.js';
 
 /** How long a snapshot lease lasts: far longer than applying one takes, so it only runs out when its holder died. */
