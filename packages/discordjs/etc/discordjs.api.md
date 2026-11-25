@@ -52,6 +52,25 @@ export interface MessageCommandRun extends MessageCommandInfo {
 export type MetricGroup = 'interactions' | 'guilds' | 'rest' | 'gateway' | 'process' | 'premium' | 'app';
 
 // @public
+export interface MongoDBOptions {
+    auditKey?: string | undefined;
+    dashboard?: {
+        port?: number | undefined;
+        host?: string | undefined;
+        publicUrl?: string | undefined;
+        discord?: {
+            clientId: string;
+            clientSecret: string;
+        } | undefined;
+        extraAdmins?: readonly string[] | undefined;
+        trustProxy?: boolean | number | undefined;
+    } | undefined;
+    discordPublicKey?: string | undefined;
+    settingsKey?: string | undefined;
+    uri: string;
+}
+
+// @public
 export function normaliseRoute(route: string): string;
 
 // @public
@@ -107,6 +126,7 @@ export interface ShardlensOptions {
     maxBatchSize?: number | undefined;
     maxQueueSize?: number | undefined;
     mode?: 'privacy' | 'audit' | undefined;
+    mongodb?: string | MongoDBOptions | undefined;
     normaliseCustomId?: ((customId: string) => string) | undefined;
     onOptOutChange?: ((userId: string, optedOut: boolean) => void) | undefined;
     optedOut?: Iterable<string | bigint> | undefined;
