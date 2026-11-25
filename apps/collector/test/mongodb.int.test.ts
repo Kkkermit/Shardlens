@@ -210,6 +210,67 @@ describe('MongoStore', () => {
       expect(marks).toEqual([{ _id: { appId: APP, bucket: new Date(minuteOf(ts)) }, n: 3 }]);
     });
 
+    it('stores a webhook delivery and a webhook entitlement once, however often Discord retries them', async () => {
+      const at = new Date(Date.now() - 1000);
+      const delivery = {
+        id: uuidv7(at.getTime()),
+        ts: at,
+        appId: APP,
+        type: 'APPLICATION_AUTHORIZED',
+        integrationType: 1,
+        userHash: Buffer.alloc(16, 0xab),
+        actor: null,
+        guildId: null,
+        scopes: ['applications.commands'],
+      };
+      await store.webhookEvents.record(delivery);
+      await store.webhookEvents.record(delivery);
+      const stored = await m.c.webhookEvents.find({ appId: APP }).toArray();
+      expect(stored).toHaveLength(1);
+      expect(Buffer.from(stored[0]!.userHash!.buffer).toString('hex')).toBe('ab'.repeat(16));
+      expect(stored[0]).toMatchObject({
+        type: 'APPLICATION_AUTHORIZED',
+        integrationType: 1,
+        scopes: ['applications.commands'],
+      });
+      expect(stored[0]).not.toHaveProperty('actorEnc');
+      expect(stored[0]).not.toHaveProperty('guildId');
+
+      const entitlement = {
+        appId: APP,
+        ts: at,
+        action: 'create' as const,
+        skuId: '700000000000000002',
+        entitlementType: 8,
+        owner: 'user' as const,
+        userHash: Buffer.alloc(16, 0xab),
+        guildId: null,
+        startsAt: null,
+        endsAt: null,
+      };
+      await store.webhookEvents.recordEntitlement(entitlement);
+      await store.webhookEvents.recordEntitlement(entitlement);
+      // PostgreSQL's unique key leaves the source out: the gateway's report of the same entitlement is the same row.
+      const gateway = await write([
+        {
+          id: uuidv7(at.getTime()),
+          ts: at.getTime(),
+          type: 'entitlement',
+          action: 'create',
+          sku: '700000000000000002',
+          entitlementType: 8,
+          owner: 'user',
+          user: `h1:${PERIOD}:${'ab'.repeat(16)}`,
+          startsAt: null,
+          endsAt: null,
+        },
+      ]);
+      expect(gateway).toMatchObject({ accepted: 0, duplicates: 1 });
+      expect(await m.c.entitlements.find({ appId: APP }).toArray()).toEqual([
+        expect.objectContaining({ source: 'webhook', skuId: '700000000000000002', owner: 'user' }),
+      ]);
+    });
+
     it('keeps two entitlements bought in the same millisecond, and counts a retried one as a duplicate', async () => {
       const ts = Date.now() - 2 * DAY;
       const entitlement = (n: number) => ({
