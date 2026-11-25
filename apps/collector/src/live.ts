@@ -22,6 +22,7 @@ export class LiveHub {
   readonly #rings = new Map<string, Ring>();
   #pending = new Map<string, { s: number; n: number; e: number }[]>();
   #timer: ReturnType<typeof setInterval> | undefined;
+  #watchers = 0;
   #warn: (message: string) => void = () => undefined;
 
   constructor(channel: LiveChannel) {
@@ -50,6 +51,20 @@ export class LiveHub {
   async stop(): Promise<void> {
     if (this.#timer) clearInterval(this.#timer);
     await this.#channel.stop();
+  }
+
+  /**
+   * Counts a live stream as open until the returned function is called, so the channel knows whether this instance
+   * shows tiles to anyone (`LiveChannel.listen`).
+   */
+  watch(): () => void {
+    if (this.#watchers++ === 0) this.#channel.listen?.(true);
+    let open = true;
+    return () => {
+      if (!open) return;
+      open = false;
+      if (--this.#watchers === 0) this.#channel.listen?.(false);
+    };
   }
 
   bump(appId: string, atMs: number, interactions: number, errors: number): void {
