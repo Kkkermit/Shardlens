@@ -21,6 +21,11 @@ export interface MongoCollectorOptions {
    */
   uri: string;
   /**
+   * The database to keep Shardlens's collections in, when not the one the connection string names (or `shardlens`
+   * when it names none): for a database user allowed into one database only.
+   */
+  database?: string | undefined;
+  /**
    * Your Discord application ID. Default: the one bot whose collector has run on this database before (what
    * `npx shardlens dashboard` relies on).
    */
@@ -124,10 +129,17 @@ export async function startMongoCollector(options: MongoCollectorOptions): Promi
     throw new Error('Shardlens: appId must be your Discord application ID');
   }
   if (options.mode === 'audit' && !options.auditKey) throw new Error("Shardlens: mode 'audit' needs auditKey");
+  // MongoDB's own rule for database names, checked here so a mistake says so instead of failing on first write.
+  if (options.database !== undefined && !/^[^/\\. "$*<>:|?]{1,63}$/.test(options.database)) {
+    throw new Error('Shardlens: database must be a MongoDB database name');
+  }
 
   // Every process of a sharded bot opens its own: the driver's default of 100 connections each could reach a hosted
   // tier's limit. Ingest is one batch at a time; a dashboard's page asks a few queries at once.
-  const m = await openMongo(options.uri, 'shardlens', { maxPoolSize: options.dashboard ? 10 : 5 });
+  const m = await openMongo(options.uri, 'shardlens', {
+    maxPoolSize: options.dashboard ? 10 : 5,
+    database: options.database,
+  });
   try {
     const appId = options.appId ?? (await onlyApp(m.c));
     const store = new MongoStore(m);

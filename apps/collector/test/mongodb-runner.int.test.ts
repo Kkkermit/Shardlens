@@ -112,6 +112,14 @@ describe('the MongoDB runner', () => {
     expect(collector.appId).toBe(APP_ID);
   });
 
+  it('keeps its collections in the database it is told to, for a user allowed into one only', async () => {
+    const collector = await start({ appId: '1234567890123456780', database: 'bot_only' });
+    const { client } = (backing.store as MongoStore).mongo;
+    const there = await client.db('bot_only').collection('shardlens_secrets').countDocuments();
+    expect(there).toBe(1);
+    expect(collector.appId).toBe('1234567890123456780');
+  });
+
   it('refuses what it cannot use, before connecting', async () => {
     await expect(startMongoCollector({ uri: 'postgres://localhost/db', appId: APP_ID })).rejects.toThrow(
       'must start with mongodb://',
@@ -121,6 +129,9 @@ describe('the MongoDB runner', () => {
     );
     await expect(startMongoCollector({ uri: backing.databaseUrl, appId: APP_ID, mode: 'audit' })).rejects.toThrow(
       'needs auditKey',
+    );
+    await expect(startMongoCollector({ uri: backing.databaseUrl, appId: APP_ID, database: 'a.b' })).rejects.toThrow(
+      'database must be a MongoDB database name',
     );
   });
 });

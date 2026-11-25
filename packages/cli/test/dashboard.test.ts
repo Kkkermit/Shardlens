@@ -112,6 +112,20 @@ describe('shardlens dashboard', () => {
     expect(lines.join('\n')).toContain('NOT_THERE is not set');
   });
 
+  it('passes on the database the bot names, for a user allowed into one only', async () => {
+    const fake = fakeCollector();
+    await dashboard({
+      uri: URI,
+      database: 'bot_only',
+      cwd: dir,
+      env: {},
+      until: Promise.resolve(),
+      print,
+      load: async () => fake.module,
+    });
+    expect(fake.starts[0]?.database).toBe('bot_only');
+  });
+
   it('says where it looked when there is no connection string', async () => {
     const code = await dashboard({ cwd: dir, env: {}, until: Promise.resolve(), print, load: async () => undefined });
     expect(code).toBe(1);

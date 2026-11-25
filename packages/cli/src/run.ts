@@ -43,6 +43,7 @@ Commands
                                         MONGO_URI, MONGODB_URL, MONGO_URL, DATABASE_URL and similar names
                                         that holds one)
               --uri <uri>               the connection string itself (it stays in your shell history)
+              --database <name>         the database, when the bot's mongodb option names one with database
               --app-id <id>             your Discord application ID, when several bots share the database
               --port <port>             the port to serve it on (default 8080)
   doctor    Check Node.js, discord.js, the collector and your ingest key
@@ -74,6 +75,7 @@ const OPTIONS = {
   key: { type: 'string' },
   uri: { type: 'string' },
   env: { type: 'string' },
+  database: { type: 'string' },
   port: { type: 'string' },
   help: { type: 'boolean', short: 'h' },
   version: { type: 'boolean', short: 'v' },
@@ -87,7 +89,7 @@ const COMMANDS: Record<string, readonly string[]> = {
   keys: ['scope'],
   privacy: ['audit', 'ids-only', 'option-values', 'webhook-events', 'retention', 'audit-retention'],
   doctor: ['url', 'key'],
-  dashboard: ['uri', 'env', 'app-id', 'port'],
+  dashboard: ['uri', 'env', 'database', 'app-id', 'port'],
 };
 
 /** Prints a command-line mistake and returns its exit code. */
@@ -222,6 +224,7 @@ async function dashboardCommand(values: Values): Promise<number> {
   return dashboard({
     uri: values.uri,
     envName: values.env,
+    database: values.database,
     appId: values['app-id'],
     port,
     cwd: process.cwd(),

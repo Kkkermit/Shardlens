@@ -8,6 +8,12 @@ export interface MongoDBOptions {
   /** Your MongoDB's connection string (`mongodb://` or `mongodb+srv://`): the `MONGODB_URI` your bot already uses. */
   uri: string;
   /**
+   * The database to keep Shardlens's collections in, when not the one the connection string names (or `shardlens`
+   * when it names none): for a database user allowed into one database only. Pass the same to
+   * `npx shardlens dashboard --database`.
+   */
+  database?: string | undefined;
+  /**
    * Also serve the dashboard from the bot, on a port (default 8080) of `127.0.0.1` unless `host` says otherwise. The
    * SDK logs a one-time sign-in link when it starts. With several processes, the first to start serves it. Without
    * this, `npx shardlens dashboard` shows the dashboard on your machine.
@@ -88,6 +94,14 @@ export interface ShardlensOptions {
    * are never recorded; strings are cut to 100 characters. Default none.
    */
   captureOptionValues?: readonly string[] | undefined;
+  /**
+   * Errors your handlers throw on purpose, for a user's mistake that your error handler then explains (a validation
+   * error, a "you need Manage Server"), which shouldn't count as failures: return `true` for those, such as
+   * `(error) => error instanceof UserError`. Called with whatever a wrapped handler threw (and the `error` passed to
+   * `handlerFinished` and `trackMessageCommand`); the error is still re-thrown to your code. Default: every error is a
+   * failure.
+   */
+  isExpectedError?: ((error: unknown) => boolean) | undefined;
   /** Replaces the default custom-ID normaliser (numbers and IDs become `*`). */
   normaliseCustomId?: ((customId: string) => string) | undefined;
   /**

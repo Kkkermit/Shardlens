@@ -523,8 +523,21 @@ function attach(client: Client, options: ShardlensOptions): Shardlens {
   every(APP_INFO_INTERVAL_MS, 'appInfo', sendAppInfo);
   every(REGISTRY_INTERVAL_MS, 'commandRegistry', sendRegistry);
 
-  const trackMessageCommand = (message: Message, run: MessageCommandRun): void => {
+  /** Whether the bot said this error is one it throws on purpose (`isExpectedError`), which isn't a failure. */
+  const expectedError = (error: unknown): boolean => {
+    if (typeof options.isExpectedError !== 'function') return false;
     try {
+      return options.isExpectedError(error) === true;
+    } catch (failure) {
+      count('isExpectedError', failure);
+      return false;
+    }
+  };
+
+  const trackMessageCommand = (message: Message, given: MessageCommandRun): void => {
+    try {
+      const { error, ...rest } = given;
+      const run: MessageCommandRun = error !== undefined && !expectedError(error) ? given : rest;
       const userId = message.author.id;
       if (!tracker || optedOut.has(userId)) return;
       const event = describeMessageCommand(message, run, { ...options, mode }, shardCount());
@@ -546,9 +559,10 @@ function attach(client: Client, options: ShardlensOptions): Shardlens {
     }
   };
   /** `thrown` is set when the handler threw, even if what it threw was `undefined`. */
-  const handlerEnd = (name: string, interaction: unknown, ms: unknown, thrown?: { error: unknown }) => {
+  const handlerEnd = (name: string, interaction: unknown, ms: unknown, threw?: { error: unknown }) => {
     try {
       if (!isInteraction(interaction)) return;
+      const thrown = threw && !expectedError(threw.error) ? threw : undefined;
       const code = thrown && errorCode(thrown.error);
       tracker?.handlerFinished(
         interaction,

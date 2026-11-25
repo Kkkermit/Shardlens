@@ -65,6 +65,7 @@ export interface MongoDBOptions {
         extraAdmins?: readonly string[] | undefined;
         trustProxy?: boolean | number | undefined;
     } | undefined;
+    database?: string | undefined;
     discordPublicKey?: string | undefined;
     settingsKey?: string | undefined;
     uri: string;
@@ -122,6 +123,7 @@ export interface ShardlensOptions {
     exporters?: readonly ShardlensExporter[] | undefined;
     fetch?: typeof fetch | undefined;
     flushIntervalMs?: number | undefined;
+    isExpectedError?: ((error: unknown) => boolean) | undefined;
     logger?: Logger | undefined;
     maxBatchSize?: number | undefined;
     maxQueueSize?: number | undefined;

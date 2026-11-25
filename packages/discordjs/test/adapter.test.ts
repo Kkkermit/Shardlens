@@ -458,6 +458,53 @@ describe('interactions', () => {
     expect(collector.events('interaction')).toMatchObject([{ outcome: 'error', errorClass: 'RangeError' }]);
   });
 
+  it('counts errors the bot throws on purpose as runs, not failures, and still re-throws them', async () => {
+    class UserError extends Error {}
+    const { collector, client, lens } = setup(undefined, { isExpectedError: (error) => error instanceof UserError });
+    await settle();
+    // Two IDs from the same millisecond would be one interaction.
+    const expected = slash(client, { id: snowflake(Date.now(), 1) });
+    const real = slash(client, { id: snowflake(Date.now(), 2) });
+    for (const i of [expected, real]) client.emit(Events.InteractionCreate, i);
+    const run = (error: Error) =>
+      lens.wrap(async (i: ChatInputCommandInteraction) => {
+        await i.reply({ content: 'explained' });
+        throw error;
+      });
+    await expect(run(new UserError('bad prefix'))(expected)).rejects.toThrow('bad prefix');
+    await expect(run(new TypeError('a bug'))(real)).rejects.toThrow('a bug');
+    await settle();
+    await lens.flush();
+    const rows = collector.events('interaction');
+    expect(rows).toHaveLength(2);
+    expect(rows.filter((r) => r.outcome === 'ok')).toHaveLength(1);
+    expect(rows.find((r) => r.outcome === 'ok')?.errorClass).toBeUndefined();
+    expect(rows.find((r) => r.outcome === 'error')).toMatchObject({ errorClass: 'TypeError' });
+  });
+
+  it('treats an error as a failure when isExpectedError itself throws, and counts that', async () => {
+    const { collector, client, lens } = setup(undefined, {
+      isExpectedError: () => {
+        throw new Error('broken check');
+      },
+    });
+    const failures: string[] = [];
+    lens.on('error', (name) => failures.push(name));
+    await settle();
+    const interaction = slash(client);
+    client.emit(Events.InteractionCreate, interaction);
+    await expect(
+      lens.wrap(async (i: ChatInputCommandInteraction) => {
+        await i.reply({ content: 'x' });
+        throw new RangeError('real');
+      })(interaction),
+    ).rejects.toThrow('real');
+    await settle();
+    await lens.flush();
+    expect(collector.events('interaction')).toMatchObject([{ outcome: 'error', errorClass: 'RangeError' }]);
+    expect(failures).toContain('isExpectedError');
+  });
+
   it('times the outermost of nested wrapped handlers, and sends one row when it ends', async () => {
     const { collector, client, lens } = setup();
     await settle();

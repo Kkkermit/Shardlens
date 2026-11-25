@@ -114,6 +114,20 @@ describe('message (prefix) commands', () => {
     for (const secret of [MEMBER_ID, 'prefixer', 'secret plans', CHANNEL_ID]) expect(raw).not.toContain(secret);
   });
 
+  it('wrapMessageCommand() counts an error the bot throws on purpose as a run, not a failure', async () => {
+    class UserError extends Error {}
+    const { collector, client, lens } = setup({ isExpectedError: (error) => error instanceof UserError });
+    await settle();
+    const run = lens.wrapMessageCommand('prefix', async (_m: Message) => {
+      throw new UserError('prefixes are 1 to 3 characters');
+    });
+    await expect(run(message(client, USER_ID).message)).rejects.toThrow('prefixes are');
+    await settle();
+    await lens.flush();
+    expect(collector.events('message_command')).toMatchObject([{ command: 'prefix', outcome: 'ok' }]);
+    expect(collector.events('message_command')[0]?.errorClass).toBeUndefined();
+  });
+
   it('wrapMessageCommand() records duration and the error class, and re-throws for the bot’s own handling', async () => {
     const { collector, client, lens } = setup();
     await settle();

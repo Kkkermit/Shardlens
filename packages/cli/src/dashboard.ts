@@ -30,6 +30,7 @@ export interface CollectorModule {
   startMongoCollector(options: {
     uri: string;
     appId?: string | undefined;
+    database?: string | undefined;
     dashboard: { port: number; host: string };
     logLevel: 'warn';
   }): Promise<Collector>;
@@ -62,6 +63,8 @@ export interface DashboardOptions {
   uri?: string | undefined;
   /** The variable that holds the connection string, when the bot calls it something unusual. */
   envName?: string | undefined;
+  /** The database the bot's `mongodb.database` option names, if it names one. */
+  database?: string | undefined;
   appId?: string | undefined;
   port?: number | undefined;
   /** The bot's folder: its `.env`, and where `@shardlens/collector` is installed. */
@@ -118,6 +121,7 @@ export async function dashboard(options: DashboardOptions): Promise<number> {
   const collector = await module.startMongoCollector({
     uri: found.uri,
     appId: options.appId,
+    database: options.database,
     dashboard: { port, host: '127.0.0.1' },
     logLevel: 'warn',
   });

@@ -24,13 +24,13 @@ export function databaseName(url: string): string {
 export async function openMongo(
   url: string,
   appName = 'shardlens-collector',
-  opts: { maxPoolSize?: number | undefined } = {},
+  opts: { maxPoolSize?: number | undefined; database?: string | undefined } = {},
 ): Promise<Mongo> {
   // A `maxPoolSize` in the connection string is the owner's choice and stays.
   const pool =
     opts.maxPoolSize !== undefined && !/[?&]maxPoolSize=/i.test(url) ? { maxPoolSize: opts.maxPoolSize } : {};
   const client = new MongoClient(url, { serverSelectionTimeoutMS: 10_000, appName, ...pool });
   await client.connect();
-  const db = client.db(databaseName(url));
+  const db = client.db(opts.database ?? databaseName(url));
   return { client, db, c: collections(db) };
 }
