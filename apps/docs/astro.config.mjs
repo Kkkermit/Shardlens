@@ -10,6 +10,8 @@ import starlightTypeDoc, { typeDocSidebarGroup } from 'starlight-typedoc';
 const site = process.env.DOCS_SITE ?? 'https://kkkermit.github.io';
 const base = process.env.DOCS_BASE ?? '/Shardlens';
 const docsUrl = (path) => `${site}${base}${path}`;
+const shareImage = docsUrl('/og.png');
+const shareImageAlt = 'Shardlens: self-hosted, privacy-first analytics and health monitoring for discord.js bots';
 
 export default defineConfig({
   site,
@@ -19,6 +21,30 @@ export default defineConfig({
       title: 'Shardlens',
       description: 'Self-hosted, privacy-first analytics and health monitoring for discord.js bots.',
       logo: { src: './src/assets/logo.svg' },
+      // Browsers that don't take the SVG (Safari, older ones), phones and link previews get these.
+      head: [
+        { tag: 'link', attrs: { rel: 'icon', href: `${base}/favicon.ico`, sizes: '32x32' } },
+        { tag: 'link', attrs: { rel: 'apple-touch-icon', href: `${base}/apple-touch-icon.png` } },
+        { tag: 'link', attrs: { rel: 'manifest', href: `${base}/site.webmanifest` } },
+        { tag: 'meta', attrs: { name: 'theme-color', content: '#0d2240' } },
+        { tag: 'meta', attrs: { name: 'robots', content: 'index, follow, max-image-preview:large, max-snippet:-1' } },
+        { tag: 'meta', attrs: { property: 'og:image', content: shareImage } },
+        { tag: 'meta', attrs: { property: 'og:image:width', content: '1200' } },
+        { tag: 'meta', attrs: { property: 'og:image:height', content: '630' } },
+        { tag: 'meta', attrs: { property: 'og:image:alt', content: shareImageAlt } },
+        { tag: 'meta', attrs: { name: 'twitter:image', content: shareImage } },
+        { tag: 'meta', attrs: { name: 'twitter:image:alt', content: shareImageAlt } },
+        {
+          tag: 'link',
+          attrs: {
+            rel: 'alternate',
+            type: 'text/plain',
+            href: `${base}/llms.txt`,
+            title: 'Documentation for AI agents',
+          },
+        },
+      ],
+      routeMiddleware: './src/route-data.ts',
       social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/Kkkermit/Shardlens' }],
       editLink: { baseUrl: 'https://github.com/Kkkermit/Shardlens/edit/main/apps/docs/' },
       lastUpdated: false,

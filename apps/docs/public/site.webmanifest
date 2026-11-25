@@ -1,0 +1,16 @@
+{
+  "name": "Shardlens",
+  "short_name": "Shardlens",
+  "description": "Self-hosted, privacy-first analytics and health monitoring for discord.js bots.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "browser",
+  "theme_color": "#0d2240",
+  "background_color": "#0d2240",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
