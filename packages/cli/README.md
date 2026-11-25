@@ -39,6 +39,6 @@ localhost, and never prints the key. `shardlens --help` lists every option.
 - [CLI reference](https://kkkermit.github.io/Shardlens/reference/cli/) ·
   [quick start](https://kkkermit.github.io/Shardlens/getting-started/quick-start/) ·
   [documentation](https://kkkermit.github.io/Shardlens/)
-- Using an AI coding agent? Point it at [`install.md`](https://kkkermit.github.io/Shardlens/install.md), a
-  self-contained install prompt, or [`llms.txt`](https://kkkermit.github.io/Shardlens/llms.txt), the docs as plain text.
+- Using an AI coding agent? Point it at [`cli.md`](https://kkkermit.github.io/Shardlens/prompts/cli.md), what each
+  command does, or [`install.md`](https://kkkermit.github.io/Shardlens/install.md) to add Shardlens to a bot.
 - [Source and issues](https://github.com/Kkkermit/Shardlens) · MIT licence · not affiliated with Discord

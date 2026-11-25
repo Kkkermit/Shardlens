@@ -70,6 +70,6 @@ Either way, the collector can also [copy every event into your own database](htt
   [Docker Compose](https://kkkermit.github.io/Shardlens/self-hosting/docker-compose/) ·
   [upgrading](https://kkkermit.github.io/Shardlens/self-hosting/upgrading/) ·
   [security](https://kkkermit.github.io/Shardlens/operations/security/)
-- Using an AI coding agent? Point it at [`llms.txt`](https://kkkermit.github.io/Shardlens/llms.txt), the docs as plain
-  text.
+- Using an AI coding agent? Point it at [`collector.md`](https://kkkermit.github.io/Shardlens/prompts/collector.md), a self-contained prompt for setting the collector up,
+  or [`llms.txt`](https://kkkermit.github.io/Shardlens/llms.txt), the docs as plain text.
 - [Source and issues](https://github.com/Kkkermit/Shardlens) · MIT licence · not affiliated with Discord

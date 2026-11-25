@@ -42,6 +42,6 @@ A ready-made Grafana dashboard is in the repository under `deploy/grafana`.
 - [Exporter-only mode](https://kkkermit.github.io/Shardlens/self-hosting/exporter-only/) ·
   [Grafana guide](https://kkkermit.github.io/Shardlens/guides/grafana/) ·
   [documentation](https://kkkermit.github.io/Shardlens/)
-- Using an AI coding agent? Point it at [`llms.txt`](https://kkkermit.github.io/Shardlens/llms.txt), the docs as plain
-  text.
+- Using an AI coding agent? Point it at [`exporter-prometheus.md`](https://kkkermit.github.io/Shardlens/prompts/exporter-prometheus.md), a self-contained prompt for adding this package,
+  or [`llms.txt`](https://kkkermit.github.io/Shardlens/llms.txt), the docs as plain text.
 - [Source and issues](https://github.com/Kkkermit/Shardlens) · MIT licence · not affiliated with Discord

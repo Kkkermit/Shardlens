@@ -87,7 +87,9 @@ Using Claude Code, Cursor, Copilot or Codex? Open your bot's repository and past
 Add Shardlens to this bot by following https://kkkermit.github.io/Shardlens/install.md
 ```
 
-The [prompt](apps/docs/prompts/install.md) is self-contained: it tells the agent how to find your client, what to do
+Each other package has a prompt of its own, with a copy button, on the
+[packages page](https://kkkermit.github.io/Shardlens/getting-started/packages/). The
+[install prompt](apps/docs/prompts/install.md) is self-contained: it tells the agent how to find your client, what to do
 for `ShardingManager`, internal sharding and discord-hybrid-sharding, how to wrap your handler and flush on shutdown,
 and what it must not touch (intents, audit mode, your keys). Its code samples are type-checked against the real
 packages in CI. The docs are also published as plain text for agents

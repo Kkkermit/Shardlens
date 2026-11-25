@@ -154,6 +154,6 @@ A request cancelled with your own `signal` rejects with that signal's reason, as
 - [Your own dashboard guide](https://kkkermit.github.io/Shardlens/guides/your-own-dashboard/) ·
   [documentation](https://kkkermit.github.io/Shardlens/) ·
   [what is collected](https://kkkermit.github.io/Shardlens/concepts/data-collected/)
-- Using an AI coding agent? Point it at [`llms.txt`](https://kkkermit.github.io/Shardlens/llms.txt), the docs as plain
-  text.
+- Using an AI coding agent? Point it at [`client.md`](https://kkkermit.github.io/Shardlens/prompts/client.md), a self-contained prompt for adding this package,
+  or [`llms.txt`](https://kkkermit.github.io/Shardlens/llms.txt), the docs as plain text.
 - [Source and issues](https://github.com/Kkkermit/Shardlens) · MIT licence · not affiliated with Discord

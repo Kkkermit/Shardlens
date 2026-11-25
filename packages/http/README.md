@@ -64,6 +64,6 @@ is a Worker you can deploy.
 - [HTTP bots guide](https://kkkermit.github.io/Shardlens/guides/http-bots/) ·
   [documentation](https://kkkermit.github.io/Shardlens/) ·
   [what is collected](https://kkkermit.github.io/Shardlens/concepts/data-collected/)
-- Using an AI coding agent? Point it at [`llms.txt`](https://kkkermit.github.io/Shardlens/llms.txt), the docs as plain
-  text.
+- Using an AI coding agent? Point it at [`http.md`](https://kkkermit.github.io/Shardlens/prompts/http.md), a self-contained prompt for adding this package,
+  or [`llms.txt`](https://kkkermit.github.io/Shardlens/llms.txt), the docs as plain text.
 - [Source and issues](https://github.com/Kkkermit/Shardlens) · MIT licence · not affiliated with Discord
