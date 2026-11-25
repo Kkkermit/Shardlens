@@ -18,10 +18,16 @@ export interface CollectorModule {
 /** In a variable, so bundlers leave the optional package to be loaded at run time, and only by bots that ask. */
 const COLLECTOR_MODULE = '@shardlens/collector/mongodb';
 
+/** As long as the transport gives a request to be answered. */
+const REQUEST_TIMEOUT_MS = 10_000;
+
+const isTimeout = (reason: unknown) => (reason as { name?: unknown } | null)?.name === 'TimeoutError';
+
 /**
  * The `mongodb` option: the collector on the bot's own MongoDB, in this process. Started once the bot is logged in
- * (its application ID names the app); until then, and while it starts, the SDK's requests wait here rather than time
- * out, so a slow login doesn't read as an outage.
+ * (its application ID names the app); until then, and while it starts, the SDK's requests wait here, and the wait
+ * doesn't count against their timeout, so a slow login or first start doesn't read as an outage. A start that fails
+ * (MongoDB unreachable when the bot starts, say) is tried again with the next request.
  */
 export class MongoDBCollector {
   readonly #client: Client;
@@ -29,8 +35,8 @@ export class MongoDBCollector {
   readonly #mode: 'audit' | 'privacy' | undefined;
   readonly #log: (message: string) => void;
   readonly #load: () => Promise<CollectorModule>;
+  readonly #closing = new AbortController();
   #started: Promise<InBotCollector> | undefined;
-  #closed = false;
   #onClose: (() => void) | undefined;
 
   constructor(
@@ -50,23 +56,26 @@ export class MongoDBCollector {
   /** For the SDK's transport: every request goes to the collector in this process. */
   readonly fetch: typeof fetch = async (input, init) => {
     const collector = await this.#collector();
-    return collector.fetch(input, init);
+    if (!init?.signal?.aborted || !isTimeout(init.signal.reason)) return collector.fetch(input, init);
+    // Its timeout ran out while it waited for the collector to start, before the collector was asked: it gets its time
+    // again from now on, and still ends with a shutdown.
+    const signal = AbortSignal.any([AbortSignal.timeout(REQUEST_TIMEOUT_MS), this.#closing.signal]);
+    return collector.fetch(input, { ...init, signal });
   };
 
-  /** A one-time sign-in link to the dashboard, when this process serves it. */
-  async signInLink(): Promise<string | undefined> {
-    return (await this.#collector().catch(() => undefined))?.signInLink();
-  }
-
   async close(): Promise<void> {
-    this.#closed = true;
+    this.#closing.abort();
     this.#onClose?.();
     const started = this.#started;
     if (started) await (await started.catch(() => undefined))?.close();
   }
 
   #collector(): Promise<InBotCollector> {
-    this.#started ??= this.#start();
+    if (this.#closing.signal.aborted) return Promise.reject(new Error('Shardlens was shut down'));
+    this.#started ??= this.#start().catch((error: unknown) => {
+      this.#started = undefined;
+      throw error;
+    });
     return this.#started;
   }
 
@@ -88,7 +97,7 @@ export class MongoDBCollector {
       appId,
       ...(this.#mode === 'audit' ? { mode: 'audit' } : {}),
     });
-    if (this.#closed) {
+    if (this.#closing.signal.aborted) {
       await collector.close();
       throw new Error('Shardlens was shut down');
     }

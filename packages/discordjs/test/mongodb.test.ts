@@ -7,7 +7,7 @@ import { APP_ID, settle } from './helpers.js';
 
 type Started = Parameters<CollectorModule['startMongoCollector']>[0];
 
-/** A collector module that records how it was started and answers every request with `body`. */
+/** A collector module that records how it was started and answers every request with its URL, as `fetch` would. */
 function fakeModule(dashboardUrl?: string) {
   const starts: Started[] = [];
   const close = vi.fn(async () => undefined);
@@ -15,7 +15,10 @@ function fakeModule(dashboardUrl?: string) {
     async startMongoCollector(options) {
       starts.push(options);
       return {
-        fetch: async (input) => Response.json({ url: String(input) }),
+        fetch: async (input, init) => {
+          init?.signal?.throwIfAborted();
+          return Response.json({ url: String(input) });
+        },
         dashboardUrl,
         signInLink: () => (dashboardUrl ? `${dashboardUrl}/auth/link/token` : undefined),
         close,
@@ -91,6 +94,53 @@ describe('the mongodb option', () => {
     client.application = { id: APP_ID };
     await settle();
     expect(fake.starts).toHaveLength(0);
+  });
+
+  it('starts again with the next request after a start failed, as when MongoDB was down when the bot started', async () => {
+    const client = botClient();
+    client.application = { id: APP_ID };
+    const fake = fakeModule();
+    let down = true;
+    const module: CollectorModule = {
+      startMongoCollector: async (options) => {
+        if (down) throw new Error('connect ECONNREFUSED 127.0.0.1:27017');
+        return fake.module.startMongoCollector(options);
+      },
+    };
+    const collector = new MongoDBCollector(
+      asClient(client),
+      settings,
+      undefined,
+      () => undefined,
+      async () => module,
+    );
+    await expect(collector.fetch('http://localhost/v1/config')).rejects.toThrow('ECONNREFUSED');
+    down = false;
+    expect((await collector.fetch('http://localhost/v1/config')).status).toBe(200);
+    expect(fake.starts).toHaveLength(1);
+    await collector.close();
+  });
+
+  it("doesn't count the wait for the start against a request's timeout, but still ends it on shutdown", async () => {
+    const client = botClient();
+    const fake = fakeModule();
+    const collector = new MongoDBCollector(
+      asClient(client),
+      settings,
+      undefined,
+      () => undefined,
+      async () => fake.module,
+    );
+    const timeout = new AbortController();
+    const answer = collector.fetch('http://localhost/v1/config', { signal: timeout.signal });
+    timeout.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError'));
+    client.application = { id: APP_ID };
+    expect((await answer).status).toBe(200);
+
+    const shutdown = new AbortController();
+    shutdown.abort();
+    await expect(collector.fetch('http://localhost/v1/ingest', { signal: shutdown.signal })).rejects.toThrow();
+    await collector.close();
   });
 
   it('says to install the collector when it is missing', async () => {
