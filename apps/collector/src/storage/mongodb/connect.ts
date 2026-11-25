@@ -8,6 +8,9 @@ export interface Mongo {
   c: Collections;
 }
 
+/** A MongoDB connection string, as opposed to PostgreSQL's. */
+export const MONGODB_URL = /^mongodb(?:\+srv)?:\/\//i;
+
 /**
  * The database a `mongodb://` or `mongodb+srv://` URL names (`mongodb://host/mydb`), or `shardlens`. Parsed by hand:
  * a URL with several hosts (`mongodb://a:27017,b:27017/mydb`) is not a WHATWG URL.

@@ -5,13 +5,12 @@
  * the dashboard. Every process of a sharded bot can run one against the same database: they share keys, and
  * background jobs run in one of them at a time.
  */
-import { randomBytes } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { startCollector } from './app.js';
 import type { Config } from './env.js';
 import { SignInLinks } from './security/sign-in-links.js';
-import type { Collections, SecretDoc } from './storage/mongodb/collections.js';
-import { openMongo } from './storage/mongodb/connect.js';
+import { MONGODB_URL, openMongo } from './storage/mongodb/connect.js';
+import { appSecrets, onlyApp, seedGeneratedKeys } from './storage/mongodb/secrets.js';
 import { MongoStore } from './storage/mongodb/store.js';
 
 export interface MongoCollectorOptions {
@@ -85,44 +84,6 @@ export interface MongoCollector {
   close(): Promise<void>;
 }
 
-const MONGODB_URL = /^mongodb(?:\+srv)?:\/\//i;
-
-const newKey = (scope: string) => `slk_${scope}_${randomBytes(32).toString('base64url')}`;
-
-/** Generated once per app, atomically, so processes starting together all get the first one's. */
-async function loadSecrets(c: Collections, appId: string): Promise<SecretDoc> {
-  const fresh: Omit<SecretDoc, '_id'> = {
-    sessionSecret: randomBytes(48).toString('base64url'),
-    settingsKey: randomBytes(32).toString('base64'),
-    ingestKey: newKey('ingest'),
-    readKey: newKey('read'),
-    activityKey: newKey('activity'),
-    createdAt: new Date(),
-  };
-  const doc = await c.secrets.findOneAndUpdate(
-    { _id: `app:${appId}` },
-    { $setOnInsert: fresh },
-    { upsert: true, returnDocument: 'after' },
-  );
-  if (!doc) throw new Error('MongoDB returned no secrets document');
-  return doc;
-}
-
-/** The app whose collector has run on this database, when there is exactly one. */
-async function onlyApp(c: Collections): Promise<string> {
-  const apps = await c.secrets
-    .find({ _id: { $regex: /^app:\d+$/ } }, { projection: { _id: 1 } })
-    .limit(2)
-    .toArray();
-  const only = apps.length === 1 ? apps[0]?._id.slice('app:'.length) : undefined;
-  if (only) return only;
-  throw new Error(
-    apps.length === 0
-      ? 'Shardlens has no data in this database yet: start your bot with the mongodb option first, or give the application ID.'
-      : 'Several bots keep their Shardlens data in this database: give the application ID of the one to show.',
-  );
-}
-
 /** A `fetch` answered by `app.inject`, with the ingest key: no socket, no port. */
 function inProcessFetch(app: FastifyInstance, ingestKey: string): typeof fetch {
   return async (input, init) => {
@@ -167,7 +128,8 @@ export async function startMongoCollector(options: MongoCollectorOptions): Promi
   try {
     const appId = options.appId ?? (await onlyApp(m.c));
     const store = new MongoStore(m);
-    const secrets = await loadSecrets(m.c, appId);
+    const secrets = await appSecrets(m.c, appId);
+    await seedGeneratedKeys(store, appId, secrets);
     const dashboard = options.dashboard;
     const port = dashboard?.port ?? 8080;
     const host = dashboard?.host ?? '127.0.0.1';
@@ -181,9 +143,8 @@ export async function startMongoCollector(options: MongoCollectorOptions): Promi
       auditKey: options.auditKey,
       discord: dashboard?.discord,
       discordPublicKey: options.discordPublicKey,
-      ingestKey: secrets.ingestKey,
-      readKey: secrets.readKey,
-      activityKey: secrets.activityKey,
+      ingestKey: undefined,
+      readKey: undefined,
       mode: options.mode,
       dashboard: dashboard !== undefined,
       extraAdmins: [...(dashboard?.extraAdmins ?? [])],
