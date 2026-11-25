@@ -111,11 +111,6 @@ export function dumpShardlens(database) {
   );
 }
 
-/** The names of the collections in a database. */
-export function collections(database) {
-  return mongosh(database, 'print(db.getCollectionNames().join(" "))').trim().split(/\s+/).filter(Boolean);
-}
-
 /** Events in a copy (the event sink's default table or collection). */
 export function copyRows(db, database) {
   const out =
