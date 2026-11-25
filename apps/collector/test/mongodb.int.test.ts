@@ -154,6 +154,7 @@ describe('MongoStore', () => {
           { index: 2, reason: 'refused_by_database' },
         ],
       });
+      expect(res.stored).toEqual(new Set([events[0]!.id]));
       expect((await m.c.interactions.find().toArray()).map((d) => d.command)).toEqual(['edge_kept']);
       expect(await m.c.customEvents.countDocuments()).toBe(0);
     });
@@ -457,14 +458,16 @@ describe('MongoStore', () => {
       await m.c.leases.insertOne({ _id: lease, holder: 'another process', expiresAt: new Date(Date.now() + MINUTE) });
       // This bot process's clock runs five minutes ahead of the other's and the server's.
       vi.useFakeTimers({ toFake: ['Date'] });
-      vi.setSystemTime(Date.now() + 5 * MINUTE);
       try {
+        vi.setSystemTime(Date.now() + 5 * MINUTE);
         const applied = write([snapshot([0], 1, [guild])]);
         await sleep(300);
-        expect(await m.c.leases.findOne({ _id: lease })).toMatchObject({ holder: 'another process' });
-        expect(await guilds()).toEqual([]);
-        await m.c.leases.deleteOne({ _id: lease });
+        const held = await m.c.leases.findOne({ _id: lease });
+        const meanwhile = await guilds();
+        await m.c.leases.deleteOne({ _id: lease, holder: 'another process' });
         await applied;
+        expect(held).toMatchObject({ holder: 'another process' });
+        expect(meanwhile).toEqual([]);
       } finally {
         vi.useRealTimers();
       }
