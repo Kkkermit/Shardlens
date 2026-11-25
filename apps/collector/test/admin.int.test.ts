@@ -97,18 +97,26 @@ describe('Discord webhook events', () => {
     expect((await h.app.inject(signed(body))).statusCode).toBe(204);
     expect((await h.app.inject(signed(body))).statusCode).toBe(204); // retry of the same delivery
     await settle();
-    const rows = await h.db.query<{ user_hash: Buffer; integration_type: number; scopes: string[] }>(
-      "SELECT user_hash, integration_type, scopes FROM webhook_events WHERE type = 'APPLICATION_AUTHORIZED'",
-    );
-    expect(rows.rowCount).toBe(1);
     const { hasher, period } = await sdkHasher(h.app);
     const sdkHash = (await hasher.hash(USER, period))!;
-    expect(rows.rows[0]?.user_hash.toString('hex')).toBe(sdkHash.split(':')[2]);
-    expect(rows.rows[0]).toMatchObject({ integration_type: 1, scopes: ['applications.commands'] });
-    const raw = await h.db.query(
-      "SELECT count(*)::int AS n FROM webhook_events WHERE user_hash::text LIKE '%555555555555555555%'",
-    );
-    expect(raw.rows[0].n).toBe(0);
+    if (onPostgres) {
+      const rows = await h.db.query<{ user_hash: Buffer; integration_type: number; scopes: string[] }>(
+        "SELECT user_hash, integration_type, scopes FROM webhook_events WHERE type = 'APPLICATION_AUTHORIZED'",
+      );
+      expect(rows.rowCount).toBe(1);
+      expect(rows.rows[0]?.user_hash.toString('hex')).toBe(sdkHash.split(':')[2]);
+      expect(rows.rows[0]).toMatchObject({ integration_type: 1, scopes: ['applications.commands'] });
+      const raw = await h.db.query(
+        "SELECT count(*)::int AS n FROM webhook_events WHERE user_hash::text LIKE '%555555555555555555%'",
+      );
+      expect(raw.rows[0].n).toBe(0);
+    } else {
+      const rows = await h.mongo.c.webhookEvents.find({ type: 'APPLICATION_AUTHORIZED' }).toArray();
+      expect(rows).toHaveLength(1);
+      expect(Buffer.from(rows[0]?.userHash?.buffer ?? []).toString('hex')).toBe(sdkHash.split(':')[2]);
+      expect(rows[0]).toMatchObject({ integrationType: 1, scopes: ['applications.commands'] });
+      expect(JSON.stringify(rows)).not.toContain('555555555555555555');
+    }
   });
 
   it('records entitlements from webhooks and rejects events for another application', async () => {
@@ -133,8 +141,13 @@ describe('Discord webhook events', () => {
     );
     expect(res.statusCode).toBe(204);
     await settle();
-    const rows = await h.db.query("SELECT source, sku_id::text FROM entitlements WHERE source = 'webhook'");
-    expect(rows.rows[0]).toEqual({ source: 'webhook', sku_id: '700000000000000002' });
+    if (onPostgres) {
+      const rows = await h.db.query("SELECT source, sku_id::text FROM entitlements WHERE source = 'webhook'");
+      expect(rows.rows[0]).toEqual({ source: 'webhook', sku_id: '700000000000000002' });
+    } else {
+      const rows = await h.mongo.c.entitlements.find({ source: 'webhook' }).toArray();
+      expect(rows.map((r) => r.skuId)).toEqual(['700000000000000002']);
+    }
     const other = await h.app.inject(signed({ ...authorized(USER), application_id: '1111111111111111111' }));
     expect(other.statusCode).toBe(400);
   });
