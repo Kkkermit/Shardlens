@@ -150,6 +150,44 @@ function pgLower(text: string): string {
   return out;
 }
 
+/** A server and what PostgreSQL's `ORDER BY lower(name), guild_id` sorts it by. */
+interface NameKey {
+  id: string;
+  n: bigint;
+  /** The lowercased name as UTF-8. */
+  key: Buffer;
+}
+
+/**
+ * The IDs of one page of the servers `filter` matches, by name, and how many it matches. By the lowercased name's
+ * bytes, as PostgreSQL orders text under the C collation and musl's (its Alpine images): MongoDB's `$toLower`
+ * lowercases ASCII only, so the order is worked out here. Only the servers up to the end of the page are kept while
+ * the names stream past, so memory grows with the page asked for, not with the number of servers.
+ */
+async function pageByName(
+  m: Mongo,
+  filter: Document,
+  spec: Spec<'servers'>,
+): Promise<{ total: number; ids: string[] }> {
+  const dir = spec.order === 'asc' ? 1 : -1;
+  const order = (a: NameKey, b: NameKey) => dir * Buffer.compare(a.key, b.key) || (a.n < b.n ? -1 : a.n > b.n ? 1 : 0);
+  const keep = spec.offset + spec.limit;
+  const first: NameKey[] = [];
+  let total = 0;
+  for await (const g of m.c.guilds.find(filter, { projection: { name: 1 } })) {
+    total++;
+    first.push({ id: g._id.guildId, n: BigInt(g._id.guildId), key: Buffer.from(pgLower(g.name)) });
+    if (first.length >= 2 * keep) first.sort(order).splice(keep);
+  }
+  return {
+    total,
+    ids: first
+      .sort(order)
+      .slice(spec.offset, keep)
+      .map((k) => k.id),
+  };
+}
+
 async function servers(m: Mongo, appId: string, spec: Spec<'servers'>, now: Date): Promise<QueryAnswer<'servers'>> {
   const filter = await serverFilter(m, appId, spec, now);
   if (!filter) return { total: 0, rows: [] };
@@ -189,16 +227,7 @@ async function servers(m: Mongo, appId: string, spec: Spec<'servers'>, now: Date
   }
 
   if (spec.sort === 'name') {
-    // By the lowercased name's bytes, as PostgreSQL orders text under the C collation and musl's (its Alpine images):
-    // MongoDB's `$toLower` lowercases ASCII only, so the order is worked out here from the names alone.
-    const names = await m.c.guilds.find(filter, { projection: { name: 1 } }).toArray();
-    const keyed = names.map((g) => ({
-      id: g._id.guildId,
-      n: BigInt(g._id.guildId),
-      key: Buffer.from(pgLower(g.name)),
-    }));
-    keyed.sort((a, b) => dir * Buffer.compare(a.key, b.key) || (a.n < b.n ? -1 : a.n > b.n ? 1 : 0));
-    const ids = keyed.slice(spec.offset, spec.offset + spec.limit).map((k) => k.id);
+    const { total, ids } = await pageByName(m, filter, spec);
     const [docs, runs] = await Promise.all([
       m.c.guilds
         .find({ _id: { $in: ids.map((guildId) => ({ appId, guildId })) } }, { projection: ROW_FIELDS })
@@ -207,7 +236,7 @@ async function servers(m: Mongo, appId: string, spec: Spec<'servers'>, now: Date
     ]);
     const byId = new Map(docs.map((d) => [d._id.guildId, d]));
     const rows = ids.flatMap((id) => byId.get(id) ?? []);
-    return { total: names.length, rows: rows.map((r) => serverRow(r, runs.get(r._id.guildId) ?? 0)) };
+    return { total, rows: rows.map((r) => serverRow(r, runs.get(r._id.guildId) ?? 0)) };
   }
 
   const key = { members: '$memberCount', joined: '$joinedAt', last_active: '$lastCommandAt' }[spec.sort];
