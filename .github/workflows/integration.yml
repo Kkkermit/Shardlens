@@ -36,6 +36,29 @@ jobs:
         env:
           SHARDLENS_TEST_PG_IMAGE: postgres:${{ matrix.postgres }}-alpine
 
+  mongodb:
+    name: collector on MongoDB ${{ matrix.mongodb }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mongodb: ['7.0', '8.0']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo run build --filter=@shardlens/collector...
+      # The same suites as on PostgreSQL, on a standalone MongoDB server (no replica set): answers that differ fail.
+      - run: pnpm --filter @shardlens/collector test:int:mongodb
+        env:
+          SHARDLENS_TEST_MONGO_IMAGE: mongo:${{ matrix.mongodb }}
+
   image:
     name: collector image builds
     runs-on: ubuntu-latest
