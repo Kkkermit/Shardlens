@@ -1,5 +1,6 @@
 require('dotenv').config();
 const { Client, Collection, GatewayIntentBits, Partials } = require('discord.js');
+const { createShardlens } = require('@shardlens/discordjs');
 const mongoose = require('mongoose');
 
 const client = new Client({
@@ -16,6 +17,8 @@ client.commands = new Collection();
 client.slashCommands = new Collection();
 // warnings waiting for the mod to press Confirm, by moderator id
 client.pendingWarns = new Collection();
+// analytics, stored in the bot's own MongoDB (collections prefixed shardlens_)
+client.lens = createShardlens(client, { mongodb: process.env.MONGO_URI, release: process.env.npm_package_version });
 
 require('./handlers/commandHandler')(client);
 require('./handlers/eventHandler')(client);
@@ -42,6 +45,7 @@ async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`${signal} received, shutting down...`);
+  await client.lens.shutdown();
   try {
     await client.destroy();
     await mongoose.connection.close();

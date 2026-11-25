@@ -1,3 +1,4 @@
+import type { Shardlens } from '@shardlens/discordjs';
 import type { Client } from 'discord.js';
 import type { MongoConnection } from '../database/mongo.js';
 import type { CommandRegistry } from '../framework/command-registry.js';
@@ -19,6 +20,7 @@ export const TOKENS = {
   ErrorHandler: token<ErrorHandler>('ErrorHandler'),
   Mongo: token<MongoConnection>('MongoConnection'),
   Client: token<Client>('DiscordClient'),
+  Shardlens: token<Shardlens>('Shardlens'),
   Commands: token<CommandRegistry>('CommandRegistry'),
   Components: token<ComponentRouter>('ComponentRouter'),
   PrefixResolver: token<PrefixResolver>('PrefixResolver'),

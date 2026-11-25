@@ -1,3 +1,4 @@
+import type { Shardlens } from '@shardlens/discordjs';
 import {
   ApplicationCommandType,
   type AutocompleteInteraction,
@@ -23,6 +24,7 @@ export class CommandRegistry {
   constructor(
     private readonly errors: ErrorHandler,
     private readonly logger: Logger,
+    private readonly lens: Shardlens,
   ) {}
 
   use(...middleware: Middleware[]): this {
@@ -77,14 +79,16 @@ export class CommandRegistry {
       return;
     }
     const { slash } = command;
-    await this.execute(fromInteraction('slash', interaction, command), () => slash.run(interaction));
+    await this.execute(fromInteraction('slash', interaction, command), () =>
+      this.lens.wrap((i: ChatInputCommandInteraction) => slash.run(i))(interaction),
+    );
   }
 
   async handleAutocomplete(interaction: AutocompleteInteraction): Promise<void> {
     const autocomplete = this.commands.get(interaction.commandName)?.slash?.autocomplete;
     if (!autocomplete) return;
     try {
-      await autocomplete(interaction);
+      await this.lens.wrap((i: AutocompleteInteraction) => autocomplete(i))(interaction);
     } catch (error) {
       this.logger.error(`Autocomplete for /${interaction.commandName} failed`, { error });
     }
@@ -94,10 +98,12 @@ export class CommandRegistry {
     const type = interaction.isUserContextMenuCommand() ? 'user' : 'message';
     const menu = this.menus.get(`${type}:${interaction.commandName}`);
     if (!menu) return;
-    await this.execute(fromInteraction('context-menu', interaction, menu), async () => {
-      if (menu.type === 'user' && interaction.isUserContextMenuCommand()) await menu.run(interaction);
-      else if (menu.type === 'message' && interaction.isMessageContextMenuCommand()) await menu.run(interaction);
-    });
+    await this.execute(fromInteraction('context-menu', interaction, menu), () =>
+      this.lens.wrap(async (i: ContextMenuCommandInteraction) => {
+        if (menu.type === 'user' && i.isUserContextMenuCommand()) await menu.run(i);
+        else if (menu.type === 'message' && i.isMessageContextMenuCommand()) await menu.run(i);
+      })(interaction),
+    );
   }
 
   /** Returns false when `name` isn't a prefix command, so the caller can ignore the message. */
@@ -105,7 +111,10 @@ export class CommandRegistry {
     const command = this.findPrefixCommand(name);
     if (!command?.prefix) return false;
     const { prefix } = command;
-    await this.execute(fromMessage(message, command), () => prefix.run(message, args));
+    // command.name is the matched command after aliases, never what was typed
+    await this.execute(fromMessage(message, command), () =>
+      this.lens.wrapMessageCommand(command.name, (m: Message) => prefix.run(m, args))(message),
+    );
     return true;
   }
 

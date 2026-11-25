@@ -11,3 +11,6 @@ npm run build
 npm run deploy            # registers the slash commands, again whenever a command's options change
 npm start
 ```
+
+Analytics: [Shardlens](https://kkkermit.github.io/Shardlens/), stored in this bot's MongoDB (collections prefixed
+`shardlens_`). Run `npx shardlens dashboard` to see them.

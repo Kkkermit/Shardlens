@@ -29,7 +29,7 @@ module.exports = {
     if (!command) return;
 
     try {
-      await command.execute(interaction, client);
+      await client.lens.wrap((i) => command.execute(i, client))(interaction);
     } catch (error) {
       console.error(error);
       if (interaction.replied || interaction.deferred) {

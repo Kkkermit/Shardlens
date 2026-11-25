@@ -1,3 +1,4 @@
+import { createShardlens } from '@shardlens/discordjs';
 import { ActivityType, Client, Events, GatewayIntentBits } from 'discord.js';
 import { ClusterClient, getInfo } from 'discord-hybrid-sharding';
 import { connectDatabase, disconnectDatabase } from './database';
@@ -15,6 +16,7 @@ const client = new Client({
 });
 
 client.cluster = new ClusterClient(client);
+client.lens = createShardlens(client, { mongodb: env.DATABASE_URL, release: process.env.npm_package_version });
 client.commands = loadCommands();
 
 client.once(Events.ClientReady, (c) => {
@@ -33,6 +35,7 @@ async function close(signal: NodeJS.Signals) {
   if (closing) return;
   closing = true;
   console.log(`[Cluster ${client.cluster.id}] ${signal} - closing`);
+  await client.lens.shutdown();
   await client.destroy();
   await disconnectDatabase();
   process.exit(0);

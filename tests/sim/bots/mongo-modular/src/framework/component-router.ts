@@ -1,3 +1,4 @@
+import type { Shardlens } from '@shardlens/discordjs';
 import type { ErrorHandler } from '../core/error-handler.js';
 import type { Logger } from '../core/logger.js';
 import { fromInteraction } from './invocation.js';
@@ -10,6 +11,7 @@ export class ComponentRouter {
   constructor(
     private readonly errors: ErrorHandler,
     private readonly logger: Logger,
+    private readonly lens: Shardlens,
   ) {}
 
   add(handler: ComponentHandler): this {
@@ -26,7 +28,7 @@ export class ComponentRouter {
       return;
     }
     try {
-      await handler.run(interaction);
+      await this.lens.wrap((i: ComponentInteraction) => handler.run(i))(interaction);
     } catch (error) {
       await this.errors.handle(
         error,

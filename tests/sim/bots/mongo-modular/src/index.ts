@@ -1,3 +1,4 @@
+import { createShardlens } from '@shardlens/discordjs';
 import { Client, GatewayIntentBits, Options, Partials } from 'discord.js';
 import { loadConfig } from './core/config.js';
 import { Container } from './core/container.js';
@@ -56,8 +57,20 @@ async function bootstrap(): Promise<void> {
     .register(TOKENS.ErrorHandler, () => new ErrorHandler(logger.child('errors')))
     .register(TOKENS.Mongo, (c) => new MongoConnection(c.resolve(TOKENS.Config).mongo, logger.child('mongo')))
     .register(TOKENS.Client, createClient)
-    .register(TOKENS.Commands, (c) => new CommandRegistry(c.resolve(TOKENS.ErrorHandler), logger.child('commands')))
-    .register(TOKENS.Components, (c) => new ComponentRouter(c.resolve(TOKENS.ErrorHandler), logger.child('components')));
+    .register(TOKENS.Shardlens, (c) =>
+      createShardlens(c.resolve(TOKENS.Client), {
+        mongodb: c.resolve(TOKENS.Config).mongo.uri,
+        release: process.env.npm_package_version,
+      }),
+    )
+    .register(
+      TOKENS.Commands,
+      (c) => new CommandRegistry(c.resolve(TOKENS.ErrorHandler), logger.child('commands'), c.resolve(TOKENS.Shardlens)),
+    )
+    .register(
+      TOKENS.Components,
+      (c) => new ComponentRouter(c.resolve(TOKENS.ErrorHandler), logger.child('components'), c.resolve(TOKENS.Shardlens)),
+    );
   registerRepositories(container);
 
   const lifecycle = container.resolve(TOKENS.Lifecycle);
@@ -77,6 +90,9 @@ async function bootstrap(): Promise<void> {
 
   const client = container.resolve(TOKENS.Client);
   lifecycle.onShutdown('discord', () => client.destroy());
+  // Hooks run in reverse order: registered after 'discord' so the last events are flushed before the client goes.
+  const lens = container.resolve(TOKENS.Shardlens);
+  lifecycle.onShutdown('shardlens', () => lens.shutdown());
   await client.login(config.discord.token);
 }
 

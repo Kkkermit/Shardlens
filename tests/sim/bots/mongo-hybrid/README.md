@@ -18,3 +18,6 @@ npm start
 
 The env is checked on startup (`src/env.ts`); the bot won't start with a missing token or a non-MongoDB
 `DATABASE_URL`.
+
+Analytics: [Shardlens](https://kkkermit.github.io/Shardlens/), stored in this bot's MongoDB (collections prefixed
+`shardlens_`). Run `npx shardlens dashboard` to see them.

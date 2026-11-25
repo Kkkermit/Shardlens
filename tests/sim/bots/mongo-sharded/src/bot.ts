@@ -1,8 +1,10 @@
-import { Client, Events, GatewayIntentBits, MessageFlags } from 'discord.js';
+import { createShardlens } from '@shardlens/discordjs';
+import { type ChatInputCommandInteraction, Client, Events, GatewayIntentBits, MessageFlags } from 'discord.js';
 import { commands } from './commands/index.js';
 import { closeDb, connectDb, servers } from './db.js';
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const lens = createShardlens(client, { mongodb: process.env.MONGODB_URL, release: process.env.npm_package_version });
 const tag = () => `[shard ${client.shard?.ids.join(',') ?? '?'}]`;
 
 client.once(Events.ClientReady, (c) => {
@@ -39,7 +41,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 
   try {
-    await command.run(interaction);
+    await lens.wrap((i: ChatInputCommandInteraction) => command.run(i))(interaction);
   } catch (err) {
     console.error(`${tag()} /${interaction.commandName} failed:`, err);
     const reply = { content: 'Something broke, sorry! Try again in a bit.', flags: MessageFlags.Ephemeral } as const;
@@ -53,6 +55,7 @@ async function stop(signal: NodeJS.Signals) {
   if (stopping) return;
   stopping = true;
   console.log(`${tag()} ${signal}, shutting down`);
+  await lens.shutdown();
   await client.destroy();
   await closeDb();
   process.exit(0);

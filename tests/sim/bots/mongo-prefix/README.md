@@ -13,3 +13,6 @@ stored in MongoDB with mongoose.
 
 Slash commands are registered when the bot starts. Change a server's prefix with `!prefix <new>` (needs Manage
 Server); ping the bot if you forgot it.
+
+Analytics: [Shardlens](https://kkkermit.github.io/Shardlens/), stored in this bot's MongoDB (collections prefixed
+`shardlens_`). Run `npx shardlens dashboard` to see them.

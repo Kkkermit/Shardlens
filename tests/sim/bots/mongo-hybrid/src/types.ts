@@ -1,3 +1,4 @@
+import type { Shardlens } from '@shardlens/discordjs';
 import type {
   AutocompleteInteraction,
   ChatInputCommandInteraction,
@@ -36,5 +37,6 @@ declare module 'discord.js' {
   interface Client {
     cluster: ClusterClient<Client>;
     commands: Collection<string, Command>;
+    lens: Shardlens;
   }
 }

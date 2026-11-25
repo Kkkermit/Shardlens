@@ -28,7 +28,7 @@ module.exports = {
     }
 
     try {
-      await command.execute(message, args, client);
+      await client.lens.wrapMessageCommand(command.name, (m) => command.execute(m, args, client))(message);
     } catch (error) {
       console.error(`Error running command ${command.name}:`, error);
       message.reply('There was an error trying to execute that command!').catch(() => {});

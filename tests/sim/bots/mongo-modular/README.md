@@ -33,3 +33,6 @@ npm start
 
 Slash commands are synced on startup (`SYNC_COMMANDS=false` to skip, `DEV_GUILD_ID` to sync to one server). Server
 settings live in the `guild_settings` collection; polls in `polls` and `poll_votes`.
+
+Analytics: [Shardlens](https://kkkermit.github.io/Shardlens/), stored in this bot's MongoDB (collections prefixed
+`shardlens_`). Run `npx shardlens dashboard` to see them.
